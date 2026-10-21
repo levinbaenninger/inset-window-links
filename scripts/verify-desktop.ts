@@ -1,6 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { on, once } from "node:events";
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -1095,6 +1102,7 @@ const measureOpenLaunch = async (docA: string) => {
 
   socket.close();
   process.kill(Number(pid.split("\n")[0]), "SIGKILL");
+  await rm(userData, { force: true, recursive: true });
   observations.set(
     "openLaunch",
     json({ diagnostics, notice: snap.notice, views: snap.views.length })
@@ -1216,6 +1224,7 @@ if (process.platform === "darwin") {
     await run(userData);
   } finally {
     closeDocuments();
+    await rm(userData, { force: true, recursive: true });
   }
 
   const report = {

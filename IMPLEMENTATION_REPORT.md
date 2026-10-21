@@ -52,7 +52,7 @@ Add View from Window List in the menu, and any failed direct capture, open a cho
 - A source that vanishes during capture is covered by reducer tests only.
 - The `not-determined` Screen Recording state was not observed. The packaged app was already `denied`.
 - The app is re-signed ad hoc on every build. Whether a Screen Recording grant survives a rebuild was not measured.
-- Nobody read the captured images for legibility. Only their pixel sizes were checked.
+- Legibility was checked by eye for one packaged capture of a TextEdit window at 1206 by 1010 pixels. Its 12 point text was readable. The harness checks only pixel sizes.
 
 ## Observed focus behaviour
 
