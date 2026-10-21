@@ -28,6 +28,7 @@ export const libraryChannels = {
 
 export const pushChannels = {
   draft: "push:draft",
+  focusInput: "push:focus-input",
   libraryChanged: "push:library-changed",
 } as const;
 

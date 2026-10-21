@@ -71,12 +71,12 @@ On macOS the popover hides itself and then hides the app, so the previous app be
 
 ## Harness results
 
-`pnpm verify:desktop` ran 52 checks. `pnpm verify:packaged` ran the same 52 and one more, which launches the app through LaunchServices.
+`pnpm verify:desktop` ran 54 checks. `pnpm verify:packaged` ran the same 54 and one more, which launches the app through LaunchServices.
 
 | Run               | Pass | Fail | Blocked |
 | ----------------- | ---- | ---- | ------- |
-| Development build | 52   | 0    | 0       |
-| Packaged app      | 52   | 0    | 1       |
+| Development build | 54   | 0    | 0       |
+| Packaged app      | 54   | 0    | 1       |
 
 | Check | Dev | Packaged | Observed |
 | --- | --- | --- | --- |
@@ -100,11 +100,13 @@ On macOS the popover hides itself and then hides the app, so the previous app be
 | Two chips with distinct view ids | pass | pass |  |
 | Relationship text survives the switch | pass | pass |  |
 | Second chip is document B | pass | pass |  |
+| Relationship input has focus after the second press | pass | pass |  |
 | Expanding a chip shows the captured image | pass | pass | 1206 by 1010 |
 | Removing a view drops only that view | pass | pass | Three views, then documents A and B remain |
 | Self press adds nothing | pass | pass | Two views before and after |
 | Self press hides the popover | pass | pass |  |
 | Show Draft reopens without capturing | pass | pass | Two chips |
+| Relationship input has focus after Show Draft | pass | pass |  |
 | Cmd+Enter saves and hides | pass | pass |  |
 | No window visible after save | pass | pass |  |
 | Focus returns to TextEdit after save | pass | pass |  |
@@ -147,6 +149,16 @@ Each value comes from one run. The probe and source times come from the app's ow
 The harness polls the draft every 100 ms over the inspector, so press-to-view can overstate the real time by up to about 100 ms. Most of the capture time is spent in `getSources`, which renders a thumbnail of every open window at the requested size. It will grow with the number of open windows. One earlier packaged run measured 3005 ms for the first `getSources` call. That was not reproduced and is not explained.
 
 The desktop harness is sensitive to other activity on the machine. Other programs were using the desktop during this work. In two discarded runs, another app took focus or typed into the harness's document. The reported numbers come from runs without that interference.
+
+## Continuous integration
+
+- The first CI run on pull request 1 passed on both GitHub-hosted runners. On the Windows runner, the get-windows N-API addon installed as a prebuilt download, and electron-builder produced the NSIS installer and the zip. No Windows build has been launched.
+- Pull request builds first skipped signing. The arm64 artifact then carried only the Electron linker signature and failed `codesign --verify --deep --strict`. With `CSC_FOR_PULL_REQUEST` set, the downloaded arm64 artifact is ad-hoc signed as `ch.inset.prototype.windowlinks` and passes that check.
+- The release workflow has not run yet. No `v*` tag exists.
+
+## Fixes found in review
+
+- Focus after reopening. The first harness checked focus only after the first press. After the second press and after Show Draft, Chromium put focus on the first chip's preview button, so typed text went nowhere. Main now asks the popover to focus the relationship field every time it shows. Two harness checks cover this.
 
 ## Design notes
 
