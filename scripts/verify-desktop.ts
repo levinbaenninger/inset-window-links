@@ -18,6 +18,7 @@ interface InsetE2E {
   quit: () => void;
   addFromWindowList: () => void;
   trayMenu: () => string[];
+  trayBounds: () => { x: number; y: number; width: number; height: number };
   snapshot: () => DraftSnapshot;
   diagnostics: () => {
     screenAccess: string;
@@ -47,6 +48,7 @@ interface WindowInfo {
 
 interface SavedRecord {
   relationship: string;
+  nextStep: string;
   views: readonly { title: string | null; width: number; height: number }[];
 }
 
@@ -68,6 +70,8 @@ const TRAY_MENU = [
   "---",
   "Quit Inset Window Links",
 ];
+
+const NEXT_STEP = "Ask the supplier whether 21 November is possible.";
 
 const RELATIONSHIP =
   "The deadline in doc A decides which option in doc B is still possible.";
@@ -279,6 +283,12 @@ const checkPopoverPlacement = async (
   app: ElectronApplication,
   source: Awaited<ReturnType<typeof settledForeground>>
 ) => {
+  const first = await popoverWindow(app);
+
+  // The popover grows to fit the new chip after it shows, so read the settled bounds.
+  await sleep(500);
+  observations.set("popoverHeightAtShow", json(first?.bounds.height));
+
   const popover = await popoverWindow(app);
 
   const sourceDisplay =
@@ -474,6 +484,47 @@ const secondCapture = async (
   record("second chip is TextEdit document B", chips[1] === docB, json(chips));
 };
 
+const previewAndRemove = async (
+  app: ElectronApplication,
+  page: Page,
+  docA: string
+) => {
+  await page.getByRole("button", { name: /^Show preview of view 1/u }).click();
+
+  const preview = await waitFor(
+    async () =>
+      String(
+        await page.evaluate(
+          "(() => { const img = document.querySelector('[data-testid=source-chip] img'); return img && img.complete ? img.naturalWidth + 'x' + img.naturalHeight : ''; })()"
+        )
+      ),
+    (value) => value !== ""
+  );
+
+  record(
+    "expanding a chip shows the captured image",
+    /^[1-9]\d*x[1-9]\d*$/u.test(preview),
+    preview
+  );
+  await page.getByRole("button", { name: /^Hide preview of view 1/u }).click();
+  await bringToFront(docA);
+  await pressAndWaitForViews(app, 3);
+  await page.getByRole("button", { name: /^Remove view 3/u }).click();
+
+  const snap = await waitFor(
+    () => snapshot(app),
+    (value) => value.views.length === 2
+  );
+
+  const chips = await page.getByTestId("source-chip-title").allTextContents();
+
+  record(
+    "removing a view drops only that view and keeps the text",
+    snap.views.length === 2 && snap.text.relationship === RELATIONSHIP,
+    json({ chips, text: snap.text.relationship })
+  );
+};
+
 const selfPress = async (app: ElectronApplication, page: Page) => {
   const before = await popoverWindow(app);
 
@@ -532,6 +583,10 @@ const saveAndVerify = async (
   userData: string,
   docs: readonly string[]
 ) => {
+  await page.getByRole("button", { name: "Next step (optional)" }).click();
+  await page
+    .getByLabel("Next step (optional)")
+    .pressSequentially(NEXT_STEP, { delay: 5 });
   await page.locator("#relationship").focus();
   await page.keyboard.press("Meta+Enter");
 
@@ -567,9 +622,15 @@ const saveAndVerify = async (
     json({ dirs: dirs.length, files })
   );
   record(
-    "saved metadata has the relationship and both titles",
-    saved?.relationship === RELATIONSHIP && json(titles) === json(docs),
-    json({ relationship: saved?.relationship, titles })
+    "saved metadata has the relationship, next step, and both titles",
+    saved?.relationship === RELATIONSHIP &&
+      saved.nextStep === NEXT_STEP &&
+      json(titles) === json(docs),
+    json({
+      nextStep: saved?.nextStep,
+      relationship: saved?.relationship,
+      titles,
+    })
   );
   record(
     "saved PNG sizes match the metadata",
@@ -619,6 +680,7 @@ const editAndDelete = async (library: Page, userData: string) => {
 
   await library.getByRole("button", { name: "Edit text" }).click();
   await library.getByLabel("What connects these views?").fill(edited);
+  await library.getByLabel("Next step (optional)").fill("Edited next step");
   await library.getByRole("button", { name: "Save changes" }).click();
   await library
     .getByTestId("record-relationship")
@@ -630,9 +692,9 @@ const editAndDelete = async (library: Page, userData: string) => {
   const route = library.url().split("#")[1] ?? "";
 
   record(
-    "editing the thought persists to disk",
-    saved?.relationship === edited,
-    json(saved?.relationship)
+    "editing both text fields persists to disk",
+    saved?.relationship === edited && saved.nextStep === "Edited next step",
+    json({ nextStep: saved?.nextStep, relationship: saved?.relationship })
   );
   await library.getByRole("button", { name: "Delete" }).click();
   await library
@@ -683,6 +745,27 @@ const reopenAndRead = async (
 
   const route = library.url().split("#")[1] ?? "";
 
+  const order = String(
+    await library.evaluate(
+      `(() => { const text = document.querySelector('main').innerText; return [text.indexOf(${JSON.stringify(
+        RELATIONSHIP
+      )}), text.indexOf(${JSON.stringify(
+        NEXT_STEP
+      )}), text.indexOf('Sources')].join(','); })()`
+    )
+  );
+
+  const [relationshipAt = -1, nextStepAt = -1, sourcesAt = -1] = order
+    .split(",")
+    .map(Number);
+
+  record(
+    "the record shows the thought, then the next step, then the sources",
+    relationshipAt >= 0 &&
+      relationshipAt < nextStepAt &&
+      nextStepAt < sourcesAt,
+    order
+  );
   record(
     "after restart the record shows the relationship",
     relationship === RELATIONSHIP,
@@ -917,8 +1000,8 @@ const failedWrite = async (
   app.process().kill("SIGKILL");
 };
 
-const closeDocuments = () => {
-  for (const name of createdDocs) {
+const closeDocuments = (names: readonly string[] = createdDocs) => {
+  for (const name of names) {
     osascript(
       `tell application "TextEdit" to close (every document whose name is "${name}") saving no`
     );
@@ -1051,6 +1134,12 @@ const checkLaunch = async (app: ElectronApplication) => {
 
   const menu = await app.evaluate(() => globalThis.__insetE2E.trayMenu());
 
+  const trayBounds = await app.evaluate(() =>
+    globalThis.__insetE2E.trayBounds()
+  );
+
+  // A menu bar that collapses status items reports zero height, so this is an observation, not a check.
+  observations.set("trayBounds", json(trayBounds));
   record(
     "tray menu has the expected entries",
     json(menu) === json(TRAY_MENU),
@@ -1087,25 +1176,29 @@ const run = async (userData: string) => {
   }
 
   await secondCapture(app, page, docB);
+  await previewAndRemove(app, page, docA);
   await selfPress(app, page);
   await saveAndVerify(app, page, userData, [docA, docB]);
   await app.close();
+  closeDocuments([docA, docB]);
+
+  const docC = newTextEditDocument("Doc C: used after the restart.");
 
   app = await launch(userData);
   page = await popoverPage(app);
   await reopenAndRead(app, [docA, docB], userData);
-  await escapeAndRestore(app, page, docA);
+  await escapeAndRestore(app, page, docC);
   await discardDraft(app, page);
-  await windowListFallback(app, page, docA);
-  await changedSameWindow(app, page, docA);
+  await windowListFallback(app, page, docC);
+  await changedSameWindow(app, page, docC);
   await app.close();
 
   app = await launch(userData, true);
   page = await popoverPage(app);
-  await failedWrite(app, page, userData, docA);
+  await failedWrite(app, page, userData, docC);
 
   if (MODE === "packaged") {
-    await measureOpenLaunch(docA);
+    await measureOpenLaunch(docC);
   }
 };
 
