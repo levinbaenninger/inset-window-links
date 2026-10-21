@@ -37,7 +37,6 @@ const toNewCapture = (draft: Draft, now: Date): NewCapture => ({
   },
 });
 
-/** Runs the reducer and interprets its effects against Electron. */
 export class SessionController {
   readonly #capturer: WindowCapturer;
   readonly #store: CaptureStore;
