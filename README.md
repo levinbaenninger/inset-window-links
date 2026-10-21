@@ -10,7 +10,7 @@ This is a research prototype. See `IMPLEMENTATION_REPORT.md` for what has been v
 - Press it in a window. The popover opens beside that window with a chip for the view and the question "What connects these views?".
 - Click back into your work to hide the popover. The draft stays. Switch to another window and press the shortcut again to add it.
 - Save with `⌘↵` (`Ctrl+Enter` on Windows) or the Save button. Escape or clicking outside hides the popover without saving. Discard clears the draft.
-- The menu bar icon has Show Draft, Add View from Window List (a labelled fallback), Recent Captures, and Quit.
+- The menu bar icon has Show Draft, Add View from Window List (a labelled fallback), Recent Captures, and Quit. If your menu bar collapses status items, the icon sits behind that control.
 
 Captures are stored as JSON and PNG files in `~/Library/Application Support/Inset Window Links/captures` on macOS and `%APPDATA%\Inset Window Links\captures` on Windows.
 
