@@ -108,11 +108,13 @@ const start = async () => {
 
   const shortcut = registerCaptureShortcut(actions.pressShortcut);
 
-  createTray(actions, shortcut);
+  const { menu, tray } = createTray(actions, shortcut);
+
   app.on("second-instance", actions.showDraft);
   app.on("before-quit", (event) => session.interceptQuit(event));
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
+    tray.destroy();
   });
 
   if (e2e) {
@@ -121,6 +123,10 @@ const start = async () => {
         ...actions,
         diagnostics: () => capturer.diagnostics,
         snapshot: () => session.snapshot(),
+        trayMenu: () =>
+          menu.items.map((item) =>
+            item.type === "separator" ? "---" : item.label
+          ),
       },
     });
   }

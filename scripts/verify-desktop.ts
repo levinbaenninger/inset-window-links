@@ -16,6 +16,8 @@ interface InsetE2E {
   showDraft: () => void;
   openRecent: () => void;
   quit: () => void;
+  addFromWindowList: () => void;
+  trayMenu: () => string[];
   snapshot: () => DraftSnapshot;
   diagnostics: () => {
     screenAccess: string;
@@ -55,6 +57,17 @@ const PACKAGED_EXE = path.join(
   ROOT,
   "release/mac-arm64/Inset Window Links.app/Contents/MacOS/Inset Window Links"
 );
+
+const TRAY_MENU = [
+  "Show Draft",
+  "Add View from Window List…",
+  "Recent Captures…",
+  "---",
+  "Add View Shortcut: ⌥⌘W",
+  "Screen Recording Settings…",
+  "---",
+  "Quit Inset Window Links",
+];
 
 const RELATIONSHIP =
   "The deadline in doc A decides which option in doc B is still possible.";
@@ -108,15 +121,16 @@ const foreground = async () => {
     screenRecordingPermission: true,
   });
 
-  return win === undefined
-    ? null
-    : {
+  // get-windows resolves null, not undefined, while no window is frontmost.
+  return win
+    ? {
         app: win.owner.name,
         bounds: win.bounds,
         id: win.id,
         pid: win.owner.processId,
         title: win.title,
-      };
+      }
+    : null;
 };
 
 const waitFor = async <T>(
@@ -134,6 +148,9 @@ const waitFor = async <T>(
 
   return waitFor(read, done, deadline);
 };
+
+const settledForeground = () =>
+  waitFor(foreground, (win) => win !== null, Date.now() + 2000);
 
 const environment = (extra: ReadonlyMap<string, string>) => {
   const env = new Map<string, string>();
@@ -252,7 +269,7 @@ const recordDirs = async (userData: string) => {
 
 const checkPopoverPlacement = async (
   app: ElectronApplication,
-  source: Awaited<ReturnType<typeof foreground>>
+  source: Awaited<ReturnType<typeof settledForeground>>
 ) => {
   const popover = await popoverWindow(app);
 
@@ -291,7 +308,7 @@ const checkFirstView = async (
   docA: string,
   snap: DraftSnapshot
 ) => {
-  const source = await foreground();
+  const source = await settledForeground();
   const [view] = snap.views;
   const chips = await page.getByTestId("source-chip-title").allTextContents();
 
@@ -318,7 +335,7 @@ const checkFirstView = async (
 };
 
 const checkFocusAndCopy = async (app: ElectronApplication, page: Page) => {
-  const active = await foreground();
+  const active = await settledForeground();
   const { pid } = app.process();
   const focusedId = (await page.locator(":focus").getAttribute("id")) ?? "";
   const label = await page.locator('label[for="relationship"]').textContent();
@@ -348,7 +365,7 @@ const firstCapture = async (
   docA: string
 ) => {
   const front = await bringToFront(docA);
-  const source = await foreground();
+  const source = await settledForeground();
 
   record(
     "TextEdit document A is frontmost before the press",
@@ -416,7 +433,7 @@ const secondCapture = async (
 
   const front = await bringToFront(docB);
   const hidden = await popoverVisible(app, false);
-  const focus = await foreground();
+  const focus = await settledForeground();
 
   observations.set("focusAfterClickingIntoWork", json(focus));
   record(
@@ -457,7 +474,7 @@ const selfPress = async (app: ElectronApplication, page: Page) => {
 
   const snap = await snapshot(app);
   const after = await popoverWindow(app);
-  const focus = await foreground();
+  const focus = await settledForeground();
 
   observations.set("focusAfterSelfPressHide", json(focus));
   record(
@@ -512,7 +529,7 @@ const saveAndVerify = async (
 
   const hidden = await popoverVisible(app, false);
   const all = await windows(app);
-  const focus = await foreground();
+  const focus = await settledForeground();
   const dirs = await recordDirs(userData);
   const { files, saved, sizes } = await readSaved(dirs[0]);
   const titles = saved?.views.map((view) => view.title) ?? [];
@@ -658,7 +675,7 @@ const escapeAndRestore = async (
   await page.keyboard.press("Escape");
 
   const hidden = await popoverVisible(app, false);
-  const focus = await foreground();
+  const focus = await settledForeground();
 
   observations.set("focusAfterEscape", json(focus));
   record(
@@ -688,7 +705,7 @@ const discardDraft = async (app: ElectronApplication, page: Page) => {
 
   const discarded = await popoverVisible(app, false);
 
-  observations.set("focusAfterDiscard", json(await foreground()));
+  observations.set("focusAfterDiscard", json(await settledForeground()));
   await showDraft(app);
 
   const cleared = await page.locator("#relationship").inputValue();
@@ -711,6 +728,53 @@ const requestQuit = async (app: ElectronApplication) => {
   } catch {
     return "app closed";
   }
+};
+
+const windowListFallback = async (
+  app: ElectronApplication,
+  page: Page,
+  docA: string
+) => {
+  await app.evaluate(() => globalThis.__insetE2E.addFromWindowList());
+
+  const choosing = await waitFor(
+    () => snapshot(app),
+    (value) =>
+      value.activity.kind === "choosing" &&
+      value.activity.candidates !== "loading"
+  );
+
+  const chooser = page.getByTestId("source-chooser");
+
+  const banner = await chooser
+    .getByText("Fallback: choose the window to add")
+    .count();
+
+  record(
+    "the window list opened from the tray is labelled as a fallback",
+    banner === 1 && choosing.views.length === 0,
+    json({ banner, views: choosing.views.length })
+  );
+  await chooser.getByRole("button", { exact: true, name: docA }).click();
+
+  const snap = await waitFor(
+    () => snapshot(app),
+    (value) => value.views.length === 1
+  );
+
+  const [view] = snap.views;
+  const badge = await page.getByText("Chosen from list").count();
+
+  record(
+    "a window chosen from the list is recorded as a fallback view",
+    view?.source.kind === "fallback" &&
+      view.source.reason === "menu" &&
+      view.title === docA &&
+      badge === 1,
+    json({ badge, source: view?.source, title: view?.title })
+  );
+  await page.getByRole("button", { name: "Discard" }).click();
+  await popoverVisible(app, false);
 };
 
 const failedWrite = async (
@@ -890,6 +954,14 @@ const checkLaunch = async (app: ElectronApplication) => {
     !dock,
     json({ dockVisible: dock })
   );
+
+  const menu = await app.evaluate(() => globalThis.__insetE2E.trayMenu());
+
+  record(
+    "tray menu has the expected entries",
+    json(menu) === json(TRAY_MENU),
+    json(menu)
+  );
   observations.set(
     "screenAccessAtLaunch",
     json(
@@ -930,6 +1002,7 @@ const run = async (userData: string) => {
   await reopenAndRead(app, [docA, docB]);
   await escapeAndRestore(app, page, docA);
   await discardDraft(app, page);
+  await windowListFallback(app, page, docA);
   await app.close();
 
   app = await launch(userData, true);
