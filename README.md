@@ -44,8 +44,8 @@ The harness opens TextEdit documents, moves focus between windows, and overwrite
 
 ## Download
 
-- Every push to `main` and every pull request builds macOS and Windows packages. Download them from the run's artifacts on the GitHub Actions page. Artifacts are kept for 14 days.
-- Pushing a `v*` tag publishes the packages as a prerelease on the GitHub Releases page.
+- Every push to `main` and every pull request builds macOS and Windows installers. Open the run on the GitHub Actions page and download `inset-window-links-mac-arm64` (Apple silicon), `inset-window-links-mac-x64` (Intel), or `inset-window-links-win-x64`. Downloading artifacts needs a GitHub login. They are kept for 14 days.
+- Pushing a `v*` tag publishes the dmg, zip, and exe files as a prerelease on the GitHub Releases page. These downloads need no login.
 
 ### macOS first run
 
