@@ -20,7 +20,9 @@
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "package:mac": "pnpm build && electron-builder --mac",
     "package:win": "pnpm build && electron-builder --win",
-    "package:dir": "pnpm build && electron-builder --dir"
+    "package:dir": "pnpm build && electron-builder --dir",
+    "verify:desktop": "pnpm build && node scripts/verify-desktop.ts",
+    "verify:packaged": "pnpm package:dir && node scripts/verify-desktop.ts --packaged"
   },
   "dependencies": {
     "get-windows": "9.3.0",
@@ -44,6 +46,7 @@
     "electron-vite": "^6.0.0",
     "oxfmt": "^0.74.0",
     "oxlint": "^1.89.0",
+    "playwright": "^1.64.1",
     "radix-ui": "^1.8.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
