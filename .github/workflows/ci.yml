@@ -54,6 +54,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm ${{ matrix.command }} --publish never
+        env:
+          CSC_FOR_PULL_REQUEST: "true"
       - uses: actions/upload-artifact@v7
         with:
           name: inset-window-links-${{ matrix.name }}-${{ github.sha }}
