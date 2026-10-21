@@ -33,7 +33,7 @@ const CANDIDATE_THUMB = { height: 200, width: 320 };
 const SCREEN_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 
-/** What the last probe saw, kept for the e2e report and the implementation report. */
+/** What the last probe saw. Read only by the INSET_E2E harness. */
 export interface ProbeDiagnostics {
   screenAccess: string;
   probe: string;
