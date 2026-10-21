@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { on, once } from "node:events";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -766,6 +767,110 @@ const closeDocuments = () => {
   }
 };
 
+const INSPECT_PORT = 9339;
+
+/** Talks to the main process over the Node inspector, for an app Playwright did not launch. */
+const inspectorEvaluate = async (
+  socket: WebSocket,
+  id: number,
+  expression: string
+) => {
+  socket.send(
+    JSON.stringify({
+      id,
+      method: "Runtime.evaluate",
+      params: { awaitPromise: true, expression, returnByValue: true },
+    })
+  );
+
+  for await (const [event] of on(socket, "message")) {
+    const message: { id?: number; result?: { result?: { value?: string } } } =
+      JSON.parse(String(event.data));
+
+    if (message.id === id) {
+      return message.result?.result?.value ?? "";
+    }
+  }
+
+  return "";
+};
+
+/**
+ * Playwright starts the app as a child of this terminal, so macOS may attribute Screen Recording
+ * to the terminal. Launching through LaunchServices makes the app its own responsible process.
+ */
+const measureOpenLaunch = async (docA: string) => {
+  const userData = await mkdtemp(path.join(tmpdir(), "iwl-verify-open-"));
+
+  execFileSync("open", [
+    "-n",
+    "--env",
+    "INSET_E2E=1",
+    "--env",
+    `INSET_E2E_USER_DATA=${userData}`,
+    "-a",
+    path.dirname(path.dirname(path.dirname(PACKAGED_EXE))),
+    "--args",
+    `--inspect=${INSPECT_PORT}`,
+  ]);
+  await sleep(4000);
+
+  const response = await fetch(`http://127.0.0.1:${INSPECT_PORT}/json/list`);
+
+  const targets: { webSocketDebuggerUrl: string }[] = JSON.parse(
+    await response.text()
+  );
+
+  const socket = new WebSocket(targets[0]?.webSocketDebuggerUrl ?? "");
+
+  await once(socket, "open");
+  await bringToFront(docA);
+  await inspectorEvaluate(socket, 1, "globalThis.__insetE2E.pressShortcut()");
+  await sleep(4000);
+
+  const result = await inspectorEvaluate(
+    socket,
+    2,
+    "JSON.stringify({ diagnostics: globalThis.__insetE2E.diagnostics(), snapshot: globalThis.__insetE2E.snapshot() })"
+  );
+
+  const {
+    diagnostics,
+    snapshot: snap,
+  }: { diagnostics: object; snapshot: DraftSnapshot } = JSON.parse(result);
+
+  const pid = execFileSync(
+    "pgrep",
+    ["-f", `Inset Window Links --inspect=${INSPECT_PORT}`],
+    { encoding: "utf-8" }
+  ).trim();
+
+  socket.close();
+  process.kill(Number(pid.split("\n")[0]), "SIGKILL");
+  observations.set(
+    "openLaunch",
+    json({ diagnostics, notice: snap.notice, views: snap.views.length })
+  );
+
+  if (snap.views.length === 1 && snap.views[0]?.source.kind === "direct") {
+    record(
+      "packaged app launched through LaunchServices captures directly",
+      true,
+      json(diagnostics)
+    );
+  } else {
+    block(
+      "packaged app launched through LaunchServices captures directly",
+      json({
+        diagnostics,
+        notice: snap.notice,
+        remaining:
+          "Grant Screen Recording to Inset Window Links in System Settings, then relaunch.",
+      })
+    );
+  }
+};
+
 const checkLaunch = async (app: ElectronApplication) => {
   await sleep(1500);
 
@@ -830,6 +935,10 @@ const run = async (userData: string) => {
   app = await launch(userData, true);
   page = await popoverPage(app);
   await failedWrite(app, page, userData, docA);
+
+  if (MODE === "packaged") {
+    await measureOpenLaunch(docA);
+  }
 };
 
 if (process.platform === "darwin") {
