@@ -1,1 +1,1 @@
-£ Inset Window Links
+# Inset Window Links
