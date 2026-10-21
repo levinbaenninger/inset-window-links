@@ -487,8 +487,10 @@ const secondCapture = async (
 const previewAndRemove = async (
   app: ElectronApplication,
   page: Page,
-  docA: string
+  docs: readonly [string, string]
 ) => {
+  const [docA] = docs;
+
   await page.getByRole("button", { name: /^Show preview of view 1/u }).click();
 
   const preview = await waitFor(
@@ -516,11 +518,16 @@ const previewAndRemove = async (
     (value) => value.views.length === 2
   );
 
-  const chips = await page.getByTestId("source-chip-title").allTextContents();
+  const chips = await waitFor(
+    () => page.getByTestId("source-chip-title").allTextContents(),
+    (titles) => titles.length === 2
+  );
 
   record(
     "removing a view drops only that view and keeps the text",
-    snap.views.length === 2 && snap.text.relationship === RELATIONSHIP,
+    snap.views.length === 2 &&
+      json(chips) === json(docs) &&
+      snap.text.relationship === RELATIONSHIP,
     json({ chips, text: snap.text.relationship })
   );
 };
@@ -1176,7 +1183,7 @@ const run = async (userData: string) => {
   }
 
   await secondCapture(app, page, docB);
-  await previewAndRemove(app, page, docA);
+  await previewAndRemove(app, page, [docA, docB]);
   await selfPress(app, page);
   await saveAndVerify(app, page, userData, [docA, docB]);
   await app.close();
