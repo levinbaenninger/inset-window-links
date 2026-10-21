@@ -90,14 +90,20 @@ const menuFor = (
   { click: actions.quit, label: "Quit Inset Window Links" },
 ];
 
+export interface AppTray {
+  tray: Tray;
+  menu: Menu;
+}
+
 export const createTray = (
   actions: TrayActions,
   shortcut: ShortcutStatus
-): Tray => {
+): AppTray => {
   const tray = new Tray(trayIcon());
+  const menu = Menu.buildFromTemplate(menuFor(actions, shortcut));
 
   tray.setToolTip("Inset Window Links");
-  tray.setContextMenu(Menu.buildFromTemplate(menuFor(actions, shortcut)));
+  tray.setContextMenu(menu);
 
-  return tray;
+  return { menu, tray };
 };
