@@ -4,14 +4,30 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "electron-vite";
 
+const renderer = path.resolve(import.meta.dirname, "src/renderer");
+
 export default defineConfig({
   main: {},
-  preload: {},
+  preload: {
+    build: {
+      rolldownOptions: {
+        output: { format: "cjs" },
+      },
+    },
+  },
   renderer: {
+    build: {
+      rolldownOptions: {
+        input: {
+          library: path.join(renderer, "library.html"),
+          popover: path.join(renderer, "popover.html"),
+        },
+      },
+    },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        "@": path.resolve(import.meta.dirname, "src/renderer/src"),
+        "@": path.join(renderer, "src"),
       },
     },
   },
