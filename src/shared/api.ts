@@ -35,6 +35,7 @@ export interface LibraryApi {
 
 export type PopoverBridge = PopoverApi & {
   onDraft: (listener: (snapshot: DraftSnapshot) => void) => () => void;
+  onShown: (listener: () => void) => () => void;
 };
 
 export type LibraryBridge = LibraryApi & {

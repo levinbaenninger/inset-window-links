@@ -108,6 +108,7 @@ export class PopoverWindow {
 
     this.#win.show();
     this.#win.focus();
+    this.#win.webContents.send(pushChannels.focusInput);
   }
 
   /** Focused hides, visible but unfocused gets focus, hidden shows on the cursor's display. */

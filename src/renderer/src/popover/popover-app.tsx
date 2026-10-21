@@ -56,19 +56,10 @@ const DraftForm = ({
     }
   };
 
-  useEffect(() => {
-    const focusInput = () => relationship.current?.focus();
-
-    window.addEventListener("focus", focusInput);
-
-    return () => window.removeEventListener("focus", focusInput);
-  }, []);
-
-  useEffect(() => {
-    if (viewCount > 0) {
-      relationship.current?.focus();
-    }
-  }, [viewCount]);
+  useEffect(
+    () => popoverApi().onShown(() => relationship.current?.focus()),
+    []
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

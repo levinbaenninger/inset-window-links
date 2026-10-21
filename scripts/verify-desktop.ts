@@ -489,6 +489,14 @@ const secondCapture = async (
     value
   );
   record("second chip is TextEdit document B", chips[1] === docB, json(chips));
+
+  const focusedId = (await page.locator(":focus").getAttribute("id")) ?? "";
+
+  record(
+    "relationship input has focus after the second press",
+    focusedId === "relationship",
+    focusedId
+  );
 };
 
 const previewAndRemove = async (
@@ -568,6 +576,14 @@ const selfPress = async (app: ElectronApplication, page: Page) => {
     "Show Draft reopens the same draft without capturing",
     shown?.visible === true && chips === 2,
     json({ chips, visible: shown?.visible })
+  );
+
+  const focusedId = (await page.locator(":focus").getAttribute("id")) ?? "";
+
+  record(
+    "relationship input has focus after Show Draft",
+    focusedId === "relationship",
+    focusedId
   );
 };
 

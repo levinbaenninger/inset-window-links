@@ -52,6 +52,8 @@ if (role === "popover") {
     ...bridge("popover", popoverChannels),
     onDraft: (listener: (...args: readonly unknown[]) => void) =>
       subscribe(pushChannels.draft, listener),
+    onShown: (listener: () => void) =>
+      subscribe(pushChannels.focusInput, () => listener()),
   });
 }
 
