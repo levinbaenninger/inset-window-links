@@ -56,12 +56,27 @@ jobs:
       - run: pnpm ${{ matrix.command }} --publish never
         env:
           CSC_FOR_PULL_REQUEST: "true"
-      - uses: actions/upload-artifact@v7
+      - name: Upload macOS arm64 installer
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
         with:
-          name: inset-window-links-${{ matrix.name }}-${{ github.sha }}
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/*.exe
+          name: inset-window-links-mac-arm64
+          path: release/*-mac-arm64.dmg
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload macOS x64 installer
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: inset-window-links-mac-x64
+          path: release/*-mac-x64.dmg
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Windows x64 installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: inset-window-links-win-x64
+          path: release/*-win-x64.exe
           if-no-files-found: error
           retention-days: 14
