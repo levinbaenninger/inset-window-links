@@ -783,6 +783,45 @@ const requestQuit = async (app: ElectronApplication) => {
   }
 };
 
+/** Resizing changes what the window shows without editing, so TextEdit autosaves nothing. */
+const changedSameWindow = async (
+  app: ElectronApplication,
+  page: Page,
+  docA: string
+) => {
+  await bringToFront(docA);
+  await pressAndWaitForViews(app, 1);
+  osascript(
+    `tell application "TextEdit" to set bounds of window "${docA}" to {120, 120, 920, 520}`
+  );
+  await bringToFront(docA);
+
+  const { snap } = await pressAndWaitForViews(app, 2);
+  const [first, second] = snap.views;
+  const labels = await page.getByTestId("source-chip").allTextContents();
+  const sizes = snap.views.map((view) => `${view.width}x${view.height}`);
+
+  record(
+    "a changed view of the same window is kept as a second view",
+    snap.views.length === 2 &&
+      first?.id !== second?.id &&
+      second?.sameWindowAs === 1 &&
+      sizes[0] !== sizes[1],
+    json({
+      ids: snap.views.map((view) => view.id),
+      sameWindowAs: second?.sameWindowAs,
+      sizes,
+    })
+  );
+  record(
+    "the repeat is labelled as the same window",
+    labels[1]?.includes("same window as view 1") === true,
+    json(labels)
+  );
+  await page.getByRole("button", { name: "Discard" }).click();
+  await popoverVisible(app, false);
+};
+
 const windowListFallback = async (
   app: ElectronApplication,
   page: Page,
@@ -1058,6 +1097,7 @@ const run = async (userData: string) => {
   await escapeAndRestore(app, page, docA);
   await discardDraft(app, page);
   await windowListFallback(app, page, docA);
+  await changedSameWindow(app, page, docA);
   await app.close();
 
   app = await launch(userData, true);
