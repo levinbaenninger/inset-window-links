@@ -123,6 +123,7 @@ const start = async () => {
         ...actions,
         diagnostics: () => capturer.diagnostics,
         snapshot: () => session.snapshot(),
+        trayBounds: () => tray.getBounds(),
         trayMenu: () =>
           menu.items.map((item) =>
             item.type === "separator" ? "---" : item.label

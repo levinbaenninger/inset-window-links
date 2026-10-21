@@ -199,6 +199,22 @@ describe("session lifecycle", () => {
     ]);
   });
 
+  it("removes one view and keeps the others and the text", () => {
+    const { state } = run(ids(), [
+      foreignPress,
+      captured("t1", view(1, "macos:1175")),
+      foreignPress,
+      captured("t2", view(2, "macos:1176")),
+      { text: text("A limits B"), type: "textChanged" },
+      { type: "viewRemoved", viewId: view(1, "macos:1175").id },
+    ]);
+
+    expect([
+      state.draft.views.map((v) => v.title),
+      state.draft.text,
+    ]).toStrictEqual([["Untitled 2"], text("A limits B")]);
+  });
+
   it("drops a stale capture result", () => {
     const { state } = run(ids(), [
       foreignPress,
