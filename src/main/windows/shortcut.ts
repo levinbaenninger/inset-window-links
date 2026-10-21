@@ -15,7 +15,7 @@ export const shortcutStatus = (): ShortcutStatus => ({
   label,
 });
 
-/** False when another app owns the combination. The tray then says so and keeps the list fallback. */
+/** Unavailable when the OS refuses the combination. The tray then says so and keeps the list fallback. */
 export const registerCaptureShortcut = (
   onPress: () => void
 ): ShortcutStatus => {
