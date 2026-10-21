@@ -105,16 +105,6 @@ const newTextEditDocument = (body: string) => {
   return name;
 };
 
-const bringToFront = async (docName: string) => {
-  osascript(
-    `tell application "TextEdit" to set index of window "${docName}" to 1`,
-    'tell application "TextEdit" to activate'
-  );
-  await sleep(900);
-
-  return osascript('tell application "TextEdit" to get name of window 1');
-};
-
 const foreground = async () => {
   const win = await activeWindow({
     accessibilityPermission: false,
@@ -151,6 +141,24 @@ const waitFor = async <T>(
 
 const settledForeground = () =>
   waitFor(foreground, (win) => win !== null, Date.now() + 2000);
+
+const bringToFront = async (docName: string) => {
+  osascript(
+    `tell application "TextEdit" to set index of window "${docName}" to 1`,
+    'tell application "TextEdit" to activate'
+  );
+
+  // Reports the OS-level foreground, so another app stealing focus shows up as a failed check.
+  const win = await waitFor(
+    settledForeground,
+    (value) => value?.app === "TextEdit" && value.title === docName,
+    Date.now() + 3000
+  );
+
+  return win?.app === "TextEdit"
+    ? win.title
+    : `${win?.app ?? "nothing"}: ${win?.title ?? ""}`;
+};
 
 const environment = (extra: ReadonlyMap<string, string>) => {
   const env = new Map<string, string>();
@@ -606,9 +614,53 @@ const checkImageViewer = async (library: Page) => {
   await library.getByTestId("record-relationship").waitFor();
 };
 
+const editAndDelete = async (library: Page, userData: string) => {
+  const edited = "Edited: the deadline rules out option 2.";
+
+  await library.getByRole("button", { name: "Edit text" }).click();
+  await library.getByLabel("What connects these views?").fill(edited);
+  await library.getByRole("button", { name: "Save changes" }).click();
+  await library
+    .getByTestId("record-relationship")
+    .filter({ hasText: edited })
+    .waitFor();
+
+  const dirs = await recordDirs(userData);
+  const { saved } = await readSaved(dirs[0]);
+  const route = library.url().split("#")[1] ?? "";
+
+  record(
+    "editing the thought persists to disk",
+    saved?.relationship === edited,
+    json(saved?.relationship)
+  );
+  await library.getByRole("button", { name: "Delete" }).click();
+  await library
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Delete" })
+    .click();
+  await library.getByRole("heading", { name: "Recent captures" }).waitFor();
+
+  const remaining = await recordDirs(userData);
+
+  record(
+    "Delete after confirmation removes the record directory",
+    remaining.length === 0,
+    json({ recordDirs: remaining.length })
+  );
+  await library.evaluate(`location.hash = ${JSON.stringify(`#${route}`)}`);
+  await library.getByTestId("record-missing").waitFor();
+  record(
+    "a deleted record shows the missing-record state",
+    (await library.getByTestId("record-missing").count()) === 1,
+    route
+  );
+};
+
 const reopenAndRead = async (
   app: ElectronApplication,
-  docs: readonly string[]
+  docs: readonly string[],
+  userData: string
 ) => {
   const library = await openLibrary(app);
 
@@ -659,6 +711,7 @@ const reopenAndRead = async (
     clipboard.startsWith(RELATIONSHIP),
     clipboard.split("\n").join(" | ")
   );
+  await editAndDelete(library, userData);
   await library.close();
 };
 
@@ -783,6 +836,8 @@ const failedWrite = async (
   userData: string,
   docA: string
 ) => {
+  const before = await recordDirs(userData);
+
   await bringToFront(docA);
   await pressAndWaitForViews(app, 1);
   await page
@@ -808,8 +863,8 @@ const failedWrite = async (
   );
   record(
     "a failed write publishes no partial record",
-    dirs.length === 1,
-    json({ recordDirs: dirs.length })
+    dirs.length === before.length,
+    json({ after: dirs.length, before: before.length })
   );
 
   const quitting = requestQuit(app);
@@ -999,7 +1054,7 @@ const run = async (userData: string) => {
 
   app = await launch(userData);
   page = await popoverPage(app);
-  await reopenAndRead(app, [docA, docB]);
+  await reopenAndRead(app, [docA, docB], userData);
   await escapeAndRestore(app, page, docA);
   await discardDraft(app, page);
   await windowListFallback(app, page, docA);
