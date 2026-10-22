@@ -848,6 +848,33 @@ const reopenAndRead = async (
   await library.close();
 };
 
+/** Main processes of any other Inset Window Links instance, packaged or dev. */
+const otherInsetProcesses = (ownPid: number | undefined) => {
+  let listing = "";
+
+  try {
+    listing = execFileSync(
+      "pgrep",
+      ["-fl", "Inset Window Links|inset-window-links"],
+      {
+        encoding: "utf-8",
+      }
+    );
+  } catch {
+    return [];
+  }
+
+  return listing
+    .split("\n")
+    .filter(
+      (line) =>
+        line.trim() !== "" &&
+        !line.includes("--type=") &&
+        !line.includes("crashpad")
+    )
+    .filter((line) => !line.startsWith(`${ownPid ?? -1} `));
+};
+
 /** Guarded: ⌥⌘W closes windows in TextEdit, so it is sent only when Inset holds the shortcut and the harness document is in front. */
 const realKeystroke = async (
   app: ElectronApplication,
@@ -857,9 +884,15 @@ const realKeystroke = async (
   const front = await bringToFront(doc);
   const before = await snapshot(app);
   const name = "a real ⌥⌘W keystroke captures the frontmost window";
+  const others = otherInsetProcesses(app.process().pid);
 
-  if (before.shortcut.kind !== "registered" || front !== doc) {
-    block(name, json({ front, shortcut: before.shortcut }));
+  // macOS lets a second process register the same shortcut, so another Inset could take the press.
+  if (
+    before.shortcut.kind !== "registered" ||
+    front !== doc ||
+    others.length > 0
+  ) {
+    block(name, json({ front, others, shortcut: before.shortcut }));
 
     return;
   }

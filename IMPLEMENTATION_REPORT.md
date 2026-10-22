@@ -37,7 +37,7 @@ Add View from Window List in the menu, and any failed direct capture, open a cho
 ## Blockers
 
 - The packaged app's first run needs a manual Screen Recording grant. Launched through LaunchServices with `open`, the packaged app reports Screen Recording as `denied`. The get-windows helper then exits with an error. The app treats this as missing permission and shows the guidance. Capture after a grant and relaunch has not been verified.
-- A grant does not survive a rebuild. The user granted Screen Recording to the packaged build. `pnpm verify:packaged` then rebuilt and re-signed the app ad hoc, and the new build again reported `denied` through LaunchServices. macOS ties the grant to the exact ad-hoc build, so every new build or update needs the entry removed and added again. The popover notice and the README now say so. `pnpm verify:packaged:current` reruns the packaged checks without rebuilding.
+- A grant probably does not survive a rebuild. The user reported granting the permissions. `pnpm verify:packaged` then rebuilt and re-signed the app ad hoc, and the new build reported `denied` through LaunchServices. The grant database could not be read, so it is not known which copy was granted. The likely cause is that macOS ties the grant to the exact ad-hoc build, so every new build or update would need the entry removed and added again. The popover notice and the README now say so. `pnpm verify:packaged:current` reruns the packaged checks without rebuilding.
 - When Playwright launches the packaged app as a child of the terminal, it reports Screen Recording as `granted`. This is probably the terminal's grant. The packaged capture checks therefore prove the packaged capture path, not a user's first run.
 
 ## Untested or not observed
@@ -167,11 +167,11 @@ The desktop harness is sensitive to other activity on the machine. Other program
 
 The second round followed the app-screen rules of the taste skill. That meant quiet borders, colour only on the primary action, sentence case, and the brief's fixed wording kept.
 
-- Popover: each chip shows a thumbnail. A dashed row under the chips marks where the next view lands and carries the brief's hint and the shortcut. Save says why it is disabled. Discard asks once when the draft holds views or text. Escape and clicking outside still only hide.
+- Popover: each chip shows a thumbnail. A dashed row under the chips marks where the next view lands and carries the brief's hint and the shortcut. When Save is disabled, a line under the text field says why. Discard asks once when the draft holds views or text. Escape and clicking outside still only hide.
 - Permission: the notice gives the steps. When macOS still refuses after the user has allowed the app, it explains the rebuilt-app case and offers Quit and reopen. That goes through the unsaved-draft check.
-- Save: the menu bar shows "Saved" for 2.5 seconds on macOS, and Windows shows a tray balloon. Saving still opens no window.
+- Save: the menu bar item shows "Saved" for 2.5 seconds on macOS, and Windows shows a tray balloon. Saving still opens no window. Neither has been seen. On the test machine the status item is collapsed and reports zero height, so the confirmation is probably invisible there.
 - Recent captures: rows carry thumbnails of the first two views, are grouped by day, and can be searched by text and window title. The empty state teaches the three steps and shows the shortcut.
-- Record: the thought is the page heading, the next step sits in its own block, and Delete is no longer the loudest action. Each source has Copy image and can be dragged into another app.
+- Record: the thought is the page heading, the next step sits in its own block, and the actions sit in one row beside the saved time. Delete keeps the preset's pale destructive style and asks before deleting. Each source has Copy image and can be dragged into another app.
 - Image viewer: shows "Source 1 of 2", and steps between sources with buttons and the arrow keys.
 
 The taste skill's lint finds 0 failures in the renderer. Its 3 warnings are in generated shadcn components. Its browser inspector was not run, because the screens need the Electron preload bridge. The screens were checked from Electron screenshots in light and dark mode instead.

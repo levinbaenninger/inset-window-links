@@ -57,7 +57,7 @@ const CurrentRow = ({ item }: { item: CurrentItem }) => (
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="line-clamp-2 font-medium">{item.relationship}</span>
         {item.nextStep.trim() !== "" && (
-          <span className="text-muted-foreground line-clamp-1">
+          <span className="text-muted-foreground line-clamp-1 text-sm">
             Next: {item.nextStep}
           </span>
         )}

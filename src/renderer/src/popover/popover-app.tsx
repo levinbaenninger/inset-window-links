@@ -25,6 +25,17 @@ const discard = async () => {
   await popoverApi().discard();
 };
 
+const discardQuestion = (viewCount: number, text: DraftText): string => {
+  const views = `${viewCount} ${viewCount === 1 ? "view" : "views"}`;
+  const typed = !isBlank(text.relationship) || !isBlank(text.nextStep);
+
+  if (viewCount === 0) {
+    return "Discard your text?";
+  }
+
+  return typed ? `Discard ${views} and your text?` : `Discard ${views}?`;
+};
+
 const blockedReasons = {
   needsRelationship: "Write the connection to save.",
   needsView: "Add a view to save.",
@@ -136,6 +147,14 @@ const DraftForm = ({
           ref={relationship}
           value={text.relationship}
         />
+        {check.kind === "blocked" && (
+          <p
+            className="text-muted-foreground text-xs"
+            data-testid="save-blocked"
+          >
+            {blockedReasons[check.reason]}
+          </p>
+        )}
       </div>
       <Collapsible onOpenChange={setNextStepOpen} open={nextStepOpen}>
         <CollapsibleTrigger asChild>
@@ -177,10 +196,7 @@ const DraftForm = ({
           className="bg-destructive/10 flex items-center justify-between gap-2 rounded-lg py-1.5 pr-1.5 pl-3"
           data-testid="discard-confirm"
         >
-          <span className="text-xs">
-            Discard {viewCount} {viewCount === 1 ? "view" : "views"} and your
-            text?
-          </span>
+          <span className="text-xs">{discardQuestion(viewCount, text)}</span>
           <span className="flex gap-1.5">
             <Button
               autoFocus
@@ -200,20 +216,10 @@ const DraftForm = ({
           <Button onClick={requestDiscard} size="sm" variant="ghost">
             Discard
           </Button>
-          <span className="flex items-center gap-2.5">
-            {check.kind === "blocked" && (
-              <span
-                className="text-muted-foreground text-xs whitespace-nowrap"
-                data-testid="save-blocked"
-              >
-                {blockedReasons[check.reason]}
-              </span>
-            )}
-            <Button disabled={!canSave} onClick={save} size="sm">
-              {activity === "saving" ? "Saving…" : "Save"}
-              <span className="opacity-70">{mac ? "⌘↵" : "Ctrl+Enter"}</span>
-            </Button>
-          </span>
+          <Button disabled={!canSave} onClick={save} size="sm">
+            {activity === "saving" ? "Saving…" : "Save"}
+            <span className="opacity-70">{mac ? "⌘↵" : "Ctrl+Enter"}</span>
+          </Button>
         </footer>
       )}
     </>
