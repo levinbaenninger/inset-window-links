@@ -85,6 +85,7 @@ const RELATIONSHIP =
 
 const checks: Check[] = [];
 const createdDocs: string[] = [];
+const createdBodies: string[] = [];
 const observations = new Map<string, string>();
 
 const json = <T>(value: T): string => JSON.stringify(value) ?? "undefined";
@@ -112,6 +113,7 @@ const newTextEditDocument = (body: string) => {
   );
 
   createdDocs.push(name);
+  createdBodies.push(body);
 
   return name;
 };
@@ -226,6 +228,24 @@ const snapshot = (app: ElectronApplication) =>
 
 const press = (app: ElectronApplication) =>
   app.evaluate(() => globalThis.__insetE2E.pressShortcut());
+
+/** Discard asks first once the draft holds anything, so this answers the confirmation too. */
+const clickDiscard = async (page: Page) => {
+  await page.getByRole("button", { name: "Discard" }).click();
+
+  const confirm = page.getByTestId("discard-confirm");
+
+  const asked = await confirm.waitFor({ timeout: 1500 }).then(
+    () => true,
+    () => false
+  );
+
+  if (asked) {
+    await confirm.getByRole("button", { name: "Discard draft" }).click();
+  }
+
+  return asked;
+};
 
 const showDraft = async (app: ElectronApplication) => {
   await app.evaluate(() => globalThis.__insetE2E.showDraft());
@@ -512,7 +532,7 @@ const previewAndRemove = async (
     async () =>
       String(
         await page.evaluate(
-          "(() => { const img = document.querySelector('[data-testid=source-chip] img'); return img && img.complete ? img.naturalWidth + 'x' + img.naturalHeight : ''; })()"
+          "(() => { const img = document.querySelector('[data-testid=source-preview]'); return img && img.complete ? img.naturalWidth + 'x' + img.naturalHeight : ''; })()"
         )
       ),
     (value) => value !== ""
@@ -828,6 +848,46 @@ const reopenAndRead = async (
   await library.close();
 };
 
+/** Guarded: ⌥⌘W closes windows in TextEdit, so it is sent only when Inset holds the shortcut and the harness document is in front. */
+const realKeystroke = async (
+  app: ElectronApplication,
+  page: Page,
+  doc: string
+) => {
+  const front = await bringToFront(doc);
+  const before = await snapshot(app);
+  const name = "a real ⌥⌘W keystroke captures the frontmost window";
+
+  if (before.shortcut.kind !== "registered" || front !== doc) {
+    block(name, json({ front, shortcut: before.shortcut }));
+
+    return;
+  }
+
+  try {
+    osascript(
+      'tell application "System Events" to keystroke "w" using {command down, option down}'
+    );
+  } catch (error) {
+    block(name, `System Events refused the keystroke: ${String(error)}`);
+
+    return;
+  }
+
+  const snap = await waitFor(
+    () => snapshot(app),
+    (value) => value.views.length === 1 || value.notice !== null
+  );
+
+  record(
+    name,
+    snap.views.length === 1 && snap.views[0]?.title === doc,
+    json({ notice: snap.notice, titles: snap.views.map((view) => view.title) })
+  );
+  await clickDiscard(page);
+  await popoverVisible(app, false);
+};
+
 const escapeAndRestore = async (
   app: ElectronApplication,
   page: Page,
@@ -867,7 +927,13 @@ const escapeAndRestore = async (
 };
 
 const discardDraft = async (app: ElectronApplication, page: Page) => {
-  await page.getByRole("button", { name: "Discard" }).click();
+  const asked = await clickDiscard(page);
+
+  record(
+    "Discard asks before clearing a draft with content",
+    asked,
+    json({ asked })
+  );
 
   const discarded = await popoverVisible(app, false);
 
@@ -931,7 +997,7 @@ const changedSameWindow = async (
     labels[1]?.includes("same window as view 1") === true,
     json(labels)
   );
-  await page.getByRole("button", { name: "Discard" }).click();
+  await clickDiscard(page);
   await popoverVisible(app, false);
 };
 
@@ -978,7 +1044,7 @@ const windowListFallback = async (
       badge === 1,
     json({ badge, source: view?.source, title: view?.title })
   );
-  await page.getByRole("button", { name: "Discard" }).click();
+  await clickDiscard(page);
   await popoverVisible(app, false);
 };
 
@@ -1030,10 +1096,21 @@ const failedWrite = async (
   app.process().kill("SIGKILL");
 };
 
+/** Also matches by text, because TextEdit renames an autosaved document after its first line. */
 const closeDocuments = (names: readonly string[] = createdDocs) => {
   for (const name of names) {
     osascript(
       `tell application "TextEdit" to close (every document whose name is "${name}") saving no`
+    );
+  }
+
+  for (const body of createdBodies) {
+    osascript(
+      'tell application "TextEdit"',
+      "repeat with i from (count of documents) to 1 by -1",
+      `if (text of document i as string) is "${body}" then close document i saving no`,
+      "end repeat",
+      "end tell"
     );
   }
 };
@@ -1218,6 +1295,7 @@ const run = async (userData: string) => {
   app = await launch(userData);
   page = await popoverPage(app);
   await reopenAndRead(app, [docA, docB], userData);
+  await realKeystroke(app, page, docC);
   await escapeAndRestore(app, page, docC);
   await discardDraft(app, page);
   await windowListFallback(app, page, docC);
