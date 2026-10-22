@@ -10,7 +10,7 @@ This is a research prototype. See `IMPLEMENTATION_REPORT.md` for what has been v
 - Press it in a window. The popover opens beside that window with a chip for the view and the question "What connects these views?".
 - Click back into your work to hide the popover. The draft stays. Switch to another window and press the shortcut again to add it. The dashed row under the chips marks where the next view lands.
 - Click a chip's thumbnail to see the whole capture, or × to remove that view.
-- Save with `⌘↵` (`Ctrl+Enter` on Windows) or the Save button. The menu bar shows "Saved" for a moment, because saving opens no window. Escape or clicking outside hides the popover without saving. Discard asks once, then clears the draft.
+- Save with `⌘↵` (`Ctrl+Enter` on Windows) or the Save button. Saving opens no window. The menu bar item shows "Saved" for a moment, if the menu bar has room to show it. Escape or clicking outside hides the popover without saving. Discard asks once, then clears the draft.
 - Recent Captures groups captures by day and searches their text and window titles. A record can copy its note, and copy or drag each image into another app. In the full-size view, the arrow keys step between sources.
 - The menu bar icon has Show Draft, Add View from Window List (a labelled fallback), Recent Captures, and Quit. If your menu bar collapses status items, the icon sits behind that control.
 
