@@ -37,21 +37,22 @@ Add View from Window List in the menu, and any failed direct capture, open a cho
 ## Blockers
 
 - The packaged app's first run needs a manual Screen Recording grant. Launched through LaunchServices with `open`, the packaged app reports Screen Recording as `denied`. The get-windows helper then exits with an error. The app treats this as missing permission and shows the guidance. Capture after a grant and relaunch has not been verified.
+- A grant does not survive a rebuild. The user granted Screen Recording to the packaged build. `pnpm verify:packaged` then rebuilt and re-signed the app ad hoc, and the new build again reported `denied` through LaunchServices. macOS ties the grant to the exact ad-hoc build, so every new build or update needs the entry removed and added again. The popover notice and the README now say so. `pnpm verify:packaged:current` reruns the packaged checks without rebuilding.
 - When Playwright launches the packaged app as a child of the terminal, it reports Screen Recording as `granted`. This is probably the terminal's grant. The packaged capture checks therefore prove the packaged capture path, not a user's first run.
 
 ## Untested or not observed
 
 - Windows: HWND mapping is covered by unit tests only. The native addon, tray icon, DPI geometry, focus return, and installer are untested.
 - The menu bar icon was not seen. The menu bar on the test machine hides status items behind a collapse control, and Electron reported the item at zero height. The tray menu entries were read through the seam.
-- A physical press of the shortcut was not exercised.
+- A physical press of the shortcut has not been observed. The harness now has one check that sends a real ⌥⌘W through System Events, which Accessibility now allows. It has not run to completion yet (see Harness results).
 - Shortcut conflict: macOS let two processes register Option+Command+W, and both reported success. The conflict message in the menu and popover was never triggered.
-- The quit dialog's buttons were not clicked on the desktop, because the harness has no Accessibility permission. The reducer tests cover Save, Discard, and Cancel.
-- Native drag of a saved image was not built. A receiving app could not be verified here.
+- The quit dialog's buttons were not clicked on the desktop. The reducer tests cover Save, Discard, and Cancel.
+- Copy image and native drag of a saved image are built. Neither has been checked against a receiving app.
+- Quit and reopen, from the permission notice, has not been exercised.
 - Several displays: only one display was available. Clamping on a display with a negative origin is covered by unit tests only.
 - Browser tabs: the same-window repeat was tested by resizing a TextEdit window, not by switching browser tabs.
 - A source that vanishes during capture is covered by reducer tests only.
 - The `not-determined` Screen Recording state was not observed. The packaged app was already `denied`.
-- The app is re-signed ad hoc on every build. Whether a Screen Recording grant survives a rebuild was not measured.
 - Legibility was checked by eye for one packaged capture of a TextEdit window at 1206 by 1010 pixels. Its 12 point text was readable. The harness checks only pixel sizes.
 
 ## Observed focus behaviour
@@ -71,7 +72,7 @@ On macOS the popover hides itself and then hides the app, so the previous app be
 
 ## Harness results
 
-`pnpm verify:desktop` ran 54 checks. `pnpm verify:packaged` ran the same 54 and one more, which launches the app through LaunchServices.
+These numbers come from the build before the UX changes below. `pnpm verify:desktop` ran 54 checks. `pnpm verify:packaged` ran the same 54 and one more, which launches the app through LaunchServices.
 
 | Run               | Pass | Fail | Blocked |
 | ----------------- | ---- | ---- | ------- |
@@ -148,6 +149,8 @@ Each value comes from one run. The probe and source times come from the app's ow
 
 The harness polls the draft every 100 ms over the inspector, so press-to-view can overstate the real time by up to about 100 ms. Most of the capture time is spent in `getSources`, which renders a thumbnail of every open window at the requested size. It will grow with the number of open windows. One earlier packaged run measured 3005 ms for the first `getSources` call. That was not reproduced and is not explained.
 
+After the UX changes, the harness has 56 checks. Two development runs have not finished. The first passed its first 43 checks, then crashed on a bug in the harness's own Discard helper, which is fixed. In the second, a stack of macOS screen-access prompts for the host terminal held the foreground, so the first press sampled a `UserNotificationCenter` window and the run stopped. Those prompts need the user's answer. `pnpm check` passes, with 62 unit tests.
+
 The desktop harness is sensitive to other activity on the machine. Other programs were using the desktop during this work. In two discarded runs, another app took focus or typed into the harness's document. The reported numbers come from runs without that interference.
 
 ## Continuous integration
@@ -159,6 +162,19 @@ The desktop harness is sensitive to other activity on the machine. Other program
 ## Fixes found in review
 
 - Focus after reopening. The first harness checked focus only after the first press. After the second press and after Show Draft, Chromium put focus on the first chip's preview button, so typed text went nowhere. Main now asks the popover to focus the relationship field every time it shows. Two harness checks cover this.
+
+## UX iteration
+
+The second round followed the app-screen rules of the taste skill. That meant quiet borders, colour only on the primary action, sentence case, and the brief's fixed wording kept.
+
+- Popover: each chip shows a thumbnail. A dashed row under the chips marks where the next view lands and carries the brief's hint and the shortcut. Save says why it is disabled. Discard asks once when the draft holds views or text. Escape and clicking outside still only hide.
+- Permission: the notice gives the steps. When macOS still refuses after the user has allowed the app, it explains the rebuilt-app case and offers Quit and reopen. That goes through the unsaved-draft check.
+- Save: the menu bar shows "Saved" for 2.5 seconds on macOS, and Windows shows a tray balloon. Saving still opens no window.
+- Recent captures: rows carry thumbnails of the first two views, are grouped by day, and can be searched by text and window title. The empty state teaches the three steps and shows the shortcut.
+- Record: the thought is the page heading, the next step sits in its own block, and Delete is no longer the loudest action. Each source has Copy image and can be dragged into another app.
+- Image viewer: shows "Source 1 of 2", and steps between sources with buttons and the arrow keys.
+
+The taste skill's lint finds 0 failures in the renderer. Its 3 warnings are in generated shadcn components. Its browser inspector was not run, because the screens need the Electron preload bridge. The screens were checked from Electron screenshots in light and dark mode instead.
 
 ## Design notes
 
