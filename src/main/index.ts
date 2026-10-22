@@ -20,7 +20,7 @@ import { LibraryWindow } from "./windows/library-window";
 import { PopoverWindow } from "./windows/popover-window";
 import { rendererPage } from "./windows/renderer-page";
 import { registerCaptureShortcut } from "./windows/shortcut";
-import { createTray } from "./windows/tray";
+import { confirmSaved, createTray } from "./windows/tray";
 
 const e2e = process.env["INSET_E2E"] === "1";
 const e2eUserData = e2e ? process.env["INSET_E2E_USER_DATA"] : undefined;
@@ -88,6 +88,7 @@ const start = async () => {
   );
   registerLibraryChannels(
     store,
+    (file, icon) => library.window()?.webContents.startDrag({ file, icon }),
     trustedSender(() => library.window()?.webContents ?? null, library.page)
   );
   await popover.load();
@@ -109,6 +110,8 @@ const start = async () => {
   const shortcut = registerCaptureShortcut(actions.pressShortcut);
 
   const { menu, tray } = createTray(actions, shortcut);
+
+  session.onSaved(() => confirmSaved(tray));
 
   app.on("second-instance", actions.showDraft);
   app.on("before-quit", (event) => session.interceptQuit(event));

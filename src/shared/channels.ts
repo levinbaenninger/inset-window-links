@@ -12,6 +12,7 @@ export const popoverChannels = {
   getDraft: "invoke",
   openScreenSettings: "invoke",
   recheckPermission: "invoke",
+  relaunch: "invoke",
   removeView: "invoke",
   reportHeight: "send",
   save: "invoke",
@@ -19,10 +20,13 @@ export const popoverChannels = {
 } as const satisfies { [K in keyof PopoverApi]: ChannelKind };
 
 export const libraryChannels = {
+  copyImage: "invoke",
   copyNote: "invoke",
+  dragImage: "send",
   get: "invoke",
   list: "invoke",
   remove: "invoke",
+  shortcut: "invoke",
   updateText: "invoke",
 } as const satisfies { [K in keyof LibraryApi]: ChannelKind };
 
