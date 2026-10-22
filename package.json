@@ -22,7 +22,8 @@
     "package:win": "pnpm build && electron-builder --win",
     "package:dir": "pnpm build && electron-builder --dir",
     "verify:desktop": "pnpm build && node scripts/verify-desktop.ts",
-    "verify:packaged": "pnpm package:dir && node scripts/verify-desktop.ts --packaged"
+    "verify:packaged": "pnpm package:dir && node scripts/verify-desktop.ts --packaged",
+    "verify:packaged:current": "node scripts/verify-desktop.ts --packaged"
   },
   "dependencies": {
     "get-windows": "9.3.0",
