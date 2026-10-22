@@ -68,13 +68,22 @@ export interface DraftSnapshot {
   platform: CapturePlatform;
 }
 
+export interface ListedView {
+  id: ViewId;
+  title: string | null;
+  imageUrl: string;
+  width: number;
+  height: number;
+}
+
 export type CaptureListItem =
   | {
       kind: "current";
       id: CaptureId;
       createdAt: string;
       relationship: string;
-      sourceTitles: readonly (string | null)[];
+      nextStep: string;
+      views: readonly ListedView[];
     }
   | { kind: "unsupported"; id: string; version: number }
   | { kind: "unreadable"; id: string };

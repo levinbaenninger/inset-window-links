@@ -12,22 +12,41 @@ const recheck = async () => {
   await popoverApi().recheckPermission();
 };
 
+const relaunch = async () => {
+  await popoverApi().relaunch();
+};
+
+/** macOS keys the grant to this exact build, so a rebuilt or updated copy can show On and still be refused. */
 const PermissionNotice = ({ stillDenied }: { stillDenied: boolean }) => (
   <Alert data-testid="permission-notice">
-    <AlertTitle>Screen Recording is off for Inset Window Links</AlertTitle>
+    <AlertTitle>Allow Screen Recording to capture windows</AlertTitle>
     <AlertDescription>
-      Allow it in System Settings to capture windows.
-      {stillDenied
-        ? " It is still off. After you allow it, macOS may ask you to quit and reopen the app."
-        : ""}
+      {stillDenied ? (
+        <p>
+          macOS still blocks capture. If Inset Window Links is already switched
+          on, this copy of the app is new to macOS: select it, remove it with −,
+          add it again, then quit and reopen.
+        </p>
+      ) : (
+        <p>
+          Turn on Inset Window Links under Privacy &amp; Security, Screen
+          Recording. macOS then asks you to quit and reopen the app.
+        </p>
+      )}
     </AlertDescription>
-    <div className="col-span-full mt-2 flex gap-1.5">
+    <div className="col-span-full mt-2 flex flex-wrap gap-1.5">
       <Button onClick={openSettings} size="sm" variant="outline">
         Open Screen Recording settings
       </Button>
-      <Button onClick={recheck} size="sm" variant="ghost">
-        Retry
-      </Button>
+      {stillDenied ? (
+        <Button onClick={relaunch} size="sm" variant="ghost">
+          Quit and reopen
+        </Button>
+      ) : (
+        <Button onClick={recheck} size="sm" variant="ghost">
+          Check again
+        </Button>
+      )}
     </div>
   </Alert>
 );

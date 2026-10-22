@@ -41,8 +41,10 @@ export class SessionController {
   readonly #capturer: WindowCapturer;
   readonly #store: CaptureStore;
   readonly #popover: PopoverWindow;
+  readonly #savedListeners = new Set<() => void>();
   #state: SessionState = initialSession(newDraftId());
   #exiting = false;
+  #relaunch = false;
 
   constructor(
     capturer: WindowCapturer,
@@ -84,6 +86,16 @@ export class SessionController {
     }
 
     event.preventDefault();
+    this.dispatch({ type: "quitRequested" });
+  }
+
+  onSaved(listener: () => void): void {
+    this.#savedListeners.add(listener);
+  }
+
+  /** macOS applies a new Screen Recording grant only to a fresh process. */
+  requestRelaunch(): void {
+    this.#relaunch = true;
     this.dispatch({ type: "quitRequested" });
   }
 
@@ -166,6 +178,11 @@ export class SessionController {
 
       case "exitApp": {
         this.#exiting = true;
+
+        if (this.#relaunch) {
+          app.relaunch();
+        }
+
         setImmediate(() => app.quit());
         break;
       }
@@ -203,6 +220,12 @@ export class SessionController {
   async #publish(draft: Draft) {
     const result = await this.#store.publish(toNewCapture(draft, new Date()));
 
+    if (result.kind === "published") {
+      for (const listener of this.#savedListeners) {
+        listener();
+      }
+    }
+
     this.dispatch({ draftId: draft.id, result, type: "saveFinished" });
   }
 
@@ -219,9 +242,12 @@ export class SessionController {
       })
     );
 
-    this.dispatch({
-      choice: QUIT_CHOICES[response] ?? "cancel",
-      type: "quitChosen",
-    });
+    const choice = QUIT_CHOICES[response] ?? "cancel";
+
+    if (choice === "cancel") {
+      this.#relaunch = false;
+    }
+
+    this.dispatch({ choice, type: "quitChosen" });
   }
 }

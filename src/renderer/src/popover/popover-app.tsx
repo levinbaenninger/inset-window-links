@@ -9,14 +9,13 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Kbd } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { popoverApi } from "@/lib/bridge";
 
 import type { DraftSnapshot } from "../../../shared/dto";
 import type { DraftText } from "../../../shared/text";
-import { saveability } from "../../../shared/text";
+import { isBlank, saveability } from "../../../shared/text";
 import { NoticeBanner } from "./notice-banner";
 import { SourceChips } from "./source-chips";
 import { SourceChooser } from "./source-chooser";
@@ -25,6 +24,11 @@ import { useDraft } from "./use-draft";
 const discard = async () => {
   await popoverApi().discard();
 };
+
+const blockedReasons = {
+  needsRelationship: "Write the connection to save.",
+  needsView: "Add a view to save.",
+} as const;
 
 const cancelChoice = async () => {
   await popoverApi().cancelChoice();
@@ -42,13 +46,25 @@ const DraftForm = ({
 }) => {
   const relationship = useRef<HTMLTextAreaElement>(null);
   const [nextStepOpen, setNextStepOpen] = useState(text.nextStep !== "");
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const viewCount = snapshot.views.length;
   const activity = snapshot.activity.kind;
   const mac = snapshot.platform === "macos";
+  const check = saveability(viewCount, text);
+
+  const hasContent =
+    viewCount > 0 || !isBlank(text.relationship) || !isBlank(text.nextStep);
 
   const canSave =
-    (activity === "idle" || activity === "saveFailed") &&
-    saveability(viewCount, text).kind === "ok";
+    (activity === "idle" || activity === "saveFailed") && check.kind === "ok";
+
+  const requestDiscard = async () => {
+    if (hasContent) {
+      setConfirmingDiscard(true);
+    } else {
+      await discard();
+    }
+  };
 
   const save = async () => {
     if (canSave) {
@@ -57,7 +73,11 @@ const DraftForm = ({
   };
 
   useEffect(
-    () => popoverApi().onShown(() => relationship.current?.focus()),
+    () =>
+      popoverApi().onShown(() => {
+        setConfirmingDiscard(false);
+        relationship.current?.focus();
+      }),
     []
   );
 
@@ -100,14 +120,16 @@ const DraftForm = ({
         onRemove={async (view) => {
           await popoverApi().removeView(view.id);
         }}
+        shortcut={snapshot.shortcut}
         views={snapshot.views}
       />
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="relationship">What connects these views?</Label>
         <Textarea
           autoFocus
-          className="max-h-48 min-h-16 resize-none"
+          className="max-h-48 min-h-20 resize-none"
           id="relationship"
+          placeholder="e.g. The budget cap rules out this quote."
           onChange={(event) =>
             setText({ ...text, relationship: event.target.value })
           }
@@ -137,17 +159,6 @@ const DraftForm = ({
           </div>
         </CollapsibleContent>
       </Collapsible>
-      <p className="text-muted-foreground text-xs" data-testid="hint">
-        Switch windows and press the shortcut to add a view.{" "}
-        {snapshot.shortcut.kind === "registered" ? (
-          <Kbd>{snapshot.shortcut.label}</Kbd>
-        ) : (
-          <span>
-            The shortcut is taken by another app. Use Add View from Window List
-            in the menu bar.
-          </span>
-        )}
-      </p>
       {snapshot.activity.kind === "saveFailed" && (
         <Alert data-testid="save-failed" variant="destructive">
           <AlertTitle>The capture was not saved</AlertTitle>
@@ -161,15 +172,50 @@ const DraftForm = ({
           </div>
         </Alert>
       )}
-      <footer className="flex items-center justify-between gap-2">
-        <Button onClick={discard} size="sm" variant="ghost">
-          Discard
-        </Button>
-        <Button disabled={!canSave} onClick={save} size="sm">
-          {activity === "saving" ? "Saving…" : "Save"}
-          <span className="opacity-70">{mac ? "⌘↵" : "Ctrl+Enter"}</span>
-        </Button>
-      </footer>
+      {confirmingDiscard ? (
+        <footer
+          className="bg-destructive/10 flex items-center justify-between gap-2 rounded-lg py-1.5 pr-1.5 pl-3"
+          data-testid="discard-confirm"
+        >
+          <span className="text-xs">
+            Discard {viewCount} {viewCount === 1 ? "view" : "views"} and your
+            text?
+          </span>
+          <span className="flex gap-1.5">
+            <Button
+              autoFocus
+              onClick={() => setConfirmingDiscard(false)}
+              size="sm"
+              variant="ghost"
+            >
+              Keep
+            </Button>
+            <Button onClick={discard} size="sm" variant="destructive">
+              Discard draft
+            </Button>
+          </span>
+        </footer>
+      ) : (
+        <footer className="flex items-center justify-between gap-2">
+          <Button onClick={requestDiscard} size="sm" variant="ghost">
+            Discard
+          </Button>
+          <span className="flex items-center gap-2.5">
+            {check.kind === "blocked" && (
+              <span
+                className="text-muted-foreground text-xs whitespace-nowrap"
+                data-testid="save-blocked"
+              >
+                {blockedReasons[check.reason]}
+              </span>
+            )}
+            <Button disabled={!canSave} onClick={save} size="sm">
+              {activity === "saving" ? "Saving…" : "Save"}
+              <span className="opacity-70">{mac ? "⌘↵" : "Ctrl+Enter"}</span>
+            </Button>
+          </span>
+        </footer>
+      )}
     </>
   );
 };

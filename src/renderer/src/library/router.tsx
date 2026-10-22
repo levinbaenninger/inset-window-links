@@ -17,7 +17,14 @@ const rootRoute = createRootRoute({ component: Outlet });
 const recentRoute = createRoute({
   component: RecentList,
   getParentRoute: () => rootRoute,
-  loader: () => libraryApi().list(),
+  loader: async () => {
+    const [items, shortcut] = await Promise.all([
+      libraryApi().list(),
+      libraryApi().shortcut(),
+    ]);
+
+    return { items, shortcut };
+  },
   path: "/",
 });
 

@@ -3,6 +3,7 @@ import type {
   CaptureListItem,
   DraftSnapshot,
   MutationOutcome,
+  ShortcutStatus,
 } from "./dto";
 import type { CandidateId, CaptureId, ViewId } from "./ids";
 import type { DraftText } from "./text";
@@ -20,6 +21,8 @@ export interface PopoverApi {
   reportHeight: (height: number) => void;
   openScreenSettings: () => Promise<void>;
   recheckPermission: () => Promise<void>;
+  /** Quits through the usual unsaved-draft check, then starts again so macOS applies a new grant. */
+  relaunch: () => Promise<void>;
 }
 
 export interface LibraryApi {
@@ -31,6 +34,10 @@ export interface LibraryApi {
   ) => Promise<MutationOutcome>;
   remove: (captureId: CaptureId) => Promise<MutationOutcome>;
   copyNote: (captureId: CaptureId) => Promise<void>;
+  shortcut: () => Promise<ShortcutStatus>;
+  copyImage: (captureId: CaptureId, viewId: ViewId) => Promise<void>;
+  /** Starts a native file drag of the saved PNG, for dropping into another app. */
+  dragImage: (captureId: CaptureId, viewId: ViewId) => void;
 }
 
 export type PopoverBridge = PopoverApi & {

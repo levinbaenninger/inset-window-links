@@ -107,3 +107,22 @@ export const createTray = (
 
   return { menu, tray };
 };
+
+const SAVED_FOR_MS = 2500;
+
+/** Save hides the panel and opens nothing, so the tray carries the confirmation. */
+export const confirmSaved = (tray: Tray): void => {
+  if (process.platform === "darwin") {
+    tray.setTitle(" Saved");
+    setTimeout(() => tray.setTitle(""), SAVED_FOR_MS);
+
+    return;
+  }
+
+  tray.displayBalloon({
+    content: "Open Recent Captures from the tray to see it.",
+    iconType: "none",
+    noSound: true,
+    title: "Capture saved",
+  });
+};

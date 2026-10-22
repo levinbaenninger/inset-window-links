@@ -1,5 +1,7 @@
+import { readFile } from "node:fs/promises";
+
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
-import { app, clipboard, ipcMain } from "electron";
+import { app, clipboard, ClipboardItem, ipcMain, nativeImage } from "electron";
 import { z } from "zod";
 
 import type {
@@ -21,6 +23,7 @@ import { summarizeViews } from "../session/snapshot";
 import { formatNote } from "../store/note";
 import type { CaptureStore, StoreEntry } from "../store/store";
 import type { RendererPage } from "../windows/renderer-page";
+import { shortcutStatus } from "../windows/shortcut";
 import { imageUrl } from "./image-url";
 
 type TrustCheck = (event: IpcMainEvent | IpcMainInvokeEvent) => boolean;
@@ -121,6 +124,7 @@ export const registerPopoverChannels = (
     getDraft: invoke(z.tuple([]), () => session.snapshot()),
     openScreenSettings: invoke(z.tuple([]), () => openScreenSettings()),
     recheckPermission: invoke(z.tuple([]), () => session.recheckPermission()),
+    relaunch: invoke(z.tuple([]), () => session.requestRelaunch()),
     removeView: invoke(z.tuple([ViewIdSchema]), (viewId) =>
       session.dispatch({ type: "viewRemoved", viewId })
     ),
@@ -147,8 +151,19 @@ const listItem = (entry: StoreEntry): CaptureListItem => {
     createdAt: record.createdAt,
     id: record.id,
     kind: "current",
+    nextStep: record.nextStep,
     relationship: record.relationship,
-    sourceTitles: record.views.map((view) => view.title),
+    views: record.views.map((view) => ({
+      height: view.height,
+      id: view.id,
+      imageUrl: imageUrl({
+        captureId: record.id,
+        kind: "saved",
+        viewId: view.id,
+      }),
+      title: view.title,
+      width: view.width,
+    })),
   };
 };
 
@@ -177,9 +192,22 @@ const EditedTextSchema = DraftTextSchema.extend({
 
 export const registerLibraryChannels = (
   store: CaptureStore,
+  startDrag: (file: string, icon: Electron.NativeImage) => void,
   trusted: TrustCheck
 ): void => {
   const table: Table<typeof libraryChannels> = {
+    copyImage: invoke(
+      z.tuple([DraftIdSchema, ViewIdSchema]),
+      async (captureId, viewId) => {
+        const file = store.imagePath(captureId, viewId);
+
+        if (file !== null) {
+          const png = new Blob([await readFile(file)], { type: "image/png" });
+
+          await clipboard.write([new ClipboardItem({ "image/png": png })]);
+        }
+      }
+    ),
     copyNote: invoke(z.tuple([DraftIdSchema]), (captureId) => {
       const entry = store.get(captureId);
 
@@ -193,6 +221,19 @@ export const registerLibraryChannels = (
         );
       }
     }),
+    dragImage: send(
+      z.tuple([DraftIdSchema, ViewIdSchema]),
+      (captureId, viewId) => {
+        const file = store.imagePath(captureId, viewId);
+
+        if (file !== null) {
+          startDrag(
+            file,
+            nativeImage.createFromPath(file).resize({ width: 96 })
+          );
+        }
+      }
+    ),
     get: invoke(z.tuple([z.string().max(64)]), (captureId) =>
       detail(store.get(captureId))
     ),
@@ -200,6 +241,7 @@ export const registerLibraryChannels = (
     remove: invoke(z.tuple([DraftIdSchema]), (captureId) =>
       store.remove(captureId)
     ),
+    shortcut: invoke(z.tuple([]), () => shortcutStatus()),
     updateText: invoke(
       z.tuple([DraftIdSchema, EditedTextSchema]),
       (captureId, text) => store.updateText(captureId, text, new Date())
