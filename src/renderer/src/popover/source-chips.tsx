@@ -1,6 +1,6 @@
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,11 @@ import { Kbd } from "@/components/ui/kbd";
 import { formatTime, viewTitle } from "@/lib/format";
 
 import type { ShortcutStatus, ViewSummary } from "../../../shared/dto";
+
+export interface PendingView {
+  title: string | null;
+  appName: string | null;
+}
 
 const SourceChip = ({
   view,
@@ -85,6 +90,23 @@ const SourceChip = ({
   );
 };
 
+/** The window being captured, shown before its image exists so the press is answered at once. */
+const PendingChip = ({ pending }: { pending: PendingView }) => (
+  <li
+    aria-busy
+    className="bg-card flex items-center gap-2.5 rounded-lg border p-1.5"
+    data-testid="pending-chip"
+  >
+    <span className="bg-muted h-9 w-14 shrink-0 animate-pulse rounded-sm border" />
+    <span className="flex min-w-0 flex-col">
+      <span className="truncate font-medium">{viewTitle(pending.title)}</span>
+      <span className="text-muted-foreground truncate text-xs">
+        Capturing this window…
+      </span>
+    </span>
+  </li>
+);
+
 /** Stands in the list where the next view will land, so collecting more than one window is visible. */
 const NextViewSlot = ({ shortcut }: { shortcut: ShortcutStatus }) => (
   <li
@@ -107,24 +129,45 @@ const NextViewSlot = ({ shortcut }: { shortcut: ShortcutStatus }) => (
   </li>
 );
 
+/** Scrolls inside itself past a few views, keeping the newest in sight, so the text field never moves off the panel. */
 export const SourceChips = ({
   views,
+  pending,
   shortcut,
   onRemove,
 }: {
   views: readonly ViewSummary[];
+  pending: PendingView | null;
   shortcut: ShortcutStatus;
   onRemove: (view: ViewSummary) => void;
-}) => (
-  <ul aria-label="Views in this capture" className="flex flex-col gap-1.5">
-    {views.map((view, index) => (
-      <SourceChip
-        index={index}
-        key={view.id}
-        onRemove={() => onRemove(view)}
-        view={view}
-      />
-    ))}
-    <NextViewSlot shortcut={shortcut} />
-  </ul>
-);
+}) => {
+  const list = useRef<HTMLUListElement>(null);
+  const count = views.length + (pending === null ? 0 : 1);
+
+  useEffect(() => {
+    const last = list.current?.lastElementChild;
+
+    if (count > 0 && last instanceof HTMLElement) {
+      last.scrollIntoView({ block: "nearest" });
+    }
+  }, [count]);
+
+  return (
+    <ul
+      aria-label="Views in this capture"
+      className="-mx-1 flex max-h-72 flex-col gap-1.5 overflow-y-auto px-1"
+      ref={list}
+    >
+      {views.map((view, index) => (
+        <SourceChip
+          index={index}
+          key={view.id}
+          onRemove={() => onRemove(view)}
+          view={view}
+        />
+      ))}
+      {pending === null ? null : <PendingChip pending={pending} />}
+      <NextViewSlot shortcut={shortcut} />
+    </ul>
+  );
+};

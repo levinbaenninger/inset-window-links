@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow } from "electron";
 
 import type { DraftSnapshot } from "../../shared/dto";
+import type { CaptureId } from "../../shared/ids";
 import { newDraftId } from "../../shared/ids";
 import type { WindowCapturer } from "../capture/capturer";
 import { capturePlatform, screenAccess } from "../capture/capturer";
@@ -9,18 +10,17 @@ import type { CaptureStore, NewCapture } from "../store/store";
 import type { PopoverWindow } from "../windows/popover-window";
 import { shortcutStatus } from "../windows/shortcut";
 import type { IdSource } from "./reduce";
-import { initialSession, reduce } from "./reduce";
+import { initialSession, isMeaningful, reduce } from "./reduce";
 import { toSavedView, toSnapshot } from "./snapshot";
 import type {
   CaptureOutcome,
   Draft,
+  PendingSource,
   QuitChoice,
   SessionEffect,
   SessionEvent,
   SessionState,
 } from "./state";
-
-const QUIT_CHOICES: readonly QuitChoice[] = ["save", "discard", "cancel"];
 
 const ids: IdSource = { draftId: newDraftId, token: () => crypto.randomUUID() };
 
@@ -41,7 +41,7 @@ export class SessionController {
   readonly #capturer: WindowCapturer;
   readonly #store: CaptureStore;
   readonly #popover: PopoverWindow;
-  readonly #savedListeners = new Set<() => void>();
+  readonly #savedListeners = new Set<(captureId: CaptureId) => void>();
   #state: SessionState = initialSession(newDraftId());
   #exiting = false;
   #relaunch = false;
@@ -54,6 +54,13 @@ export class SessionController {
     this.#capturer = capturer;
     this.#store = store;
     this.#popover = popover;
+
+    // Any way the quit prompt goes away other than its buttons counts as Cancel, so quitting never sticks.
+    popover.onHidden(() => {
+      if (this.#state.activity.kind === "confirmingQuit") {
+        this.chooseQuit("cancel");
+      }
+    });
   }
 
   /** The shortcut callback. Focus is sampled synchronously, before any probe or window change. */
@@ -89,8 +96,21 @@ export class SessionController {
     this.dispatch({ type: "quitRequested" });
   }
 
-  onSaved(listener: () => void): void {
+  onSaved(listener: (captureId: CaptureId) => void): void {
     this.#savedListeners.add(listener);
+  }
+
+  hasMeaningfulDraft(): boolean {
+    return isMeaningful(this.#state.draft);
+  }
+
+  /** The answer to the quit prompt in the popover. */
+  chooseQuit(choice: QuitChoice): void {
+    if (choice === "cancel") {
+      this.#relaunch = false;
+    }
+
+    this.dispatch({ choice, type: "quitChosen" });
   }
 
   /** macOS applies a new Screen Recording grant only to a fresh process. */
@@ -133,8 +153,23 @@ export class SessionController {
   #run(effect: SessionEffect): void {
     switch (effect.type) {
       case "captureForeground": {
+        // Listing sources takes over a second on Windows, so the popover previews the window meanwhile.
+        const preview =
+          capturePlatform === "windows"
+            ? (source: PendingSource, near: Electron.Rectangle) => {
+                this.dispatch({
+                  near,
+                  source,
+                  token: effect.token,
+                  type: "captureIdentified",
+                });
+
+                return this.#popover.painted();
+              }
+            : undefined;
+
         void this.#capture(effect.token, () =>
-          this.#capturer.captureForeground()
+          this.#capturer.captureForeground(preview)
         );
         break;
       }
@@ -156,6 +191,11 @@ export class SessionController {
         break;
       }
 
+      case "previewPopover": {
+        this.#popover.preview(effect.anchor);
+        break;
+      }
+
       case "togglePopover": {
         this.#popover.toggle();
         break;
@@ -172,7 +212,7 @@ export class SessionController {
       }
 
       case "askQuit": {
-        void this.#askQuit();
+        this.#popover.showAt({ kind: "keep" });
         break;
       }
 
@@ -222,32 +262,10 @@ export class SessionController {
 
     if (result.kind === "published") {
       for (const listener of this.#savedListeners) {
-        listener();
+        listener(draft.id);
       }
     }
 
     this.dispatch({ draftId: draft.id, result, type: "saveFinished" });
-  }
-
-  async #askQuit() {
-    const { response } = await this.#popover.withDialog(() =>
-      dialog.showMessageBox({
-        buttons: ["Save", "Discard", "Cancel"],
-        cancelId: 2,
-        defaultId: 0,
-        detail: "Your unsaved views and text will be lost if you discard them.",
-        message: "Save this capture before quitting?",
-        noLink: true,
-        type: "question",
-      })
-    );
-
-    const choice = QUIT_CHOICES[response] ?? "cancel";
-
-    if (choice === "cancel") {
-      this.#relaunch = false;
-    }
-
-    this.dispatch({ choice, type: "quitChosen" });
   }
 }

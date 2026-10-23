@@ -6,6 +6,15 @@ const size = { height: 300, width: 380 };
 const primary = { height: 1080, width: 1920, x: 0, y: 25 };
 
 describe(placePopover, () => {
+  it("sits above the Windows tray when there is no source", () => {
+    expect(placePopover(null, size, primary, "bottom-right")).toStrictEqual({
+      height: 300,
+      width: 380,
+      x: 1528,
+      y: 793,
+    });
+  });
+
   it("sits right of a source that leaves room", () => {
     expect(
       placePopover({ height: 500, width: 600, x: 100, y: 200 }, size, primary)

@@ -43,11 +43,22 @@ export interface Draft {
 
 export type CaptureToken = string;
 
+/** What the probe found, shown while the slower capture of that window runs. */
+export interface PendingSource {
+  title: string | null;
+  appName: string | null;
+}
+
 type Resumable = { kind: "idle" } | { kind: "saveFailed"; message: string };
 
 export type Activity =
   | Resumable
-  | { kind: "capturing"; token: CaptureToken; via: "direct" | "chosen" }
+  | {
+      kind: "capturing";
+      token: CaptureToken;
+      via: "direct" | "chosen";
+      pending: PendingSource | null;
+    }
   | {
       kind: "choosing";
       token: CaptureToken;
@@ -67,6 +78,12 @@ export type QuitChoice = "save" | "discard" | "cancel";
 
 export type SessionEvent =
   | { type: "shortcutPressed"; insetFocused: boolean }
+  | {
+      type: "captureIdentified";
+      token: CaptureToken;
+      source: PendingSource;
+      near: Bounds;
+    }
   | { type: "captureFinished"; token: CaptureToken; outcome: CaptureOutcome }
   | {
       type: "candidatesReady";
@@ -101,6 +118,8 @@ export type SessionEffect =
       reason: FallbackReason;
     }
   | { type: "showPopover"; anchor: PopoverAnchor }
+  /** Shows the popover without taking focus, so the window being captured stays as it is. */
+  | { type: "previewPopover"; anchor: PopoverAnchor }
   | { type: "togglePopover" }
   | { type: "hidePopover" }
   | { type: "publish"; draft: Draft }

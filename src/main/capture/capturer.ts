@@ -14,6 +14,7 @@ import type {
   CapturedView,
   CaptureOutcome,
   FallbackCandidate,
+  PendingSource,
 } from "../session/state";
 import type { Acquisition } from "../store/schema";
 import type { Size } from "../windows/placement";
@@ -40,6 +41,8 @@ export interface ProbeDiagnostics {
   windowSources: number;
   matchedSourceId: string | null;
   probeMs: number;
+  /** From the start of the probe to the window being identified, before sources are listed. */
+  identifiedMs: number;
   sourcesMs: number;
 }
 
@@ -183,8 +186,14 @@ export class WindowCapturer {
     );
   }
 
-  /** Samples the foreground window before anything is shown, then captures exactly that window. */
-  async captureForeground(): Promise<CaptureOutcome> {
+  /**
+   * Samples the foreground window before anything is shown, then captures exactly that window.
+   * onIdentified runs between the two, once the window is known and before the slow source listing.
+   * Listing blocks the main process, so whatever onIdentified shows must have painted when it resolves.
+   */
+  async captureForeground(
+    onIdentified?: (source: PendingSource, near: Rectangle) => Promise<void>
+  ): Promise<CaptureOutcome> {
     const sampledAt = new Date();
     const access = screenAccess();
     const started = performance.now();
@@ -197,6 +206,7 @@ export class WindowCapturer {
       });
     } catch (error) {
       this.#diagnostics = {
+        identifiedMs: 0,
         matchedSourceId: null,
         probe: `threw: ${String(error)}`,
         probeMs: performance.now() - started,
@@ -211,6 +221,7 @@ export class WindowCapturer {
     }
 
     const probeMs = performance.now() - started;
+    let identifiedMs = 0;
 
     const record = (
       probe: string,
@@ -219,6 +230,7 @@ export class WindowCapturer {
       sourcesMs: number
     ) => {
       this.#diagnostics = {
+        identifiedMs,
         matchedSourceId,
         probe,
         probeMs,
@@ -260,6 +272,15 @@ export class WindowCapturer {
 
       return { kind: "permissionDenied" };
     }
+
+    identifiedMs = performance.now() - started;
+    await onIdentified?.(
+      {
+        appName: nonEmpty(probed.owner.name),
+        title: nonEmpty(probed.title),
+      },
+      dip
+    );
 
     const listed = performance.now();
     let sources: DesktopCapturerSource[];

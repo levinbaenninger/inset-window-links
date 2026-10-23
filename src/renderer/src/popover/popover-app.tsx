@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { popoverApi } from "@/lib/bridge";
 
 import type { DraftSnapshot } from "../../../shared/dto";
-import type { DraftText } from "../../../shared/text";
+import type { DraftText, Saveability } from "../../../shared/text";
 import { isBlank, saveability } from "../../../shared/text";
 import { NoticeBanner } from "./notice-banner";
 import { SourceChips } from "./source-chips";
@@ -45,6 +45,47 @@ const cancelChoice = async () => {
   await popoverApi().cancelChoice();
 };
 
+const chooseQuit = async (choice: "save" | "discard" | "cancel") => {
+  await popoverApi().chooseQuit(choice);
+};
+
+/** Shown when Quit meets an unsaved draft. Escape or clicking away cancels, like the Cancel button. */
+const QuitPrompt = ({ check }: { check: Saveability }) => (
+  <section
+    aria-label="Quit Inset Window Links"
+    className="bg-muted flex flex-col gap-2.5 rounded-lg p-3"
+    data-testid="quit-prompt"
+  >
+    <div className="flex flex-col gap-0.5">
+      <p className="font-medium">Save this capture before quitting?</p>
+      <p className="text-muted-foreground text-xs">
+        {check.kind === "ok"
+          ? "Discarding loses these views and your text."
+          : `${blockedReasons[check.reason]} Or discard it to quit now.`}
+      </p>
+    </div>
+    <div className="flex justify-end gap-1.5">
+      <Button onClick={() => chooseQuit("cancel")} size="sm" variant="ghost">
+        Cancel
+      </Button>
+      <Button
+        onClick={() => chooseQuit("discard")}
+        size="sm"
+        variant="destructive"
+      >
+        Discard and quit
+      </Button>
+      <Button
+        disabled={check.kind !== "ok"}
+        onClick={() => chooseQuit("save")}
+        size="sm"
+      >
+        Save and quit
+      </Button>
+    </div>
+  </section>
+);
+
 /** Keyed by draft id, so local UI state such as the open next-step field resets with each new draft. */
 const DraftForm = ({
   snapshot,
@@ -60,6 +101,11 @@ const DraftForm = ({
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const viewCount = snapshot.views.length;
   const activity = snapshot.activity.kind;
+  const quitting = activity === "confirmingQuit";
+
+  const pending =
+    snapshot.activity.kind === "capturing" ? snapshot.activity.pending : null;
+
   const mac = snapshot.platform === "macos";
   const check = saveability(viewCount, text);
 
@@ -99,11 +145,13 @@ const DraftForm = ({
         popoverApi().dismiss();
       }
 
-      if (
-        event.key === "Enter" &&
-        (mac ? event.metaKey : event.ctrlKey) &&
-        canSave
-      ) {
+      const saveKeys =
+        event.key === "Enter" && (mac ? event.metaKey : event.ctrlKey);
+
+      if (saveKeys && quitting && check.kind === "ok") {
+        event.preventDefault();
+        void chooseQuit("save");
+      } else if (saveKeys && canSave) {
         event.preventDefault();
         void popoverApi().save(text);
       }
@@ -112,12 +160,12 @@ const DraftForm = ({
     window.addEventListener("keydown", onKeyDown);
 
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mac, canSave, text]);
+  }, [mac, canSave, quitting, check.kind, text]);
 
-  return (
-    <>
-      {snapshot.notice !== null && <NoticeBanner notice={snapshot.notice} />}
-      {snapshot.activity.kind === "choosing" && (
+  if (snapshot.activity.kind === "choosing") {
+    return (
+      <>
+        {snapshot.notice !== null && <NoticeBanner notice={snapshot.notice} />}
         <SourceChooser
           candidates={snapshot.activity.candidates}
           onCancel={cancelChoice}
@@ -126,11 +174,18 @@ const DraftForm = ({
           }}
           reason={snapshot.activity.reason}
         />
-      )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      {snapshot.notice !== null && <NoticeBanner notice={snapshot.notice} />}
       <SourceChips
         onRemove={async (view) => {
           await popoverApi().removeView(view.id);
         }}
+        pending={pending}
         shortcut={snapshot.shortcut}
         views={snapshot.views}
       />
@@ -191,7 +246,8 @@ const DraftForm = ({
           </div>
         </Alert>
       )}
-      {confirmingDiscard ? (
+      {quitting && <QuitPrompt check={check} />}
+      {!quitting && confirmingDiscard && (
         <footer
           className="bg-destructive/10 flex items-center justify-between gap-2 rounded-lg py-1.5 pr-1.5 pl-3"
           data-testid="discard-confirm"
@@ -211,7 +267,8 @@ const DraftForm = ({
             </Button>
           </span>
         </footer>
-      ) : (
+      )}
+      {!quitting && !confirmingDiscard && (
         <footer className="flex items-center justify-between gap-2">
           <Button onClick={requestDiscard} size="sm" variant="ghost">
             Discard
