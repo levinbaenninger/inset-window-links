@@ -77,6 +77,10 @@ const activitySummary = (state: SessionState): ActivitySummary => {
       };
     }
 
+    case "capturing": {
+      return { kind: "capturing", pending: activity.pending };
+    }
+
     default: {
       return { kind: activity.kind };
     }

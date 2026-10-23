@@ -50,7 +50,12 @@ export type Notice =
   | { kind: "captureFailed"; detail: string };
 
 export type ActivitySummary =
-  | { kind: "idle" | "capturing" | "saving" | "confirmingQuit" }
+  | { kind: "idle" | "saving" | "confirmingQuit" }
+  | {
+      kind: "capturing";
+      /** The window being captured, once identified. Shown only where capture is slow (Windows). */
+      pending: { title: string | null; appName: string | null } | null;
+    }
   | { kind: "saveFailed"; message: string }
   | {
       kind: "choosing";

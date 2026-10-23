@@ -13,21 +13,29 @@ const GAP = 12;
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), Math.max(min, max));
 
+/** Where a popover with no source window goes: under the menu bar, or above the Windows tray. */
+export type Corner = "top-right" | "bottom-right";
+
 /**
  * Right of the source, else left of it, else inside its top-right corner. Top-aligned with
- * the source when there is one, top-right of the work area when there is not. Always clamped
- * to the work area, whose origin may be negative on secondary displays.
+ * the source when there is one, in the given corner of the work area when there is not. Always
+ * clamped to the work area, whose origin may be negative on secondary displays.
  */
 export const placePopover = (
   anchor: Bounds | null,
   size: Size,
-  workArea: Bounds
+  workArea: Bounds,
+  corner: Corner = "top-right"
 ): Bounds => {
   const maxX = workArea.x + workArea.width - size.width;
   const maxY = workArea.y + workArea.height - size.height;
 
   if (anchor === null) {
-    return { ...size, x: maxX - GAP, y: workArea.y + GAP };
+    return {
+      ...size,
+      x: maxX - GAP,
+      y: corner === "top-right" ? workArea.y + GAP : maxY - GAP,
+    };
   }
 
   const right = anchor.x + anchor.width + GAP;

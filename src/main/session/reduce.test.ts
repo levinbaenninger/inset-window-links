@@ -224,6 +224,63 @@ describe("session lifecycle", () => {
     expect(state.draft.views).toStrictEqual([]);
     expect(state.activity).toStrictEqual({
       kind: "capturing",
+      pending: null,
+      token: "t1",
+      via: "direct",
+    });
+  });
+
+  it("previews the popover beside an identified window without focusing it, then activates on capture", () => {
+    const source = ids();
+    const near = { height: 763, width: 1440, x: 184, y: 107 };
+
+    const identified = run(source, [
+      foreignPress,
+      {
+        near,
+        source: { appName: "Notepad.exe", title: "Budget notes.txt" },
+        token: "t1",
+        type: "captureIdentified",
+      },
+    ]);
+
+    expect(identified.state.activity).toStrictEqual({
+      kind: "capturing",
+      pending: { appName: "Notepad.exe", title: "Budget notes.txt" },
+      token: "t1",
+      via: "direct",
+    });
+    expect(identified.effects).toStrictEqual([
+      { anchor: { bounds: near, kind: "window" }, type: "previewPopover" },
+    ]);
+
+    const done = run(
+      source,
+      [captured("t1", view(1, "windows:69110"))],
+      identified.state
+    );
+
+    expect(done.state.activity).toStrictEqual({ kind: "idle" });
+    expect(done.effects.map((effect) => effect.type)).toStrictEqual([
+      "showPopover",
+    ]);
+  });
+
+  it("ignores an identification from a stale capture", () => {
+    const { state, effects } = run(ids(), [
+      foreignPress,
+      {
+        near: { height: 1, width: 1, x: 0, y: 0 },
+        source: { appName: null, title: null },
+        token: "t9",
+        type: "captureIdentified",
+      },
+    ]);
+
+    expect(effects).toStrictEqual([]);
+    expect(state.activity).toStrictEqual({
+      kind: "capturing",
+      pending: null,
       token: "t1",
       via: "direct",
     });

@@ -250,8 +250,32 @@ const onShortcut = (
   const token = ids.token();
 
   return [
-    { ...state, activity: { kind: "capturing", token, via: "direct" } },
+    {
+      ...state,
+      activity: { kind: "capturing", pending: null, token, via: "direct" },
+    },
     [{ token, type: "captureForeground" }],
+  ];
+};
+
+const onCaptureIdentified = (
+  state: SessionState,
+  event: EventOf<"captureIdentified">
+): Transition => {
+  const { activity } = state;
+
+  if (activity.kind !== "capturing" || activity.token !== event.token) {
+    return unchanged(state);
+  }
+
+  return [
+    { ...state, activity: { ...activity, pending: event.source } },
+    [
+      {
+        anchor: { bounds: event.near, kind: "window" },
+        type: "previewPopover",
+      },
+    ],
   ];
 };
 
@@ -320,7 +344,10 @@ const onSourceChosen = (
   const token = ids.token();
 
   return [
-    { ...state, activity: { kind: "capturing", token, via: "chosen" } },
+    {
+      ...state,
+      activity: { kind: "capturing", pending: null, token, via: "chosen" },
+    },
     [{ candidate, reason: activity.reason, token, type: "captureChosen" }],
   ];
 };
@@ -392,6 +419,10 @@ export const reduce = (
   switch (event.type) {
     case "shortcutPressed": {
       return onShortcut(state, event, ids);
+    }
+
+    case "captureIdentified": {
+      return onCaptureIdentified(state, event);
     }
 
     case "captureFinished": {
