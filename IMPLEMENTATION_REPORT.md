@@ -9,7 +9,7 @@ This report covers the Inset Window Links prototype. It separates what was verif
 - Packaged mode means `release/mac-arm64/Inset Window Links.app` from `pnpm package:dir`. It is ad-hoc signed and not notarized. `pnpm verify:packaged` drives it.
 - The Vite dev server path was exercised once by hand. The built main process loaded both pages from the renderer dev server. Capture, typing, the chip preview image, Discard, and the library list worked there. No console messages were captured, but the listener was attached only after the popover had loaded, and the library page had no listener.
 - Every shortcut press in the harness went through the `INSET_E2E` seam, which calls the same function the global shortcut calls. A physical press of the key combination was not exercised.
-- Windows was not tested. No Windows build was launched. Nothing in this report is a Windows result.
+- Windows 11 Enterprise 10.0.26100, x64, one 1920 by 1080 display at 100% scale, dark mode. Same Electron, get-windows and Node versions. See "Windows round" below. The macOS sections were not rerun after that round.
 
 ## Real capabilities on macOS
 
@@ -42,7 +42,7 @@ Add View from Window List in the menu, and any failed direct capture, open a cho
 
 ## Untested or not observed
 
-- Windows: HWND mapping is covered by unit tests only. The native addon, tray icon, DPI geometry, focus return, and installer are untested.
+- Windows: see "Windows round" for what was observed and what was not.
 - The menu bar icon was not seen. The menu bar on the test machine hides status items behind a collapse control, and Electron reported the item at zero height. The tray menu entries were read through the seam.
 - A physical press of the shortcut has not been observed. The harness now has one check that sends a real ⌥⌘W through System Events, which Accessibility now allows. It has not run to completion yet (see Harness results).
 - Shortcut conflict: macOS let two processes register Option+Command+W, and both reported success. The conflict message in the menu and popover was never triggered.
@@ -153,6 +153,94 @@ After the UX changes, the harness has 56 checks. Two development runs have not f
 
 The desktop harness is sensitive to other activity on the machine. Other programs were using the desktop during this work. In two discarded runs, another app took focus or typed into the harness's document. The reported numbers come from runs without that interference.
 
+## Windows round
+
+This round made the prototype usable by someone who has never seen it, on Windows first, and checked it there with real input.
+
+### What a first-time Windows user hit before
+
+Observed on the machine above, with the build from the previous commit:
+
+- Launching showed nothing. Windows 11 put the tray icon behind the ^ overflow next to the clock, and nothing said so.
+- After the shortcut, nothing visible happened for about 1.9 seconds. `desktopCapturer.getSources` took 1.0 to 1.7 seconds on every call, at 0 by 0 thumbnails as well as at window size, with three to six windows open. It blocks Electron's main process for that time.
+- Recent Captures had Electron's title bar, Electron's icon, and its default File, Edit, View and Window menu. There was no app icon anywhere, and the save notification was titled "Electron".
+- The quit question was a native message box.
+- With the window list open, or a chip preview expanded, the whole popover scrolled under a light system scrollbar.
+- The image view showed captures only at actual size.
+- In a Windows checkout `pnpm check` failed on every file, because git converted line endings to CRLF.
+
+### What changed
+
+- First run: the first launch opens a "How it works" page with the shortcut, the three steps, and where the tray icon lives. A ? button in Recent Captures and a "How It Works…" menu entry reopen it. `app-state.json` in the app's data folder records that it was shown.
+- Finding the app again: a left click on the tray icon, and starting the app while it runs, open the draft when it holds something, otherwise Recent Captures.
+- Capture feedback on Windows: once get-windows has identified the foreground window, about 50 ms after the press, the popover shows without taking focus. It carries a "Capturing this window…" chip with the window's title, and source listing waits until the page has painted. When the image is ready the popover takes focus as before. macOS keeps the previous behaviour, because its source listing took about 160 ms.
+- On Windows the popover is always on top while shown, so other always-on-top windows do not cover it. Shown from the tray, it sits above the notification area instead of at the top right. When it hides, it blurs first, so Windows activates the window underneath. Without that, focus stayed on the hidden popover after Save.
+- Recent Captures on Windows: no title text, icon or menu bar. The caption buttons are drawn over a draggable strip and follow the light or dark theme. Scrollbars are thin and themed on both platforms.
+- Quit with an unsaved draft asks inside the popover: Save and quit, Discard and quit, Cancel. Escape, clicking away, or any other hide counts as Cancel, so the app cannot get stuck in the question.
+- Popover: the window list replaces the form while it is open, and the list of views scrolls inside itself past about four chips.
+- Image view: fits the capture to the window, never enlarged past actual size. Actual size, a click on the image, or Z switches.
+- App icon (`build/icon.svg`, rendered by `pnpm icon`) for the installer, the Windows window, and the Windows tray. The app sets its AppUserModelID, and clicking the save notification opens that capture.
+- `.gitattributes` keeps LF line endings.
+
+### Windows harness
+
+`pnpm verify:windows`, and `pnpm verify:windows:packaged` for `release/win-unpacked`, drive the app against two windows owned by a separate fixture process. Activation is a real mouse click. The shortcut, Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+Z, Ctrl+Enter and Escape are real SendInput keystrokes. Quit goes through the real tray menu, opened with `popUpContextMenu` and chosen with the arrow and Enter keys. The window strip is dragged, and the caption close button clicked, with the real mouse.
+
+The harness takes a desktop lock, `%TEMP%\inset-desktop-test.lock`, shared with the other prototypes' harnesses on the same machine. Every click and drag is refused unless the window under the pointer belongs to the fixture or to Inset. Every keystroke is refused unless one of them is in front. This was added after one run clicked into another app that had come to the front.
+
+Both runs passed all 31 checks. The packaged run used the build before the last spacing change on the How it works page.
+
+| Check | Dev | Packaged |
+| --- | --- | --- |
+| Ordinary launch shows no window | pass | pass |
+| Tray menu has the expected entries | pass | pass |
+| A click brings Doc A to the front | pass | pass |
+| Popover appears within 400 ms of a real Ctrl+Alt+W | pass, 44 ms | pass, 20 ms |
+| While capturing, the popover names the window and leaves focus with it | pass | pass |
+| The first press adds Doc A as a direct view | pass | pass |
+| After capture the popover has focus and the text field is ready | pass | pass |
+| Ctrl+A and Ctrl+C work in the popover's text field | pass | pass |
+| Clicking into Doc B hides the popover and gives Doc B focus | pass | pass |
+| The second press adds Doc B and keeps the text | pass | pass |
+| A real Ctrl+Enter saves one record and hides the popover | pass | pass |
+| Focus returns to Doc B after saving | pass | pass |
+| The record holds the text and both views | pass | pass |
+| Doc A's image shows Doc A where the preview overlapped it | pass | pass |
+| Recent Captures opens without the File/Edit/View menu | pass | pass |
+| The window has a draggable strip under the caption buttons | pass | pass |
+| The viewer fits the whole capture in the window first | pass | pass |
+| Actual size shows one image pixel per device pixel | pass | pass |
+| How it works is one click from Recent Captures | pass | pass |
+| Dragging the strip moves Recent Captures | pass | pass |
+| Ctrl+V and Ctrl+Z work in Recent Captures without an app menu | pass | pass |
+| The caption close button closes Recent Captures and Inset keeps running | pass | pass |
+| Recent Captures opens again afterwards | pass | pass |
+| Quit from the tray menu asks inside the popover, and the prompt stays | pass | pass |
+| Escape cancels the quit and keeps the app and the draft | pass | pass |
+| Clicking into another window also cancels the quit and keeps the draft | pass | pass |
+| Quit asks again after a cancel | pass | pass |
+| Discard and quit ends the app | pass | pass |
+| The first launch opens How it works | pass | pass |
+| The second launch opens no window | pass | pass |
+| Launching it again while it runs opens Recent Captures | pass | pass |
+
+Press to finished view took 1652 ms in development and 1572 ms packaged, almost all of it in `getSources`. Each value comes from one run. The screenshots in `release/verify-windows-*/` were checked by eye:
+
+- An OS-level screenshot taken while capture runs shows the popover above another always-on-top window that sat in the same place.
+- The Recent Captures strip shows the three caption buttons in the dark theme, with no title or icon.
+- The save notification was titled "Inset Window Links", with this round's text.
+- The How it works page, the popover, and the quit prompt were also checked in light mode, as renderer screenshots. The caption buttons in light mode were not seen.
+
+A crash found by the harness: opening Recent Captures while its previous window was still closing ended the app with exit code 0xFFFF7003. The window now waits for the old one's closed event before opening again. The harness reproduced the crash three times out of three before the fix and not after it.
+
+### Not verified on Windows
+
+- The installer. Another build of the app was already installed on the test machine, so the new installer was not run over it. The notification's title may come from that installed copy's Start menu entry, which uses the same AppUserModelID. The taskbar icon after a fresh install and the Start menu entry are unobserved. The unpacked app's exe carries the new icon, but the taskbar showed Electron's icon for its window. That is probably Windows caching an icon per AppUserModelID from development runs; it was not confirmed.
+- Clicking the save notification. `balloon-click` is wired but was not clicked.
+- A physical left click on the tray icon. It sat in the overflow, so the harness used the menu instead.
+- Displays other than one at 100% scale, and keyboard layouts where Ctrl+Alt is AltGr. W is free on the German layout used here.
+- The macOS harness was not rerun after this round. Its expected tray menu now has How It Works, and its quit check now looks for the prompt in the popover instead of a native dialog. Its window-list check only reads the chooser, the chosen view and its badge, so the form being hidden while the list is open should not affect it.
+
 ## Continuous integration
 
 - The first CI run on pull request 1 passed on both GitHub-hosted runners. On the Windows runner, the get-windows N-API addon installed as a prebuilt download, and electron-builder produced the NSIS installer and the zip. No Windows build has been launched.
@@ -169,7 +257,7 @@ The second round followed the app-screen rules of the taste skill. That meant qu
 
 - Popover: each chip shows a thumbnail. A dashed row under the chips marks where the next view lands and carries the brief's hint and the shortcut. When Save is disabled, a line under the text field says why. Discard asks once when the draft holds views or text. Escape and clicking outside still only hide.
 - Permission: the notice gives the steps. When macOS still refuses after the user has allowed the app, it explains the rebuilt-app case and offers Quit and reopen. That goes through the unsaved-draft check.
-- Save: the menu bar item shows "Saved" for 2.5 seconds on macOS, and Windows shows a tray balloon. Saving still opens no window. Neither has been seen. On the test machine the status item is collapsed and reports zero height, so the confirmation is probably invisible there.
+- Save: the menu bar item shows "Saved" for 2.5 seconds on macOS, and Windows shows a tray balloon. Saving still opens no window. The macOS title has not been seen; the Windows notification was seen in the Windows round. On the test machine the status item is collapsed and reports zero height, so the confirmation is probably invisible there.
 - Recent captures: rows carry thumbnails of the first two views, are grouped by day, and can be searched by text and window title. The empty state teaches the three steps and shows the shortcut.
 - Record: the thought is the page heading, the next step sits in its own block, and the actions sit in one row beside the saved time. Delete keeps the preset's pale destructive style and asks before deleting. Each source has Copy image and can be dragged into another app.
 - Image viewer: shows "Source 1 of 2", and steps between sources with buttons and the arrow keys.
