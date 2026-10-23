@@ -6,6 +6,7 @@ type ChannelKind = "invoke" | "send";
 
 export const popoverChannels = {
   cancelChoice: "invoke",
+  chooseQuit: "invoke",
   chooseSource: "invoke",
   discard: "invoke",
   dismiss: "send",
@@ -34,6 +35,7 @@ export const pushChannels = {
   draft: "push:draft",
   focusInput: "push:focus-input",
   libraryChanged: "push:library-changed",
+  navigate: "push:navigate",
 } as const;
 
 export const channelName = (role: WindowRole, method: string): string =>

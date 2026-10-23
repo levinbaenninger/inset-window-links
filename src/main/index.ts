@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { app, session as electronSession, globalShortcut } from "electron";
 
+import { loadAppState, saveAppState } from "./app-state";
 import {
   capturePlatform,
   openScreenSettings,
@@ -20,7 +21,7 @@ import { LibraryWindow } from "./windows/library-window";
 import { PopoverWindow } from "./windows/popover-window";
 import { rendererPage } from "./windows/renderer-page";
 import { registerCaptureShortcut } from "./windows/shortcut";
-import { confirmSaved, createTray } from "./windows/tray";
+import { createTray, savedConfirmer } from "./windows/tray";
 
 const e2e = process.env["INSET_E2E"] === "1";
 const e2eUserData = e2e ? process.env["INSET_E2E_USER_DATA"] : undefined;
@@ -29,6 +30,14 @@ app.setPath(
   "userData",
   e2eUserData ?? path.join(app.getPath("appData"), "Inset Window Links")
 );
+
+// Matches the installer's shortcut, so Windows names notifications after the app, not Electron.
+if (process.platform === "win32") {
+  app.setAppUserModelId("ch.inset.prototype.windowlinks");
+}
+
+/** Every harness launch has a fresh profile, so the first-run window opens there only when asked for. */
+const welcomeAllowed = !e2e || process.env["INSET_E2E_WELCOME"] === "1";
 
 registerImageScheme();
 
@@ -93,9 +102,20 @@ const start = async () => {
   );
   await popover.load();
 
+  const showDraft = () => session.dispatch({ type: "showDraftRequested" });
+  const openRecent = () => library.open();
+
   const actions = {
     addFromWindowList: () => session.dispatch({ type: "chooserRequested" }),
-    openRecent: () => library.open(),
+    openHome: () => {
+      if (session.hasMeaningfulDraft()) {
+        showDraft();
+      } else {
+        openRecent();
+      }
+    },
+    openRecent,
+    openWelcome: () => library.open("/welcome"),
     openScreenSettings:
       capturePlatform === "macos"
         ? () => {
@@ -104,21 +124,32 @@ const start = async () => {
         : null,
     pressShortcut: () => session.pressShortcut(),
     quit: () => app.quit(),
-    showDraft: () => session.dispatch({ type: "showDraftRequested" }),
+    showDraft,
   };
 
   const shortcut = registerCaptureShortcut(actions.pressShortcut);
 
   const { menu, tray } = createTray(actions, shortcut);
 
-  session.onSaved(() => confirmSaved(tray));
+  session.onSaved(
+    savedConfirmer(tray, (captureId) => library.open(`/captures/${captureId}`))
+  );
 
-  app.on("second-instance", actions.showDraft);
+  // Opening the app again, from the Start menu or a shortcut, is how a lost tray icon gets found.
+  app.on("second-instance", actions.openHome);
   app.on("before-quit", (event) => session.interceptQuit(event));
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
     tray.destroy();
   });
+
+  const userData = app.getPath("userData");
+  const appState = await loadAppState(userData);
+
+  if (welcomeAllowed && !appState.welcomed) {
+    actions.openWelcome();
+    await saveAppState(userData, { ...appState, welcomed: true });
+  }
 
   if (e2e) {
     Object.assign(globalThis, {
@@ -127,6 +158,7 @@ const start = async () => {
         diagnostics: () => capturer.diagnostics,
         snapshot: () => session.snapshot(),
         trayBounds: () => tray.getBounds(),
+        trayPopUp: () => tray.popUpContextMenu(),
         trayMenu: () =>
           menu.items.map((item) =>
             item.type === "separator" ? "---" : item.label

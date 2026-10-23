@@ -1,6 +1,9 @@
+import { HelpCircleIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { getRouteApi, Link } from "@tanstack/react-router";
 import { useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { formatClock, formatDay, plural, viewTitle } from "@/lib/format";
@@ -15,32 +18,29 @@ const route = getRouteApi("/");
 
 type CurrentItem = Extract<CaptureListItem, { kind: "current" }>;
 
-const THUMBS_SHOWN = 2;
-
-const Thumbnails = ({ views }: { views: readonly ListedView[] }) => {
-  const shown = views.slice(0, THUMBS_SHOWN);
-  const more = views.length - shown.length;
+/** The first view, with a count of the rest, in a fixed column so every row's text lines up. */
+const Thumbnail = ({ views }: { views: readonly ListedView[] }) => {
+  const [first] = views;
+  const more = views.length - 1;
 
   return (
-    <span aria-hidden className="flex w-34 shrink-0 gap-1.5">
-      {shown.map((view, index) => (
-        <span
-          className="bg-muted relative h-10 w-16 overflow-hidden rounded-sm border"
-          key={view.id}
-        >
-          <img
-            alt=""
-            className="size-full object-cover object-top"
-            loading="lazy"
-            src={view.imageUrl}
-          />
-          {more > 0 && index === shown.length - 1 && (
-            <span className="bg-background/80 absolute inset-0 grid place-items-center text-xs font-medium">
-              +{more}
-            </span>
-          )}
+    <span
+      aria-hidden
+      className="bg-muted relative h-12 w-20 shrink-0 overflow-hidden rounded-md border"
+    >
+      {first !== undefined && (
+        <img
+          alt=""
+          className="size-full object-cover object-top"
+          loading="lazy"
+          src={first.imageUrl}
+        />
+      )}
+      {more > 0 && (
+        <span className="bg-background/85 absolute right-1 bottom-1 rounded-sm px-1 text-xs font-medium tabular-nums">
+          +{more}
         </span>
-      ))}
+      )}
     </span>
   );
 };
@@ -53,7 +53,7 @@ const CurrentRow = ({ item }: { item: CurrentItem }) => (
       params={{ captureId: item.id }}
       to="/captures/$captureId"
     >
-      <Thumbnails views={item.views} />
+      <Thumbnail views={item.views} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="line-clamp-2 font-medium">{item.relationship}</span>
         {item.nextStep.trim() !== "" && (
@@ -156,6 +156,12 @@ const FirstRun = ({ shortcut }: { shortcut: ShortcutStatus }) => (
       <li>Switch to the next window and press it again to add that view.</li>
       <li>Write what connects them, then save.</li>
     </ol>
+    <Link
+      className="text-primary self-start text-sm underline-offset-4 hover:underline"
+      to="/welcome"
+    >
+      More about how Inset works
+    </Link>
   </section>
 );
 
@@ -167,7 +173,7 @@ export const RecentList = () => {
   const saved = items.filter((item) => item.kind === "current").length;
 
   return (
-    <main className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
+    <main className="win:pt-2 mx-auto flex max-w-3xl flex-col gap-6 p-6">
       <header className="flex items-center justify-between gap-4">
         <div className="flex items-baseline gap-2.5">
           <h1 className="font-heading text-xl font-semibold">
@@ -179,17 +185,29 @@ export const RecentList = () => {
             </span>
           )}
         </div>
-        {saved > 0 && (
-          <div className="w-64">
+        <div className="flex items-center gap-1.5">
+          {saved > 0 && (
             <Input
               aria-label="Search captures"
+              className="w-64"
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search text and window titles"
               type="search"
               value={query}
             />
-          </div>
-        )}
+          )}
+          <Button
+            aria-label="How Inset works"
+            asChild
+            size="icon"
+            title="How Inset works"
+            variant="ghost"
+          >
+            <Link to="/welcome">
+              <HugeiconsIcon icon={HelpCircleIcon} />
+            </Link>
+          </Button>
+        </div>
       </header>
       {items.length === 0 && <FirstRun shortcut={shortcut} />}
       {items.length > 0 && shown.length === 0 && (

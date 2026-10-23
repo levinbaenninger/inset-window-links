@@ -62,5 +62,8 @@ if (role === "library") {
     ...bridge("library", libraryChannels),
     onChanged: (listener: () => void) =>
       subscribe(pushChannels.libraryChanged, () => listener()),
+    onNavigate: (listener: (...args: readonly unknown[]) => void) =>
+      subscribe(pushChannels.navigate, listener),
+    platform: process.platform === "win32" ? "windows" : "macos",
   });
 }

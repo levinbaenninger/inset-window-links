@@ -3,7 +3,6 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
 } from "@tanstack/react-router";
 import { z } from "zod";
 
@@ -11,8 +10,10 @@ import { libraryApi } from "@/lib/bridge";
 
 import { CaptureRecord } from "./capture-record";
 import { RecentList } from "./recent-list";
+import { Shell } from "./shell";
+import { Welcome } from "./welcome";
 
-const rootRoute = createRootRoute({ component: Outlet });
+const rootRoute = createRootRoute({ component: Shell });
 
 const recentRoute = createRoute({
   component: RecentList,
@@ -28,6 +29,13 @@ const recentRoute = createRoute({
   path: "/",
 });
 
+const welcomeRoute = createRoute({
+  component: Welcome,
+  getParentRoute: () => rootRoute,
+  loader: async () => ({ shortcut: await libraryApi().shortcut() }),
+  path: "/welcome",
+});
+
 /** The search param holds only a view id, never text, image data, or paths. */
 const captureRoute = createRoute({
   component: CaptureRecord,
@@ -39,7 +47,7 @@ const captureRoute = createRoute({
 
 export const router = createRouter({
   history: createHashHistory(),
-  routeTree: rootRoute.addChildren([recentRoute, captureRoute]),
+  routeTree: rootRoute.addChildren([recentRoute, welcomeRoute, captureRoute]),
 });
 
 declare module "@tanstack/react-router" {
