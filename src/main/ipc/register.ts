@@ -114,6 +114,10 @@ export const registerPopoverChannels = (
     cancelChoice: invoke(z.tuple([]), () =>
       session.dispatch({ type: "choiceCancelled" })
     ),
+    chooseQuit: invoke(
+      z.tuple([z.enum(["save", "discard", "cancel"])]),
+      (choice) => session.chooseQuit(choice)
+    ),
     chooseSource: invoke(z.tuple([CandidateIdSchema]), (candidateId) =>
       session.dispatch({ candidateId, type: "sourceChosen" })
     ),

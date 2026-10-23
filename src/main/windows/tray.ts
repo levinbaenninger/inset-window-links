@@ -2,6 +2,7 @@ import type { MenuItemConstructorOptions } from "electron";
 import { Menu, nativeImage, Tray } from "electron";
 
 import type { ShortcutStatus } from "../../shared/dto";
+import { trayTile } from "./icon";
 
 /** Two overlapping window outlines, drawn as BGRA so no image asset has to ship. */
 const glyph = (size: number, gray: number): Buffer => {
@@ -35,8 +36,13 @@ const glyph = (size: number, gray: number): Buffer => {
   return pixels;
 };
 
+/** macOS gets a template glyph for the menu bar. Windows gets the app's colour tile, which reads on any taskbar. */
 const trayIcon = () => {
-  const gray = process.platform === "darwin" ? 0 : 255;
+  if (process.platform !== "darwin") {
+    return trayTile();
+  }
+
+  const gray = 0;
 
   const image = nativeImage.createFromBitmap(glyph(16, gray), {
     height: 16,
@@ -59,6 +65,9 @@ export interface TrayActions {
   showDraft: () => void;
   addFromWindowList: () => void;
   openRecent: () => void;
+  openWelcome: () => void;
+  /** A left click on Windows: the draft when it holds something, else Recent Captures. */
+  openHome: () => void;
   openScreenSettings: (() => void) | null;
   quit: () => void;
 }
@@ -70,6 +79,7 @@ const menuFor = (
   { click: actions.showDraft, label: "Show Draft" },
   { click: actions.addFromWindowList, label: "Add View from Window List…" },
   { click: actions.openRecent, label: "Recent Captures…" },
+  { click: actions.openWelcome, label: "How It Works…" },
   { type: "separator" },
   {
     enabled: false,
@@ -102,27 +112,55 @@ export const createTray = (
   const tray = new Tray(trayIcon());
   const menu = Menu.buildFromTemplate(menuFor(actions, shortcut));
 
-  tray.setToolTip("Inset Window Links");
+  tray.setToolTip(
+    shortcut.kind === "registered"
+      ? `Inset Window Links: press ${shortcut.label} in a window to add it`
+      : "Inset Window Links"
+  );
   tray.setContextMenu(menu);
+
+  // macOS opens the menu on click. Windows leaves a left click unhandled unless asked.
+  if (process.platform === "win32") {
+    tray.on("click", actions.openHome);
+  }
 
   return { menu, tray };
 };
 
 const SAVED_FOR_MS = 2500;
 
-/** Save hides the panel and opens nothing, so the tray carries the confirmation. */
-export const confirmSaved = (tray: Tray): void => {
-  if (process.platform === "darwin") {
-    tray.setTitle(" Saved");
-    setTimeout(() => tray.setTitle(""), SAVED_FOR_MS);
+/**
+ * Save hides the panel and opens nothing, so the tray carries the confirmation. On Windows it is a
+ * notification; clicking it runs onOpen for the capture saved last.
+ */
+export const savedConfirmer = (
+  tray: Tray,
+  onOpen: (captureId: string) => void
+): ((captureId: string) => void) => {
+  let last: string | null = null;
 
-    return;
-  }
-
-  tray.displayBalloon({
-    content: "Open Recent Captures from the tray to see it.",
-    iconType: "none",
-    noSound: true,
-    title: "Capture saved",
+  tray.on("balloon-click", () => {
+    if (last !== null) {
+      onOpen(last);
+    }
   });
+
+  return (captureId) => {
+    last = captureId;
+
+    if (process.platform === "darwin") {
+      tray.setTitle(" Saved");
+      setTimeout(() => tray.setTitle(""), SAVED_FOR_MS);
+
+      return;
+    }
+
+    tray.displayBalloon({
+      content:
+        "Click to open it. Recent Captures in the Inset menu lists them all.",
+      iconType: "none",
+      noSound: true,
+      title: "Capture saved",
+    });
+  };
 };

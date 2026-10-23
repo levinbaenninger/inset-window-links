@@ -4,6 +4,8 @@
 @import "@fontsource-variable/inter";
 
 @custom-variant dark (&:is(.dark *));
+/* Windows only: the library window draws its own title strip under the native caption buttons. */
+@custom-variant win (&:where([data-platform="windows"] *));
 
 @theme inline {
   --font-heading: var(--font-sans);
@@ -49,6 +51,7 @@
 }
 
 :root {
+  color-scheme: light;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -84,6 +87,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -127,4 +131,22 @@
   html {
     @apply font-sans;
   }
+  /* Thin scrollbars in the theme's colours, instead of the light system bars on Windows. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(
+        in oklch,
+        var(--muted-foreground) 45%,
+        transparent
+      )
+      transparent;
+  }
+}
+
+@utility app-drag {
+  -webkit-app-region: drag;
+}
+
+@utility app-no-drag {
+  -webkit-app-region: no-drag;
 }

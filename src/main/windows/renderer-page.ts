@@ -10,7 +10,8 @@ const outDir = path.join(import.meta.dirname, "..");
 
 /** How a role's page loads, and the one URL its IPC senders must come from. */
 export interface RendererPage {
-  load: (win: BrowserWindow) => Promise<void>;
+  /** route is a hash-history path such as "/welcome". */
+  load: (win: BrowserWindow, route?: string) => Promise<void>;
   matches: (url: string) => boolean;
 }
 
@@ -26,8 +27,17 @@ export const rendererPage = (role: WindowRole): RendererPage => {
       : `${devServer}/${role}.html`;
 
   return {
-    load: (win) =>
-      devServer === undefined ? win.loadFile(file) : win.loadURL(expected),
+    load: (win, route) => {
+      if (devServer !== undefined) {
+        return win.loadURL(
+          route === undefined ? expected : `${expected}#${route}`
+        );
+      }
+
+      return route === undefined
+        ? win.loadFile(file)
+        : win.loadFile(file, { hash: route });
+    },
     matches: (url) => withoutFragment(url) === expected,
   };
 };

@@ -249,7 +249,7 @@ export const CaptureRecord = () => {
 
   if (detail === null) {
     return (
-      <main className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
+      <main className="win:pt-2 mx-auto flex max-w-3xl flex-col gap-4 p-6">
         <BackToList />
         <p data-testid="record-missing">
           This capture does not exist or was deleted.
@@ -266,7 +266,7 @@ export const CaptureRecord = () => {
   }
 
   return (
-    <main className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
+    <main className="win:pt-2 mx-auto flex max-w-3xl flex-col gap-6 p-6">
       <BackToList />
       <Reasoning detail={detail} />
       <section aria-label="Sources" className="flex flex-col gap-3">
