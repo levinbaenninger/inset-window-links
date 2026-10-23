@@ -26,6 +26,7 @@ interface InsetE2E {
   addFromWindowList: () => void;
   trayMenu: () => string[];
   trayBounds: () => { x: number; y: number; width: number; height: number };
+  trayPopUp: () => void;
   snapshot: () => DraftSnapshot;
   diagnostics: () => {
     screenAccess: string;
@@ -71,6 +72,7 @@ const TRAY_MENU = [
   "Show Draft",
   "Add View from Window List…",
   "Recent Captures…",
+  "How It Works…",
   "---",
   "Add View Shortcut: ⌥⌘W",
   "Screen Recording Settings…",
@@ -177,7 +179,8 @@ const environment = (extra: ReadonlyMap<string, string>) => {
   const env = new Map<string, string>();
 
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) {
+    // Some hosts set this; it would start Electron as plain Node.
+    if (value !== undefined && key !== "ELECTRON_RUN_AS_NODE") {
       env.set(key, value);
     }
   }
@@ -984,7 +987,7 @@ const discardDraft = async (app: ElectronApplication, page: Page) => {
   await page.keyboard.press("Escape");
 };
 
-/** Resolves only if quit returns. A native quit dialog runs a modal loop, so this stays pending while it is open. */
+/** Quit with a draft shows a prompt in the popover and returns; "app closed" means it quit anyway. */
 const requestQuit = async (app: ElectronApplication) => {
   try {
     await app.evaluate(() => globalThis.__insetE2E.quit());
@@ -1121,10 +1124,13 @@ const failedWrite = async (
   const quitting = requestQuit(app);
 
   await Promise.race([quitting, sleep(1500)]);
+
+  const prompt = await page.getByTestId("quit-prompt").count();
+
   record(
-    "quit with a meaningful draft is held for the Save, Discard, Cancel dialog",
-    app.process().exitCode === null,
-    json({ exitCode: app.process().exitCode })
+    "quit with a meaningful draft asks Save, Discard, or Cancel in the popover",
+    app.process().exitCode === null && prompt === 1,
+    json({ exitCode: app.process().exitCode, prompt })
   );
   app.process().kill("SIGKILL");
 };
