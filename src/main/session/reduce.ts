@@ -1,3 +1,4 @@
+import type { Notice } from "../../shared/dto";
 import type { DraftId } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
 import { blankText, isBlank, saveability } from "../../shared/text";
@@ -43,6 +44,10 @@ const canEditDraft = (activity: Activity) =>
   isResumable(activity) || activity.kind === "choosing";
 
 const unchanged = (state: SessionState): Transition => [state, []];
+
+/** Notices describe the last attempt. Only the permission notice still holds when the draft is reopened. */
+const lasting = (notice: Notice | null): Notice | null =>
+  notice?.kind === "permissionDenied" ? notice : null;
 
 const withText = (state: SessionState, text: DraftText): SessionState => ({
   ...state,
@@ -295,7 +300,10 @@ const onCandidatesReady = (
 
 const onShowDraft = (state: SessionState): Transition =>
   canEditDraft(state.activity)
-    ? [state, [{ anchor: { kind: "keep" }, type: "showPopover" }]]
+    ? [
+        { ...state, notice: lasting(state.notice) },
+        [{ anchor: { kind: "keep" }, type: "showPopover" }],
+      ]
     : unchanged(state);
 
 const onChooserRequested = (state: SessionState, ids: IdSource): Transition => {
@@ -314,6 +322,7 @@ const onChooserRequested = (state: SessionState, ids: IdSource): Transition => {
         reason: "menu",
         token,
       },
+      notice: lasting(state.notice),
     },
     [
       { token, type: "loadCandidates" },
@@ -373,10 +382,18 @@ const onViewRemoved = (
 const onTextChanged = (
   state: SessionState,
   event: EventOf<"textChanged">
-): Transition =>
-  state.activity.kind === "saving"
-    ? unchanged(state)
-    : [withText(state, event.text), []];
+): Transition => {
+  if (state.activity.kind === "saving") {
+    return unchanged(state);
+  }
+
+  const next = withText(state, event.text);
+
+  return state.notice?.kind === "needsRelationship" &&
+    !isBlank(event.text.relationship)
+    ? [{ ...next, notice: null }, []]
+    : [next, []];
+};
 
 const onSaveRequested = (
   state: SessionState,
