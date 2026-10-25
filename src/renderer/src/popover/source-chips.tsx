@@ -155,7 +155,7 @@ export const SourceChips = ({
   return (
     <ul
       aria-label="Views in this capture"
-      className="-mx-1 flex max-h-72 flex-col gap-1.5 overflow-y-auto px-1"
+      className="-mx-1 flex max-h-72 flex-col gap-1.5 overflow-y-auto px-1 *:shrink-0"
       ref={list}
     >
       {views.map((view, index) => (
