@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from "react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -7,6 +8,8 @@ import { libraryApi } from "@/lib/bridge";
 
 import type { CaptureDetail } from "../../../shared/dto";
 import { isBlank, MAX_NEXT_STEP, MAX_RELATIONSHIP } from "../../../shared/text";
+
+const mac = navigator.userAgent.includes("Macintosh");
 
 export const EditText = ({
   detail,
@@ -18,6 +21,8 @@ export const EditText = ({
   const [relationship, setRelationship] = useState(detail.relationship);
   const [nextStep, setNextStep] = useState(detail.nextStep);
   const [error, setError] = useState<string | null>(null);
+
+  const canSave = !isBlank(relationship);
 
   const save = async () => {
     const outcome = await libraryApi().updateText(detail.id, {
@@ -36,6 +41,18 @@ export const EditText = ({
     }
   };
 
+  const saveOnShortcut = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      event.key === "Enter" &&
+      (mac ? event.metaKey : event.ctrlKey) &&
+      !event.nativeEvent.isComposing &&
+      canSave
+    ) {
+      event.preventDefault();
+      await save();
+    }
+  };
+
   return (
     <section aria-label="Edit your thought" className="flex flex-col gap-3">
       <div className="flex flex-col gap-1.5">
@@ -45,6 +62,7 @@ export const EditText = ({
           id="edit-relationship"
           maxLength={MAX_RELATIONSHIP}
           onChange={(event) => setRelationship(event.target.value)}
+          onKeyDown={saveOnShortcut}
           value={relationship}
         />
       </div>
@@ -54,13 +72,15 @@ export const EditText = ({
           id="edit-next-step"
           maxLength={MAX_NEXT_STEP}
           onChange={(event) => setNextStep(event.target.value)}
+          onKeyDown={saveOnShortcut}
           value={nextStep}
         />
       </div>
       {error !== null && <p className="text-destructive text-sm">{error}</p>}
       <div className="flex gap-2">
-        <Button disabled={isBlank(relationship)} onClick={save} size="sm">
+        <Button disabled={!canSave} onClick={save} size="sm">
           Save changes
+          <span className="opacity-70">{mac ? "⌘↵" : "Ctrl+Enter"}</span>
         </Button>
         <Button onClick={onDone} size="sm" variant="ghost">
           Cancel
