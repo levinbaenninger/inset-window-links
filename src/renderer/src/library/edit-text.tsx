@@ -9,8 +9,6 @@ import { libraryApi } from "@/lib/bridge";
 import type { CaptureDetail } from "../../../shared/dto";
 import { isBlank, MAX_NEXT_STEP, MAX_RELATIONSHIP } from "../../../shared/text";
 
-const mac = navigator.userAgent.includes("Macintosh");
-
 export const EditText = ({
   detail,
   onDone,
@@ -23,6 +21,7 @@ export const EditText = ({
   const [error, setError] = useState<string | null>(null);
 
   const canSave = !isBlank(relationship);
+  const mac = libraryApi().platform === "macos";
 
   const save = async () => {
     const outcome = await libraryApi().updateText(detail.id, {
