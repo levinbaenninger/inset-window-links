@@ -215,9 +215,11 @@ const foregroundOrigin = async (
   }
 
   return readOrigin({
+    bounds: geometry(probed.bounds).dip,
     knownUrl,
     ownerPath: probed.owner.path,
     pid: probed.owner.processId,
+    strict: false,
     title: nonEmpty(probed.title),
   });
 };
@@ -477,8 +479,10 @@ export class WindowCapturer {
           item.listed === undefined
             ? null
             : readOrigin({
+                bounds: geometry(item.listed.bounds).dip,
                 ownerPath: item.listed.owner.path,
                 pid: item.listed.owner.processId,
+                strict: true,
                 title: nonEmpty(item.listed.title),
               })
         )

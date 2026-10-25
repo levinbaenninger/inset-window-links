@@ -23,6 +23,7 @@ const record: CaptureRecord = {
       id: ViewIdSchema.parse("0a000000-0000-4000-8000-000000000001"),
       origin: {
         appPath: "/Applications/Numbers.app",
+        bounds: { height: 600, width: 900, x: 40, y: 60 },
         document: "/Users/dana/Budget 2027.numbers",
         url: null,
       },

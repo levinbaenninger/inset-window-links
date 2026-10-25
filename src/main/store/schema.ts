@@ -28,11 +28,21 @@ export const AcquisitionSchema = z.discriminatedUnion("kind", [
 export type Acquisition = z.infer<typeof AcquisitionSchema>;
 
 /**
- * What brings a view's window back: the app it belongs to and, when they could be read, the web
- * page or the file it showed. Only read where the user granted Accessibility; never prompts.
+ * What brings a view's window back: the app it belongs to, where the window was and, when they
+ * could be read, the web page or the file it showed. Pages and files are only read where the
+ * user granted Accessibility; nothing prompts.
  */
 export const ViewOriginSchema = z.object({
   appPath: z.string().max(1024).nullable(),
+  /** Where the window was, in DIP. Kept so a later version can put windows back; not used yet. */
+  bounds: z
+    .object({
+      height: z.number(),
+      width: z.number(),
+      x: z.number(),
+      y: z.number(),
+    })
+    .nullable(),
   document: z.string().max(1024).nullable(),
   url: z.string().max(2000).nullable(),
 });

@@ -277,11 +277,17 @@ const start = async () => {
     pushSettings();
   });
 
+  let accessibilityAsked = false;
+
   registerSettingsChannels(
     {
       allowOrigins: async () => {
-        // Adds the app to the Accessibility list and asks once; later calls open the pane instead.
-        if (mac && !systemPreferences.isTrustedAccessibilityClient(true)) {
+        // The first click adds the app to the Accessibility list and lets macOS ask; while the
+        // switch is still off, later clicks open the pane instead of asking again.
+        if (mac && !accessibilityAsked) {
+          accessibilityAsked = true;
+          systemPreferences.isTrustedAccessibilityClient(true);
+        } else if (mac && !canReadOrigins()) {
           await shell.openExternal(ACCESSIBILITY_SETTINGS_URL);
         }
 

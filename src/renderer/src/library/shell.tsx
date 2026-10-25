@@ -96,7 +96,7 @@ export const Shell = () => {
             <RecentList activeId={captureId} items={items} query={query} />
           </nav>
         </aside>
-        <div className="bg-background dark:bg-card border-foreground/10 flex min-w-0 flex-1 flex-col border-l">
+        <div className="bg-background mac:dark:bg-card border-foreground/10 flex min-w-0 flex-1 flex-col border-l">
           <Outlet />
         </div>
       </div>

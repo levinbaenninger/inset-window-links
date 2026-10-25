@@ -9,9 +9,10 @@ import type { ViewOrigin } from "../store/schema";
 
 /**
  * Reads the file (AXDocument) and the web page (the first AXWebArea's AXURL) a window shows,
- * from its app's accessibility tree. The window is the one with the given title, else the
- * app's focused window. Runs as JavaScript for Automation, so no helper binary ships; it
- * needs Accessibility, and is never run without it.
+ * from its app's accessibility tree. The window is the one window with the given title. Unless
+ * strict, the app's focused window stands in when no title matches; a strict read answers
+ * nothing then, nor when two windows share the title. Runs as JavaScript for Automation, so no
+ * helper binary ships; it needs Accessibility, and is never run without it.
  */
 const SCRIPT = `
 ObjC.import("AppKit");
@@ -20,6 +21,8 @@ ObjC.bindFunction("AXUIElementCopyAttributeValue", ["int", ["id", "id", "id *"]]
 function run(argv) {
   var root = $.AXUIElementCreateApplication(Number(argv[0]));
   var wanted = argv[1] || "";
+  var strict = argv[2] === "strict";
+  var matches = 0;
   function attr(element, name) {
     var out = Ref();
     return $.AXUIElementCopyAttributeValue(element, $(name), out) === 0 ? out[0] : null;
@@ -35,9 +38,10 @@ function run(argv) {
   for (var i = 0; i < count && wanted !== ""; i++) {
     if (text(attr(windows.objectAtIndex(i), "AXTitle")) === wanted) {
       window = windows.objectAtIndex(i);
-      break;
+      matches++;
     }
   }
+  if (strict && matches !== 1) return JSON.stringify({ document: "", url: "" });
   if (!window) window = attr(root, "AXFocusedWindow");
   if (!window) return JSON.stringify({ document: "", url: "" });
   var document = text(attr(window, "AXDocument"));
@@ -116,12 +120,21 @@ export const canReadOrigins = (): boolean =>
 
 const ask = async (
   pid: number,
-  title: string | null
+  title: string | null,
+  strict: boolean
 ): Promise<z.infer<typeof AnswerSchema> | null> => {
   try {
     const child = spawn(
       "/usr/bin/osascript",
-      ["-l", "JavaScript", "-e", SCRIPT, String(pid), title ?? ""],
+      [
+        "-l",
+        "JavaScript",
+        "-e",
+        SCRIPT,
+        String(pid),
+        title ?? "",
+        strict ? "strict" : "",
+      ],
       { stdio: ["ignore", "pipe", "ignore"], timeout: TIMEOUT_MS }
     );
 
@@ -148,13 +161,16 @@ const ask = async (
 };
 
 /**
- * Where a captured window came from: its app, and the page or file it showed when
- * Accessibility allows reading them. knownUrl is a browser address get-windows already read.
+ * Where a captured window came from: its app, where it was on screen, and the page or file it
+ * showed when Accessibility allows reading them. knownUrl is a browser address get-windows
+ * already read. A window picked from the list is not the focused one, so its read is strict.
  */
 export const readOrigin = async (window: {
   pid: number;
   ownerPath: string | undefined;
   title: string | null;
+  bounds: ViewOrigin["bounds"];
+  strict: boolean;
   knownUrl?: string | undefined;
 }): Promise<ViewOrigin | null> => {
   if (process.platform !== "darwin") {
@@ -166,11 +182,12 @@ export const readOrigin = async (window: {
 
   const answer =
     canReadOrigins() && known === null
-      ? await ask(window.pid, window.title)
+      ? await ask(window.pid, window.title, window.strict)
       : null;
 
   const origin: ViewOrigin = {
     appPath,
+    bounds: window.bounds,
     document: answer === null ? null : documentPath(answer.document),
     url: known ?? (answer === null ? null : webPage(answer.url)),
   };
