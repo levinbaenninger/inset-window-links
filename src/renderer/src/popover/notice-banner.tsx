@@ -52,7 +52,6 @@ const PermissionNotice = ({ stillDenied }: { stillDenied: boolean }) => (
 );
 
 const messages = {
-  captureFailed: "Capturing that window failed. Nothing was added.",
   needsRelationship: "Write what connects these views before saving.",
   needsView: "Add at least one view before saving.",
   sourceVanished:

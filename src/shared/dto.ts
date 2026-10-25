@@ -46,8 +46,7 @@ export type Notice =
   | { kind: "permissionDenied"; stillDenied: boolean }
   | { kind: "sourceVanished" }
   | { kind: "needsView" }
-  | { kind: "needsRelationship" }
-  | { kind: "captureFailed"; detail: string };
+  | { kind: "needsRelationship" };
 
 export type ActivitySummary =
   | { kind: "idle" | "saving" | "confirmingQuit" }

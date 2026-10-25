@@ -430,6 +430,52 @@ describe("session lifecycle", () => {
     expect(blank.state.notice).toStrictEqual({ kind: "needsRelationship" });
   });
 
+  it("drops the relationship notice once the relationship is written", () => {
+    const source = ids();
+
+    const blank = run(source, [
+      foreignPress,
+      captured("t1", view(1, "macos:1176")),
+      { text: text(""), type: "saveRequested" },
+      { text: text("  "), type: "textChanged" },
+    ]);
+
+    expect(blank.state.notice).toStrictEqual({ kind: "needsRelationship" });
+
+    const written = run(
+      source,
+      [{ text: text("A limits B"), type: "textChanged" }],
+      blank.state
+    );
+
+    expect(written.state.notice).toBeNull();
+  });
+
+  it("drops a stale notice when the draft is shown again, but not the permission one", () => {
+    const source = ids();
+
+    const vanished: SessionState = {
+      ...initialSession(D1),
+      notice: { kind: "sourceVanished" },
+    };
+
+    expect(
+      run(source, [{ type: "showDraftRequested" }], vanished).state.notice
+    ).toBeNull();
+    expect(
+      run(source, [{ type: "chooserRequested" }], vanished).state.notice
+    ).toBeNull();
+
+    const denied: SessionState = {
+      ...initialSession(D1),
+      notice: { kind: "permissionDenied", stillDenied: true },
+    };
+
+    expect(
+      run(source, [{ type: "showDraftRequested" }], denied).state.notice
+    ).toStrictEqual({ kind: "permissionDenied", stillDenied: true });
+  });
+
   it("quits at once with an empty draft", () => {
     expect(run(ids(), [{ type: "quitRequested" }]).effects).toStrictEqual([
       { type: "exitApp" },
