@@ -73,7 +73,7 @@ const start = async () => {
   const library = new LibraryWindow(rendererPage("library"));
 
   const popover = new PopoverWindow(rendererPage("popover"), () =>
-    library.isVisible()
+    library.isFocused()
   );
 
   const capturer = new WindowCapturer(

@@ -122,8 +122,8 @@ export class LibraryWindow {
       : this.#win;
   }
 
-  isVisible(): boolean {
-    return this.window()?.isVisible() ?? false;
+  isFocused(): boolean {
+    return this.window()?.isFocused() ?? false;
   }
 
   notifyChanged(): void {

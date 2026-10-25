@@ -37,13 +37,19 @@ export class PopoverWindow {
   /** Set while shown in the bottom corner, so growing and shrinking keep the bottom edge put. */
   #bottomAnchored = false;
   #hiding = false;
-  readonly #otherWindowVisible: () => boolean;
+  readonly #otherWindowFocused: () => boolean;
+  #returnToOtherWindow = false;
   readonly #hiddenListeners = new Set<() => void>();
 
-  /** otherWindowVisible lets hide() leave focus with the library window when that is open. */
-  constructor(page: RendererPage, otherWindowVisible: () => boolean) {
+  /**
+   * otherWindowFocused is read just before a hidden popover shows, and again on hide. When
+   * the library window has focus at either point, hide() leaves focus with it. Otherwise
+   * hide() hides the app, so the app the user was in becomes active again, even with the
+   * library open behind it.
+   */
+  constructor(page: RendererPage, otherWindowFocused: () => boolean) {
     this.#page = page;
-    this.#otherWindowVisible = otherWindowVisible;
+    this.#otherWindowFocused = otherWindowFocused;
     this.#win = new BrowserWindow({
       backgroundColor: nativeTheme.shouldUseDarkColors ? "#0a0a0a" : "#ffffff",
       frame: false,
@@ -68,8 +74,17 @@ export class PopoverWindow {
     }
 
     this.#win.on("blur", () => {
-      if (!this.#hiding && this.#win.isVisible()) {
-        this.hide();
+      const hideIfStillBlurred = () => {
+        if (!this.#hiding && this.#win.isVisible() && !this.#win.isFocused()) {
+          this.hide();
+        }
+      };
+
+      // On macOS a click into the library window has made it key one tick later, and hide() asks.
+      if (process.platform === "darwin") {
+        setImmediate(hideIfStillBlurred);
+      } else {
+        hideIfStillBlurred();
       }
     });
     this.#win.on("hide", () => {
@@ -99,6 +114,10 @@ export class PopoverWindow {
   }
 
   #place(anchor: PopoverAnchor) {
+    if (!this.#win.isVisible()) {
+      this.#returnToOtherWindow = this.#otherWindowFocused();
+    }
+
     const workArea = workAreaFor(anchor);
     const size = { height: this.#clampedHeight(workArea.height), width: WIDTH };
 
@@ -204,7 +223,11 @@ export class PopoverWindow {
 
     this.#win.hide();
 
-    if (process.platform === "darwin" && !this.#otherWindowVisible()) {
+    if (
+      process.platform === "darwin" &&
+      !this.#returnToOtherWindow &&
+      !this.#otherWindowFocused()
+    ) {
       app.hide();
     }
   }
