@@ -279,13 +279,61 @@ This round came from reading the code, not from a user report. The macOS, packag
 
 `pnpm check` passes with 69 unit tests.
 
+## Fourth round: redesign
+
+This round answers a design review. The app should look and behave like Inset Shelf, be a real Mac app, let you pick several windows at once, turn the next step into a list, and bring a capture's windows back. As in the third round, no harness was run and no Electron window was opened, because other prototype threads were using the desktop. The screens were checked by loading the built pages in headless Chromium with a stubbed bridge: 38 of 38 checks pass, in light and dark. Headless Chromium cannot draw the macOS window material, so the screenshots stand in a flat grey for it.
+
+What changed:
+
+- **A Mac app.**
+  - The Dock icon, the menu-bar icon or both. Settings has the same "Show app icon in" choice as Shelf, defaulting to both. `LSUIElement` is gone from the packaged Info.plist.
+  - File, Edit, View, Window and Help menus. The Edit roles are kept, so typing, copy and undo work in every field.
+  - A Settings window copied from Shelf's: grouped rows on the sidebar material, as tall as its content. It has Open at Login, the icon place, two panel settings and "Remember pages and files".
+  - A Dock click opens the draft, or Recent Captures when there is none.
+- **The capture panel** (still the `popover` role in the code).
+  - It opens centred on the screen being worked on, at 16% of its height, instead of in a corner. It can be dragged by its header, and reopens where it was left.
+  - It stays open when another window is clicked and floats above other windows. Both are settings. With "Hide when I click away" on, it behaves as before. When it hides without focus, it no longer calls `app.hide()`.
+  - Views are tiles, three to a row. The last tile, Add windows, opens a multi-select window list with Select all, double-click to add one, and ⌘↵ to add the picked ones.
+  - The picked windows are captured together. Sources are listed once, at a size that fits the largest. Each image is scaled back to its own window, and a window that closed in the meantime counts as missing. The reducer has one batch event (`sourcesChosen`) and one batch outcome (`capturedMany`).
+- **Next steps** are a list of to-dos. Return adds the next one and Backspace removes an empty one, in the panel and in the edit form. In Recent Captures each step can be checked off; the check is written at once.
+  - Records are now schema version 2, with `todos` in place of `nextStep`.
+  - A version 1 record is read as version 2: each line of its next step becomes a to-do, and `- [x]` lines start checked. The file is rewritten only when the capture is edited or a step is checked.
+- **Reopen.** Each view may keep where it came from: the app bundle, and, with Accessibility granted, the web page or the file.
+  - The address comes from get-windows for the browsers it knows. Otherwise it comes from the window's accessibility tree, read with JavaScript for Automation as Shelf does. The file comes from `AXDocument`.
+  - Nothing is read, and nothing prompts, without Accessibility.
+  - Reopen all, and each view's link, open the page in the app it was in, the file, or the app. Main reads what to open from the record by id, accepts only http and https pages, existing files and `.app` bundles, and runs `open -a` with arguments, never a shell.
+  - Windows are not moved back to their old positions. That needs Accessibility scripting that could not be tried here.
+- **Recent Captures** is a sidebar and a detail pane: the list on the window material with search, and the capture on the page background with its actions in the header.
+- **Help and first run.** The long "How it works" page is now a short page: one line of what the app is for, three actions with their keys, and New capture. It is the first-run page, the Help menu entry, and the empty state.
+- **Shelf's look.**
+  - The window material on macOS, Shelf's thin scrollbars, its switch, select, checkbox and input group components, and its card and group surfaces.
+  - The taste-skill rules were applied where they fit: no numbered steps or prefixed numbers, sentence case, no shadows except on the floating remove button.
+  - Times read "2:05 PM", without a leading zero or seconds.
+
+Not verified:
+
+- Anything on a real desktop: the window material, dragging and remembering the panel, floating, the Dock and menu-bar switch, the menus, Open at Login, and the activate event.
+- Reading pages and files, and Reopen. They need Accessibility, and browsers ask for Automation; neither was granted or tried.
+- Capturing several windows at once with real sources.
+- IME input in the next-step fields.
+- Anything on Windows.
+
+The two desktop harnesses were updated to the new behaviour but not run. They write `settings.json` with "Hide when I click away" on and Menu Bar Only before each launch. That keeps the blur, focus-return and no-Dock checks meaningful, but it means they test the old panel mode, not the new default. Other changes:
+
+- They expect the new tray menu, the to-do list, the new hint, and the multi-select window list.
+- Placement is checked as centred, 16% down the work area.
+- The record order check uses the Next steps section.
+- One check could not be kept: that a shown panel stays put when a view is added. With click-away hiding on, each press reopens a hidden panel.
+
+`pnpm check` passes with 80 unit tests.
+
 ## Design notes
 
 - Main owns the draft. The renderer is the only writer of the text and mirrors every edit to main. Save carries the text too, so quit protection never needs a round trip to the renderer.
 - A pure reducer holds the draft lifecycle. A thin controller runs its effects. The capture id equals the draft id, so a retried save cannot create a second record.
-- Each capture is written to a staging directory and published by one rename. Edits replace `record.json` atomically. Deletes move the directory to a trash folder first. Records with an unknown schema version are listed and never changed.
+- Each capture is written to a staging directory and published by one rename. Edits replace `record.json` atomically. Deletes move the directory to a trash folder first. Records with an unknown schema version are listed and never changed. Version 1 records are read as version 2 and written as version 2 only when edited.
 - Images are served by an `inset://` protocol for known ids only. A saved image is served only if its record lists the view.
-- Both windows run with context isolation, the sandbox, and no Node integration. Each IPC call checks the sender frame URL and parses its arguments with Zod.
+- All three windows run with context isolation, the sandbox, and no Node integration. Each IPC call checks the sender frame URL and parses its arguments with Zod.
 
 ## User-test outcomes
 
