@@ -1,6 +1,6 @@
 import { ArrowDown01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -128,6 +128,12 @@ const DraftForm = ({
     }
   };
 
+  /** The confirmation replaced the footer that had focus, so focus goes back to the text. */
+  const keepDraft = useCallback(() => {
+    setConfirmingDiscard(false);
+    relationship.current?.focus();
+  }, []);
+
   const save = async () => {
     if (canSave) {
       await popoverApi().save(text);
@@ -145,9 +151,19 @@ const DraftForm = ({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // Escape and Enter also end an IME composition, which must not hide or save.
+      if (event.isComposing) {
+        return;
+      }
+
       if (event.key === "Escape") {
         event.preventDefault();
-        popoverApi().dismiss();
+
+        if (confirmingDiscard) {
+          keepDraft();
+        } else {
+          popoverApi().dismiss();
+        }
       }
 
       const saveKeys =
@@ -165,7 +181,7 @@ const DraftForm = ({
     window.addEventListener("keydown", onKeyDown);
 
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mac, canSave, quitting, check.kind, text]);
+  }, [mac, canSave, quitting, check.kind, text, confirmingDiscard, keepDraft]);
 
   if (snapshot.activity.kind === "choosing") {
     return (
@@ -261,12 +277,7 @@ const DraftForm = ({
         >
           <span className="text-xs">{discardQuestion(viewCount, text)}</span>
           <span className="flex gap-1.5">
-            <Button
-              autoFocus
-              onClick={() => setConfirmingDiscard(false)}
-              size="sm"
-              variant="ghost"
-            >
+            <Button autoFocus onClick={keepDraft} size="sm" variant="ghost">
               Keep
             </Button>
             <Button onClick={discard} size="sm" variant="destructive">
