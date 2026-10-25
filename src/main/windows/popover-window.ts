@@ -9,6 +9,7 @@ import type { Corner } from "./placement";
 import { placePopover } from "./placement";
 import type { RendererPage } from "./renderer-page";
 import { securePreferences } from "./renderer-page";
+import { themeColors } from "./theme";
 
 const WIDTH = 380;
 const MIN_HEIGHT = 160;
@@ -51,7 +52,7 @@ export class PopoverWindow {
     this.#page = page;
     this.#otherWindowFocused = otherWindowFocused;
     this.#win = new BrowserWindow({
-      backgroundColor: nativeTheme.shouldUseDarkColors ? "#0a0a0a" : "#ffffff",
+      backgroundColor: themeColors().background,
       frame: false,
       fullscreenable: false,
       height: this.#height,
@@ -72,6 +73,10 @@ export class PopoverWindow {
         visibleOnFullScreen: true,
       });
     }
+
+    nativeTheme.on("updated", () =>
+      this.#win.setBackgroundColor(themeColors().background)
+    );
 
     this.#win.on("blur", () => {
       const hideIfStillBlurred = () => {
