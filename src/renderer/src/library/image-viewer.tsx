@@ -85,8 +85,8 @@ export const ImageViewer = ({
 
   return (
     <main className="flex h-full flex-col">
-      {/* On Windows this header is the title strip: draggable, with room on the right for the caption buttons. */}
-      <header className="win:app-drag win:pr-36 flex items-center gap-3 border-b px-4 py-2">
+      {/* The title strip: it moves the window, with room for the traffic lights or the caption buttons. */}
+      <header className="drag-region mac:pl-20 win:pr-36 border-foreground/10 flex h-13 shrink-0 items-center gap-3 border-b px-4">
         <Button asChild className="app-no-drag" size="sm" variant="ghost">
           <Link params={{ captureId }} search={{}} to="/captures/$captureId">
             <HugeiconsIcon icon={ArrowLeft01Icon} />

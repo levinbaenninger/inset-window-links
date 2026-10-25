@@ -16,8 +16,9 @@ import type {
   FallbackCandidate,
   PendingSource,
 } from "../session/state";
-import type { Acquisition } from "../store/schema";
+import type { Acquisition, ViewOrigin } from "../store/schema";
 import type { Size } from "../windows/placement";
+import { canReadOrigins, readOrigin } from "./origin";
 import type { WindowKey } from "./window-key";
 import {
   matchWindowSource,
@@ -100,25 +101,36 @@ const cursorDisplayPixels = (): Size => {
   };
 };
 
-/** Sizes a chosen window from the helper's window list, so small windows are not upscaled. */
-const chosenPixels = async (key: WindowKey): Promise<Size> => {
+type ListedWindow = Awaited<ReturnType<typeof openWindows>>[number];
+
+/** The helper's window list by window key, for sizes, app names and origins. Empty when it fails. */
+const listedWindows = async (): Promise<Map<WindowKey, ListedWindow>> => {
   try {
     const windows = await openWindows({
       accessibilityPermission: false,
       screenRecordingPermission: true,
     });
 
-    const found = windows.find(
-      (item) => nativeWindowKey(capturePlatform, item.id) === key
-    );
+    return new Map(
+      windows.flatMap((item) => {
+        const key = nativeWindowKey(capturePlatform, item.id);
 
-    return found === undefined
-      ? cursorDisplayPixels()
-      : geometry(found.bounds).pixels;
+        return key === null ? [] : [[key, item] as const];
+      })
+    );
   } catch {
-    return cursorDisplayPixels();
+    return new Map();
   }
 };
+
+/** One box that fits every chosen window at full resolution, so the batch lists sources once. */
+const batchPixels = (sizes: readonly Size[]): Size =>
+  sizes.length === 0
+    ? cursorDisplayPixels()
+    : {
+        height: Math.max(...sizes.map((size) => size.height)),
+        width: Math.max(...sizes.map((size) => size.width)),
+      };
 
 const nonEmpty = (value: string | undefined) =>
   value === undefined || value.trim() === "" ? null : value;
@@ -133,6 +145,9 @@ const toView = (
     appName: string | null;
     boundsDip: Rectangle | null;
     fallbackTitle: string | null;
+    origin: ViewOrigin | null;
+    /** The window's own pixels, when the source was listed at a larger, shared size. */
+    fit?: Size | undefined;
   }
 ): CapturedView | null => {
   if (source.thumbnail.isEmpty()) {
@@ -140,7 +155,26 @@ const toView = (
   }
 
   const capturedAt = new Date();
-  const size = source.thumbnail.getSize();
+  const listed = source.thumbnail.getSize();
+
+  const scale =
+    extra.fit === undefined
+      ? 1
+      : Math.min(
+          extra.fit.width / listed.width,
+          extra.fit.height / listed.height
+        );
+
+  // Resizing by width alone keeps the aspect ratio.
+  const image =
+    scale < 1
+      ? source.thumbnail.resize({
+          quality: "best",
+          width: Math.max(1, Math.round(listed.width * scale)),
+        })
+      : source.thumbnail;
+
+  const size = image.getSize();
 
   return {
     acquisition,
@@ -149,11 +183,43 @@ const toView = (
     capturedAt,
     height: size.height,
     id: newViewId(),
-    png: source.thumbnail.toPNG(),
+    origin: extra.origin,
+    png: image.toPNG(),
     sampledAt,
     title: nonEmpty(source.name) ?? extra.fallbackTitle,
     width: size.width,
   };
+};
+
+/**
+ * The page or file of the window the probe found. Browsers' addresses come from a second probe
+ * that may read them; it counts only if the same window is still in front.
+ */
+const foregroundOrigin = async (
+  probed: NonNullable<Awaited<ReturnType<typeof activeWindow>>>
+): Promise<ViewOrigin | null> => {
+  let knownUrl: string | undefined;
+
+  if (canReadOrigins()) {
+    try {
+      const again = await activeWindow({
+        accessibilityPermission: true,
+        screenRecordingPermission: true,
+      });
+
+      knownUrl =
+        again?.id === probed.id && "url" in again ? again.url : undefined;
+    } catch {
+      knownUrl = undefined;
+    }
+  }
+
+  return readOrigin({
+    knownUrl,
+    ownerPath: probed.owner.path,
+    pid: probed.owner.processId,
+    title: nonEmpty(probed.title),
+  });
 };
 
 export class WindowCapturer {
@@ -285,6 +351,9 @@ export class WindowCapturer {
     const listed = performance.now();
     let sources: DesktopCapturerSource[];
 
+    // Read while the sources are listed, so remembering the page or file adds no wait.
+    const origin = foregroundOrigin(probed);
+
     try {
       sources = await this.#windowSources(pixels);
     } catch (error) {
@@ -338,6 +407,7 @@ export class WindowCapturer {
               appName: nonEmpty(probed.owner.name),
               boundsDip: dip,
               fallbackTitle: nonEmpty(probed.title),
+              origin: await origin,
             }
           );
 
@@ -350,51 +420,100 @@ export class WindowCapturer {
     return { kind: "captured", view };
   }
 
-  /** Low-resolution previews for the explicit chooser. Never persisted. */
+  /** Low-resolution previews for the window list, with each window's app. Never persisted. */
   async listCandidates(): Promise<readonly FallbackCandidate[]> {
-    const sources = await this.#windowSources(CANDIDATE_THUMB);
+    const [sources, windows] = await Promise.all([
+      this.#windowSources(CANDIDATE_THUMB),
+      listedWindows(),
+    ]);
 
     return sources
       .filter((source) => !source.thumbnail.isEmpty())
-      .map((source) => ({
-        id: newCandidateId(),
-        sourceId: source.id,
-        thumb: source.thumbnail.toPNG(),
-        title: nonEmpty(source.name),
-      }));
+      .map((source) => {
+        const key = parseWindowSourceId(capturePlatform, source.id);
+        const listed = key === null ? undefined : windows.get(key);
+
+        return {
+          appName: nonEmpty(listed?.owner.name),
+          id: newCandidateId(),
+          sourceId: source.id,
+          thumb: source.thumbnail.toPNG(),
+          title: nonEmpty(source.name),
+        };
+      });
   }
 
-  /** Re-lists sources and captures the chosen one only if its exact id still exists. */
+  /**
+   * Captures the chosen windows together: one listing of sources, at a size that fits the
+   * largest, then each image scaled back to its own window. A window whose exact id is gone
+   * counts as missing.
+   */
   async captureChosen(
-    candidate: FallbackCandidate,
+    candidates: readonly FallbackCandidate[],
     reason: FallbackReason
   ): Promise<CaptureOutcome> {
     const sampledAt = new Date();
-    const key = parseWindowSourceId(capturePlatform, candidate.sourceId);
+    const windows = await listedWindows();
 
-    const sources = await this.#windowSources(
-      key === null ? cursorDisplayPixels() : await chosenPixels(key)
-    );
+    const chosen = candidates.map((candidate) => {
+      const key = parseWindowSourceId(capturePlatform, candidate.sourceId);
+      const listed = key === null ? undefined : windows.get(key);
 
-    const source = sources.find((item) => item.id === candidate.sourceId);
+      return {
+        candidate,
+        key,
+        listed,
+        pixels:
+          listed === undefined ? undefined : geometry(listed.bounds).pixels,
+      };
+    });
 
-    const acquisition: Acquisition = {
-      kind: "fallback",
-      reason,
-      windowKeyAtCapture: key,
+    const [sources, origins] = await Promise.all([
+      this.#windowSources(
+        batchPixels(chosen.flatMap((item) => item.pixels ?? []))
+      ),
+      Promise.all(
+        chosen.map((item) =>
+          item.listed === undefined
+            ? null
+            : readOrigin({
+                ownerPath: item.listed.owner.path,
+                pid: item.listed.owner.processId,
+                title: nonEmpty(item.listed.title),
+              })
+        )
+      ),
+    ]);
+
+    const views = chosen.flatMap((item, index) => {
+      const source = sources.find(
+        (found) => found.id === item.candidate.sourceId
+      );
+
+      const view =
+        source === undefined
+          ? null
+          : toView(
+              source,
+              sampledAt,
+              { kind: "fallback", reason, windowKeyAtCapture: item.key },
+              {
+                appName:
+                  nonEmpty(item.listed?.owner.name) ?? item.candidate.appName,
+                boundsDip: null,
+                fallbackTitle: item.candidate.title,
+                fit: item.pixels,
+                origin: origins[index] ?? null,
+              }
+            );
+
+      return view === null ? [] : [view];
+    });
+
+    return {
+      kind: "capturedMany",
+      missing: candidates.length - views.length,
+      views,
     };
-
-    const view =
-      source === undefined
-        ? null
-        : toView(source, sampledAt, acquisition, {
-            appName: null,
-            boundsDip: null,
-            fallbackTitle: candidate.title,
-          });
-
-    return view === null
-      ? { kind: "needsChoice", near: null, reason: "vanished" }
-      : { kind: "captured", view };
   }
 }

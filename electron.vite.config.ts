@@ -21,6 +21,7 @@ export default defineConfig({
         input: {
           library: path.join(renderer, "library.html"),
           popover: path.join(renderer, "popover.html"),
+          settings: path.join(renderer, "settings.html"),
         },
       },
     },

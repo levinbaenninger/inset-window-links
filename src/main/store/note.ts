@@ -1,7 +1,6 @@
-import { isBlank } from "../../shared/text";
 import type { CaptureRecord } from "./schema";
 
-/** Plain text for the clipboard: the thought first, then the numbered sources it connects. */
+/** Plain text for the clipboard: the thought, its to-dos as a checklist, then the sources it connects. */
 export const formatNote = (
   record: CaptureRecord,
   locale: string,
@@ -25,17 +24,27 @@ export const formatNote = (
         ? ", chosen from the window list"
         : "";
 
-    return `${index + 1}. ${view.title ?? "Untitled window"}${app}, captured ${time.format(new Date(view.capturedAt))}${chosen}`;
+    const where = view.origin?.url ?? view.origin?.document ?? null;
+    const link = where === null ? "" : `\n   ${where}`;
+
+    return `${index + 1}. ${view.title ?? "Untitled window"}${app}, captured ${time.format(new Date(view.capturedAt))}${chosen}${link}`;
   });
 
-  const nextStep = isBlank(record.nextStep)
-    ? []
-    : [`Next step: ${record.nextStep.trim()}`, ""];
+  const todos =
+    record.todos.length === 0
+      ? []
+      : [
+          "To do:",
+          ...record.todos.map(
+            (todo) => `- [${todo.done ? "x" : " "}] ${todo.text}`
+          ),
+          "",
+        ];
 
   return [
     record.relationship.trim(),
     "",
-    ...nextStep,
+    ...todos,
     "Sources:",
     ...sources,
   ].join("\n");

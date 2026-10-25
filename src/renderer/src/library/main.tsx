@@ -4,7 +4,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { z } from "zod";
 
-import { libraryApi } from "@/lib/bridge";
+import { libraryApi, markPlatform } from "@/lib/bridge";
 import { followSystemTheme } from "@/lib/theme";
 
 import { router } from "./router";
@@ -14,7 +14,7 @@ const RouteSchema = z.string().regex(/^\/[\w/-]{0,120}$/u);
 
 followSystemTheme();
 
-document.documentElement.dataset["platform"] = libraryApi().platform;
+markPlatform();
 
 libraryApi().onChanged(() => {
   void router.invalidate();

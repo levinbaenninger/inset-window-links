@@ -4,57 +4,65 @@ import { app, BrowserWindow, nativeTheme, screen } from "electron";
 
 import { pushChannels } from "../../shared/channels";
 import type { DraftSnapshot } from "../../shared/dto";
+import type { Settings } from "../../shared/settings";
 import type { PopoverAnchor } from "../session/state";
-import type { Corner } from "./placement";
-import { placePopover } from "./placement";
+import type { Point } from "./placement";
+import { centerPanel, contains, keepInside } from "./placement";
 import type { RendererPage } from "./renderer-page";
 import { securePreferences } from "./renderer-page";
 import { themeColors } from "./theme";
 
-const WIDTH = 380;
-const MIN_HEIGHT = 160;
-const MAX_HEIGHT = 560;
+const WIDTH = 520;
+const MIN_HEIGHT = 200;
+const MAX_HEIGHT = 720;
 const EDGE = 16;
-const GAP = 12;
 const PAINT_CAP_MS = 200;
 
-/** Without a source window, Windows puts tray popups above the notification area. */
-const CORNER: Corner =
-  process.platform === "win32" ? "bottom-right" : "top-right";
+const mac = process.platform === "darwin";
 
 const workAreaFor = (anchor: PopoverAnchor) =>
   anchor.kind === "window"
     ? screen.getDisplayMatching(anchor.bounds).workArea
     : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
 
+export interface PanelOptions {
+  /**
+   * Read just before a hidden panel shows, and again on hide. When the library window has
+   * focus at either point, hide() leaves focus with it. Otherwise hide() hides the app, so
+   * the app the user was in becomes active again, even with the library open behind it.
+   */
+  otherWindowFocused: () => boolean;
+  settings: () => Settings;
+}
+
 /**
- * The one small capture window. It owns shown versus hidden: blur hides it, and hiding never
+ * The capture panel. It opens centred on the screen being worked on, stays open when another
+ * window is clicked (unless the setting says otherwise), floats above other windows while
+ * shown, and can be dragged by its header; it reopens where it was dragged to. Hiding never
  * touches the draft.
  */
 export class PopoverWindow {
   readonly #win: BrowserWindow;
   readonly #page: RendererPage;
-  #height = 280;
-  /** Set while shown in the bottom corner, so growing and shrinking keep the bottom edge put. */
-  #bottomAnchored = false;
+  readonly #options: PanelOptions;
+  #height = 360;
   #hiding = false;
-  readonly #otherWindowFocused: () => boolean;
+  #placing = false;
   #returnToOtherWindow = false;
+  /** Where the user dragged the panel, kept for this run. */
+  #dragged: Point | null = null;
   readonly #hiddenListeners = new Set<() => void>();
 
-  /**
-   * otherWindowFocused is read just before a hidden popover shows, and again on hide. When
-   * the library window has focus at either point, hide() leaves focus with it. Otherwise
-   * hide() hides the app, so the app the user was in becomes active again, even with the
-   * library open behind it.
-   */
-  constructor(page: RendererPage, otherWindowFocused: () => boolean) {
+  constructor(page: RendererPage, options: PanelOptions) {
     this.#page = page;
-    this.#otherWindowFocused = otherWindowFocused;
-    this.#win = new BrowserWindow({
-      backgroundColor: themeColors().background,
+    this.#options = options;
+
+    const window: Electron.BrowserWindowConstructorOptions = {
+      // macOS draws the window's translucent material behind the page, as in Inset Shelf.
+      backgroundColor: mac ? "#00000000" : themeColors().background,
       frame: false,
       fullscreenable: false,
+      hasShadow: true,
       height: this.#height,
       maximizable: false,
       minimizable: false,
@@ -63,22 +71,45 @@ export class PopoverWindow {
       show: false,
       skipTaskbar: true,
       title: "Inset Window Links",
+      transparent: mac,
       webPreferences: securePreferences("popover"),
       width: WIDTH,
-    });
+    };
 
-    if (process.platform === "darwin") {
+    if (mac) {
+      window.vibrancy = "sidebar";
+      // Stays clear rather than grey while another app has focus, since the panel stays open.
+      window.visualEffectState = "active";
+    }
+
+    this.#win = new BrowserWindow(window);
+
+    if (mac) {
       this.#win.setVisibleOnAllWorkspaces(true, {
         skipTransformProcessType: true,
         visibleOnFullScreen: true,
       });
     }
 
-    nativeTheme.on("updated", () =>
-      this.#win.setBackgroundColor(themeColors().background)
-    );
+    nativeTheme.on("updated", () => {
+      if (!mac) {
+        this.#win.setBackgroundColor(themeColors().background);
+      }
+    });
+
+    this.#win.on("moved", () => {
+      if (!this.#placing && this.#win.isVisible()) {
+        const { x, y } = this.#win.getBounds();
+
+        this.#dragged = { x, y };
+      }
+    });
 
     this.#win.on("blur", () => {
+      if (!this.#options.settings().hideOnClickAway) {
+        return;
+      }
+
       const hideIfStillBlurred = () => {
         if (!this.#hiding && this.#win.isVisible() && !this.#win.isFocused()) {
           this.hide();
@@ -86,7 +117,7 @@ export class PopoverWindow {
       };
 
       // On macOS a click into the library window has made it key one tick later, and hide() asks.
-      if (process.platform === "darwin") {
+      if (mac) {
         setImmediate(hideIfStillBlurred);
       } else {
         hideIfStillBlurred();
@@ -118,29 +149,38 @@ export class PopoverWindow {
     );
   }
 
+  #setBounds(bounds: Electron.Rectangle) {
+    this.#placing = true;
+    this.#win.setBounds(bounds);
+    this.#placing = false;
+  }
+
   #place(anchor: PopoverAnchor) {
     if (!this.#win.isVisible()) {
-      this.#returnToOtherWindow = this.#otherWindowFocused();
+      this.#returnToOtherWindow = this.#options.otherWindowFocused();
     }
 
     const workArea = workAreaFor(anchor);
     const size = { height: this.#clampedHeight(workArea.height), width: WIDTH };
+    const dragged = this.#dragged;
 
-    const source = anchor.kind === "window" ? anchor.bounds : null;
-
-    this.#bottomAnchored = source === null && CORNER === "bottom-right";
-    this.#win.setBounds(placePopover(source, size, workArea, CORNER));
+    this.#setBounds(
+      dragged !== null && contains(workArea, dragged)
+        ? keepInside(dragged, size, workArea)
+        : centerPanel(size, workArea)
+    );
   }
 
   showAt(anchor: PopoverAnchor): void {
-    if (!(anchor.kind === "keep" && this.#win.isVisible())) {
+    // A shown panel stays where it is: it is not chasing the window just added.
+    if (!this.#win.isVisible()) {
       this.#place(anchor);
     }
 
     this.#activate();
   }
 
-  /** Shows the popover where it will land without taking focus from the window being captured. */
+  /** Shows the panel where it will land without taking focus from the window being captured. */
   preview(anchor: PopoverAnchor): void {
     if (this.#win.isVisible()) {
       return;
@@ -153,18 +193,29 @@ export class PopoverWindow {
   }
 
   /**
-   * Like a tray flyout, the shown popover stays above other always-on-top windows instead of opening
-   * under them. It is topmost only while shown, so hiding hands focus to a normal window.
+   * Floats above other windows while shown, when the setting allows; on Windows it also stays
+   * above the taskbar's flyouts, like a tray flyout. Hiding hands focus to a normal window.
    */
   #raise() {
     if (process.platform === "win32") {
       this.#win.setAlwaysOnTop(true, "pop-up-menu");
+
+      return;
+    }
+
+    this.#win.setAlwaysOnTop(this.#options.settings().floatOnTop, "floating");
+  }
+
+  /** Applies a changed float setting to a shown panel. */
+  refreshFloat(): void {
+    if (this.#win.isVisible()) {
+      this.#raise();
     }
   }
 
   /**
    * Resolves once the page has drawn two frames since now, or after a short cap. A caller about to
-   * block the main process waits on this, so the popover is on screen before the wait starts.
+   * block the main process waits on this, so the panel is on screen before the wait starts.
    */
   async painted(): Promise<void> {
     if (!this.#win.isVisible()) {
@@ -189,7 +240,7 @@ export class PopoverWindow {
   }
 
   #activate() {
-    if (process.platform === "darwin") {
+    if (mac) {
       app.focus({ steal: true });
     }
 
@@ -213,7 +264,7 @@ export class PopoverWindow {
       return;
     }
 
-    // Windows does not hand activation on when the active popover hides, so the user's window would
+    // Windows does not hand activation on when the active panel hides, so the user's window would
     // stay inactive until clicked. Blurring first activates the next window in Z-order: the one
     // they were working in.
     if (process.platform === "win32") {
@@ -226,12 +277,16 @@ export class PopoverWindow {
       }
     }
 
+    const hadFocus = this.#win.isFocused();
+
     this.#win.hide();
 
+    // Only a panel the user was in hands focus back; one left open behind their work does not.
     if (
-      process.platform === "darwin" &&
+      mac &&
+      hadFocus &&
       !this.#returnToOtherWindow &&
-      !this.#otherWindowFocused()
+      !this.#options.otherWindowFocused()
     ) {
       app.hide();
     }
@@ -247,16 +302,13 @@ export class PopoverWindow {
     const bounds = this.#win.getBounds();
     const { workArea } = screen.getDisplayMatching(bounds);
     const next = this.#clampedHeight(workArea.height);
-    const bottom = workArea.y + workArea.height;
+    const bottom = workArea.y + workArea.height - EDGE;
 
-    const y = this.#bottomAnchored
-      ? bottom - GAP - next
-      : Math.min(bounds.y, bottom - next);
-
-    this.#win.setBounds({
+    // The top edge stays put while the panel grows, unless that would run it off the screen.
+    this.#setBounds({
       ...bounds,
       height: next,
-      y: Math.max(workArea.y, y),
+      y: Math.max(workArea.y, Math.min(bounds.y, bottom - next)),
     });
   }
 

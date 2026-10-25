@@ -7,17 +7,32 @@ import { securePreferences } from "./renderer-page";
 import { themeColors, titleBarOverlay } from "./theme";
 
 const windows = process.platform === "win32";
+const mac = process.platform === "darwin";
 
-/** On Windows the stock title bar, icon, and File/Edit/View menu give way to caption buttons over the page. */
-const chrome = (): Electron.BrowserWindowConstructorOptions =>
-  windows
+/**
+ * On Windows the stock title bar, icon, and File/Edit/View menu give way to caption buttons over
+ * the page. On macOS the traffic lights sit in the page's own header, over the system's
+ * translucent sidebar material, as in Inset Shelf.
+ */
+const chrome = (): Electron.BrowserWindowConstructorOptions => {
+  if (windows) {
+    return {
+      autoHideMenuBar: true,
+      icon: windowIcon(),
+      titleBarOverlay: titleBarOverlay(),
+      titleBarStyle: "hidden",
+    };
+  }
+
+  return mac
     ? {
-        autoHideMenuBar: true,
-        icon: windowIcon(),
-        titleBarOverlay: titleBarOverlay(),
-        titleBarStyle: "hidden",
+        titleBarStyle: "hiddenInset",
+        trafficLightPosition: { x: 16, y: 18 },
+        vibrancy: "sidebar",
+        visualEffectState: "followWindow",
       }
     : {};
+};
 
 /** The secondary Recent Captures window. Created only on explicit request. */
 export class LibraryWindow {
@@ -37,7 +52,9 @@ export class LibraryWindow {
         return;
       }
 
-      win.setBackgroundColor(themeColors().background);
+      if (!mac) {
+        win.setBackgroundColor(themeColors().background);
+      }
 
       if (windows) {
         win.setTitleBarOverlay(titleBarOverlay());
@@ -79,14 +96,14 @@ export class LibraryWindow {
     }
 
     const win = new BrowserWindow({
-      backgroundColor: themeColors().background,
-      height: 700,
-      minHeight: 420,
-      minWidth: 560,
+      backgroundColor: mac ? "#00000000" : themeColors().background,
+      height: 680,
+      minHeight: 440,
+      minWidth: 720,
       show: false,
       title: "Recent Captures",
       webPreferences: securePreferences("library"),
-      width: 960,
+      width: 1040,
       ...chrome(),
     });
 
@@ -128,6 +145,16 @@ export class LibraryWindow {
 
   notifyChanged(): void {
     this.window()?.webContents.send(pushChannels.libraryChanged);
+  }
+
+  /** Asks the page to focus its search field. */
+  find(): void {
+    this.open();
+    this.window()?.webContents.send(pushChannels.find);
+  }
+
+  close(): void {
+    this.window()?.close();
   }
 
   mediaSourceId(): string | null {

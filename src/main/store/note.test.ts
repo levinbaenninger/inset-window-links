@@ -7,9 +7,12 @@ import type { CaptureRecord } from "./schema";
 const record: CaptureRecord = {
   createdAt: "2026-10-21T14:05:00.000Z",
   id: DraftIdSchema.parse("6f1c2b52-3d4e-4f60-8a71-92b3c4d5e6f7"),
-  nextStep: "  Ask Dana before Friday ",
   relationship: "The cap in the budget sheet rules out the quote in this mail.",
-  schemaVersion: 1,
+  schemaVersion: 2,
+  todos: [
+    { done: false, id: "a", text: "Ask Dana before Friday" },
+    { done: true, id: "b", text: "Find the old quote" },
+  ],
   updatedAt: "2026-10-21T14:05:00.000Z",
   views: [
     {
@@ -18,6 +21,11 @@ const record: CaptureRecord = {
       capturedAt: "2026-10-21T14:02:11.000Z",
       height: 900,
       id: ViewIdSchema.parse("0a000000-0000-4000-8000-000000000001"),
+      origin: {
+        appPath: "/Applications/Numbers.app",
+        document: "/Users/dana/Budget 2027.numbers",
+        url: null,
+      },
       sampledAt: "2026-10-21T14:02:10.800Z",
       title: "Budget 2027",
       width: 1200,
@@ -32,6 +40,7 @@ const record: CaptureRecord = {
       capturedAt: "2026-10-21T14:04:30.000Z",
       height: 700,
       id: ViewIdSchema.parse("0a000000-0000-4000-8000-000000000002"),
+      origin: null,
       sampledAt: "2026-10-21T14:04:29.000Z",
       title: null,
       width: 1000,
@@ -40,24 +49,27 @@ const record: CaptureRecord = {
 };
 
 describe(formatNote, () => {
-  it("puts the thought first, then the next step and numbered sources", () => {
+  it("puts the thought first, then the to-dos and numbered sources", () => {
     expect(formatNote(record, "en-GB", "UTC")).toBe(
       [
         "The cap in the budget sheet rules out the quote in this mail.",
         "",
-        "Next step: Ask Dana before Friday",
+        "To do:",
+        "- [ ] Ask Dana before Friday",
+        "- [x] Find the old quote",
         "",
         "Sources:",
         "1. Budget 2027 (Numbers), captured 21 Oct 2026, 14:02",
+        "   /Users/dana/Budget 2027.numbers",
         "2. Untitled window, captured 21 Oct 2026, 14:04, chosen from the window list",
       ].join("\n")
     );
   });
 
-  it("omits a blank next step", () => {
+  it("omits an empty to-do list", () => {
     expect(
       formatNote(
-        { ...record, nextStep: " ", views: record.views.slice(0, 1) },
+        { ...record, todos: [], views: record.views.slice(1) },
         "en-GB",
         "UTC"
       )
@@ -66,7 +78,7 @@ describe(formatNote, () => {
         "The cap in the budget sheet rules out the quote in this mail.",
         "",
         "Sources:",
-        "1. Budget 2027 (Numbers), captured 21 Oct 2026, 14:02",
+        "1. Untitled window, captured 21 Oct 2026, 14:04, chosen from the window list",
       ].join("\n")
     );
   });

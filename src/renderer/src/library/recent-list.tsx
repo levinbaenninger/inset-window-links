@@ -1,20 +1,18 @@
-import { HelpCircleIcon } from "@hugeicons/core-free-icons";
+import { Cancel01Icon, Search01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { getRouteApi, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { cn } from "cn";
+import type { RefObject } from "react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Kbd } from "@/components/ui/kbd";
-import { formatClock, formatDay, plural, viewTitle } from "@/lib/format";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import { formatClock, formatDay, plural } from "@/lib/format";
 
-import type {
-  CaptureListItem,
-  ListedView,
-  ShortcutStatus,
-} from "../../../shared/dto";
-
-const route = getRouteApi("/");
+import type { CaptureListItem, ListedView } from "../../../shared/dto";
 
 type CurrentItem = Extract<CaptureListItem, { kind: "current" }>;
 
@@ -26,7 +24,7 @@ const Thumbnail = ({ views }: { views: readonly ListedView[] }) => {
   return (
     <span
       aria-hidden
-      className="bg-muted relative h-12 w-20 shrink-0 overflow-hidden rounded-md border"
+      className="border-foreground/10 bg-muted relative mt-0.5 h-10 w-14 shrink-0 overflow-hidden rounded-md border"
     >
       {first !== undefined && (
         <img
@@ -37,7 +35,7 @@ const Thumbnail = ({ views }: { views: readonly ListedView[] }) => {
         />
       )}
       {more > 0 && (
-        <span className="bg-background/85 absolute right-1 bottom-1 rounded-sm px-1 text-xs font-medium tabular-nums">
+        <span className="bg-background/90 absolute right-0.5 bottom-0.5 rounded-sm px-1 text-xs leading-4 font-medium tabular-nums">
           +{more}
         </span>
       )}
@@ -45,41 +43,63 @@ const Thumbnail = ({ views }: { views: readonly ListedView[] }) => {
   );
 };
 
-const CurrentRow = ({ item }: { item: CurrentItem }) => (
+/** "2 of 3 done", or nothing when the capture has no next steps. */
+const progress = (item: CurrentItem): string | null => {
+  if (item.todos.length === 0) {
+    return null;
+  }
+
+  const done = item.todos.filter((todo) => todo.done).length;
+
+  return done === item.todos.length
+    ? "All done"
+    : `${done} of ${item.todos.length} done`;
+};
+
+const CurrentRow = ({
+  item,
+  active,
+}: {
+  item: CurrentItem;
+  active: boolean;
+}) => (
   <li>
     <Link
-      className="hover:bg-muted focus-visible:ring-ring/50 -mx-3 flex items-start gap-4 rounded-lg p-3 outline-none focus-visible:ring-3"
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "focus-visible:ring-ring/50 flex items-start gap-2.5 rounded-lg px-2 py-2 outline-none focus-visible:ring-3",
+        active ? "bg-foreground/10" : "hover:bg-foreground/5"
+      )}
       data-testid="recent-item"
       params={{ captureId: item.id }}
       to="/captures/$captureId"
     >
       <Thumbnail views={item.views} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="line-clamp-2 font-medium">{item.relationship}</span>
-        {item.nextStep.trim() !== "" && (
-          <span className="text-muted-foreground line-clamp-1 text-sm">
-            Next: {item.nextStep}
-          </span>
-        )}
-        <span className="text-muted-foreground truncate text-xs">
-          {plural(item.views.length, "view")}:{" "}
-          {item.views.map((view) => viewTitle(view.title)).join(", ")}
+        <span className="line-clamp-2 text-sm leading-snug font-medium">
+          {item.relationship}
         </span>
-      </span>
-      <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-        {formatClock(item.createdAt)}
+        <span className="text-muted-foreground truncate text-xs tabular-nums">
+          {[
+            formatClock(item.createdAt),
+            plural(item.views.length, "view"),
+            progress(item),
+          ]
+            .filter((part) => part !== null)
+            .join(" · ")}
+        </span>
       </span>
     </Link>
   </li>
 );
 
 const KeptRow = ({ children }: { children: string }) => (
-  <li className="text-muted-foreground rounded-lg border border-dashed p-3">
+  <li className="text-muted-foreground border-foreground/15 rounded-lg border border-dashed px-2.5 py-2 text-xs">
     {children}
   </li>
 );
 
-const Row = ({ item }: { item: CaptureListItem }) => {
+const Row = ({ item, active }: { item: CaptureListItem; active: boolean }) => {
   switch (item.kind) {
     case "unsupported": {
       return (
@@ -98,20 +118,20 @@ const Row = ({ item }: { item: CaptureListItem }) => {
     }
 
     default: {
-      return <CurrentRow item={item} />;
+      return <CurrentRow active={active} item={item} />;
     }
   }
 };
 
-const matches = (item: CaptureListItem, query: string): boolean => {
+export const matches = (item: CaptureListItem, query: string): boolean => {
   if (item.kind !== "current") {
     return query === "";
   }
 
   const haystack = [
     item.relationship,
-    item.nextStep,
-    ...item.views.map((view) => view.title ?? ""),
+    ...item.todos.map((todo) => todo.text),
+    ...item.views.flatMap((view) => [view.title ?? "", view.appName ?? ""]),
   ]
     .join("\n")
     .toLocaleLowerCase();
@@ -137,100 +157,103 @@ const byDay = (items: readonly CaptureListItem[]) => {
   return groups;
 };
 
-const FirstRun = ({ shortcut }: { shortcut: ShortcutStatus }) => (
-  <section
-    className="flex flex-col gap-2 rounded-lg border border-dashed p-6"
-    data-testid="recent-empty"
-  >
-    <h2 className="font-medium">No captures yet</h2>
-    <ol className="text-muted-foreground flex list-inside list-decimal flex-col gap-1">
-      <li>
-        In the window you want to keep, press{" "}
-        {shortcut.kind === "registered" ? (
-          <Kbd>{shortcut.label}</Kbd>
-        ) : (
-          "Add View from Window List in the menu bar"
-        )}
-        .
-      </li>
-      <li>Switch to the next window and press it again to add that view.</li>
-      <li>Write what connects them, then save.</li>
-    </ol>
-    <Link
-      className="text-primary self-start text-sm underline-offset-4 hover:underline"
-      to="/welcome"
-    >
-      More about how Inset works
-    </Link>
-  </section>
+export const SearchField = ({
+  query,
+  onQuery,
+  field,
+}: {
+  query: string;
+  onQuery: (query: string) => void;
+  field: RefObject<HTMLInputElement | null>;
+}) => (
+  <InputGroup>
+    <InputGroupAddon>
+      <HugeiconsIcon icon={Search01Icon} />
+    </InputGroupAddon>
+    <InputGroupInput
+      aria-label="Search captures"
+      onChange={(event) => onQuery(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && query !== "") {
+          event.preventDefault();
+          onQuery("");
+        }
+      }}
+      placeholder="Search"
+      ref={field}
+      type="text"
+      value={query}
+    />
+    {query === "" ? null : (
+      <InputGroupAddon align="inline-end">
+        <InputGroupButton
+          aria-label="Clear search"
+          onClick={() => {
+            onQuery("");
+            field.current?.focus();
+          }}
+          size="icon-xs"
+        >
+          <HugeiconsIcon icon={Cancel01Icon} />
+        </InputGroupButton>
+      </InputGroupAddon>
+    )}
+  </InputGroup>
 );
 
-export const RecentList = () => {
-  const { items, shortcut } = route.useLoaderData();
-  const [query, setQuery] = useState("");
+/** The sidebar's list: captures by day, newest first, filtered by the search. */
+export const RecentList = ({
+  items,
+  query,
+  activeId,
+}: {
+  items: readonly CaptureListItem[];
+  query: string;
+  activeId: string | undefined;
+}) => {
   const needle = query.trim().toLocaleLowerCase();
   const shown = items.filter((item) => matches(item, needle));
-  const saved = items.filter((item) => item.kind === "current").length;
+
+  if (items.length === 0) {
+    return (
+      <p
+        className="text-muted-foreground px-2 py-6 text-center text-xs"
+        data-testid="recent-empty"
+      >
+        No captures yet
+      </p>
+    );
+  }
+
+  if (shown.length === 0) {
+    return (
+      <p
+        className="text-muted-foreground px-2 py-6 text-center text-xs"
+        data-testid="recent-no-match"
+      >
+        No captures match “{query.trim()}”
+      </p>
+    );
+  }
 
   return (
-    <main className="win:pt-2 mx-auto flex max-w-3xl flex-col gap-6 p-6">
-      <header className="flex items-center justify-between gap-4">
-        <div className="flex items-baseline gap-2.5">
-          <h1 className="font-heading text-xl font-semibold">
-            Recent captures
-          </h1>
-          {saved > 0 && (
-            <span className="text-muted-foreground text-sm tabular-nums">
-              {plural(saved, "capture")}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          {saved > 0 && (
-            <Input
-              aria-label="Search captures"
-              className="w-64"
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search text and window titles"
-              type="search"
-              value={query}
-            />
-          )}
-          <Button
-            aria-label="How Inset works"
-            asChild
-            size="icon"
-            title="How Inset works"
-            variant="ghost"
-          >
-            <Link to="/welcome">
-              <HugeiconsIcon icon={HelpCircleIcon} />
-            </Link>
-          </Button>
-        </div>
-      </header>
-      {items.length === 0 && <FirstRun shortcut={shortcut} />}
-      {items.length > 0 && shown.length === 0 && (
-        <p className="text-muted-foreground" data-testid="recent-no-match">
-          No captures match “{query.trim()}”.
-        </p>
-      )}
+    <>
       {byDay(shown).map((group) => (
         <section
           aria-label={group.day}
-          className="flex flex-col gap-1"
+          className="flex flex-col gap-0.5"
           key={group.day}
         >
-          <h2 className="text-muted-foreground text-xs font-medium">
+          <h2 className="text-muted-foreground px-2 pt-2 pb-1 text-xs font-medium">
             {group.day}
           </h2>
-          <ul className="flex flex-col">
+          <ul className="flex flex-col gap-0.5">
             {group.items.map((item) => (
-              <Row item={item} key={item.id} />
+              <Row active={item.id === activeId} item={item} key={item.id} />
             ))}
           </ul>
         </section>
       ))}
-    </main>
+    </>
   );
 };

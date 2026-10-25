@@ -1,7 +1,10 @@
+import path from "node:path";
+
 import type {
   ActivitySummary,
   CapturePlatform,
   DraftSnapshot,
+  OriginSummary,
   ShortcutStatus,
   ViewSummary,
 } from "../../shared/dto";
@@ -15,10 +18,48 @@ export const toSavedView = (view: CapturedView): SavedView => ({
   capturedAt: view.capturedAt.toISOString(),
   height: view.height,
   id: view.id,
+  origin: view.origin,
   sampledAt: view.sampledAt.toISOString(),
   title: view.title,
   width: view.width,
 });
+
+const host = (url: string): string => {
+  try {
+    return new URL(url).hostname.replace(/^www\./u, "");
+  } catch {
+    return url;
+  }
+};
+
+/** The most specific thing Reopen can bring back: the page, else the file, else the app. */
+export const originSummary = (view: SavedView): OriginSummary | null => {
+  const { origin } = view;
+
+  if (origin === null) {
+    return null;
+  }
+
+  if (origin.url !== null) {
+    return { detail: origin.url, kind: "page", label: host(origin.url) };
+  }
+
+  if (origin.document !== null) {
+    return {
+      detail: origin.document,
+      kind: "document",
+      label: path.basename(origin.document),
+    };
+  }
+
+  return origin.appPath === null
+    ? null
+    : {
+        detail: origin.appPath,
+        kind: "app",
+        label: view.appName ?? path.basename(origin.appPath, ".app"),
+      };
+};
 
 export const summarizeViews = (
   views: readonly SavedView[],
@@ -40,6 +81,7 @@ export const summarizeViews = (
       height: view.height,
       id: view.id,
       imageUrl: urlFor(view),
+      origin: originSummary(view),
       sameWindowAs: earlier >= 0 && earlier < index ? earlier + 1 : null,
       sampledAt: view.sampledAt,
       source:
@@ -65,6 +107,7 @@ const activitySummary = (state: SessionState): ActivitySummary => {
           activity.candidates === "loading"
             ? "loading"
             : activity.candidates.map((candidate) => ({
+                appName: candidate.appName,
                 id: candidate.id,
                 imageUrl: imageUrl({
                   candidateId: candidate.id,
