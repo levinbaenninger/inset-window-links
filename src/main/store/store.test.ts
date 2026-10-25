@@ -29,9 +29,9 @@ const newCapture = (): NewCapture => {
   const record: CaptureRecord = {
     createdAt: "2026-10-21T12:00:00.000Z",
     id: CAPTURE_ID,
-    nextStep: "Ask Dana",
     relationship: "The budget cap in the sheet limits the quote in the mail.",
-    schemaVersion: 1,
+    schemaVersion: 2,
+    todos: [{ done: false, id: "t1", text: "Ask Dana" }],
     updatedAt: "2026-10-21T12:00:00.000Z",
     views: VIEW_IDS.map((id, index) => ({
       acquisition: {
@@ -42,6 +42,7 @@ const newCapture = (): NewCapture => {
       capturedAt: `2026-10-21T11:5${index}:00.000Z`,
       height: 505,
       id,
+      origin: null,
       sampledAt: `2026-10-21T11:5${index}:00.000Z`,
       title: `Untitled ${index + 1}`,
       width: 603,
@@ -149,7 +150,13 @@ describe(CaptureStore, () => {
 
     const outcome = await store.updateText(
       CAPTURE_ID,
-      { nextStep: "", relationship: "Edited thought" },
+      {
+        relationship: "Edited thought",
+        todos: [
+          { done: false, id: "t1", text: " Ask Dana today " },
+          { done: false, id: "t2", text: "  " },
+        ],
+      },
       new Date("2026-10-22T08:00:00.000Z")
     );
 
@@ -160,10 +167,75 @@ describe(CaptureStore, () => {
     expect(
       entry?.kind === "current" && [
         entry.record.relationship,
-        entry.record.nextStep,
+        entry.record.todos,
         entry.record.updatedAt,
       ]
-    ).toStrictEqual(["Edited thought", "", "2026-10-22T08:00:00.000Z"]);
+    ).toStrictEqual([
+      "Edited thought",
+      [{ done: false, id: "t1", text: "Ask Dana today" }],
+      "2026-10-22T08:00:00.000Z",
+    ]);
+  });
+
+  it("checks a to-do off without touching the edit time", async () => {
+    const store = await CaptureStore.open(root, nodeStoreFs);
+
+    await store.publish(newCapture());
+
+    const outcomes = [
+      await store.setTodoDone(CAPTURE_ID, "t1", true),
+      await store.setTodoDone(CAPTURE_ID, "nope", true),
+    ];
+
+    const reopened = await reopen(root);
+    const entry = reopened.get(CAPTURE_ID);
+
+    expect(outcomes).toStrictEqual([{ kind: "ok" }, { kind: "missing" }]);
+    expect(
+      entry?.kind === "current" && [entry.record.todos, entry.record.updatedAt]
+    ).toStrictEqual([
+      [{ done: true, id: "t1", text: "Ask Dana" }],
+      "2026-10-21T12:00:00.000Z",
+    ]);
+  });
+
+  it("reads a version 1 record, turning its next step into to-dos, and writes version 2 on edit", async () => {
+    const { record } = newCapture();
+    const { todos: _todos, ...rest } = record;
+
+    const v1 = {
+      ...rest,
+      nextStep: "- [ ] Ask Dana\n\n- [x] Find the old quote\nCall the vendor",
+      schemaVersion: 1,
+      views: record.views.map(({ origin: _origin, ...view }) => view),
+    };
+
+    await mkdir(path.join(root, CAPTURE_ID, "views"), { recursive: true });
+    await writeFile(
+      path.join(root, CAPTURE_ID, "record.json"),
+      JSON.stringify(v1)
+    );
+
+    const store = await CaptureStore.open(root, nodeStoreFs);
+    const entry = store.get(CAPTURE_ID);
+
+    expect(entry?.kind === "current" && entry.record.todos).toStrictEqual([
+      { done: false, id: "v1-1", text: "Ask Dana" },
+      { done: true, id: "v1-2", text: "Find the old quote" },
+      { done: false, id: "v1-3", text: "Call the vendor" },
+    ]);
+    expect(
+      entry?.kind === "current" && entry.record.views[0]?.origin
+    ).toBeNull();
+
+    await store.setTodoDone(CAPTURE_ID, "v1-1", true);
+
+    const written: unknown = JSON.parse(
+      await readFile(path.join(root, CAPTURE_ID, "record.json"), "utf-8")
+    );
+
+    expect(written).toMatchObject({ schemaVersion: 2 });
+    expect(written).not.toHaveProperty("nextStep");
   });
 
   it("deletes by moving into the trash, and the record stays gone after a restart", async () => {
@@ -200,7 +272,7 @@ describe(CaptureStore, () => {
 
     const futureJson = JSON.stringify({
       id,
-      schemaVersion: 2,
+      schemaVersion: 3,
       thought: "from the future",
     });
 
@@ -213,18 +285,18 @@ describe(CaptureStore, () => {
     const outcomes = [
       await store.updateText(
         futureId,
-        { nextStep: "", relationship: "x" },
+        { relationship: "x", todos: [] },
         new Date()
       ),
       await store.remove(futureId),
     ];
 
     expect(store.list()).toStrictEqual([
-      { id, kind: "unsupported", version: 2 },
+      { id, kind: "unsupported", version: 3 },
     ]);
     expect(outcomes).toStrictEqual([
-      { kind: "readOnly", version: 2 },
-      { kind: "readOnly", version: 2 },
+      { kind: "readOnly", version: 3 },
+      { kind: "readOnly", version: 3 },
     ]);
     await expect(
       readFile(path.join(root, id, "record.json"), "utf-8")

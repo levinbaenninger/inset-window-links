@@ -4,10 +4,12 @@ import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
 import { app, clipboard, ClipboardItem, ipcMain, nativeImage } from "electron";
 import { z } from "zod";
 
+import type { SettingsApi } from "../../shared/api";
 import type {
   WindowRole,
   libraryChannels,
   popoverChannels,
+  settingsChannels,
 } from "../../shared/channels";
 import { channelName } from "../../shared/channels";
 import type { CaptureDetail, CaptureListItem } from "../../shared/dto";
@@ -16,8 +18,14 @@ import {
   DraftIdSchema,
   ViewIdSchema,
 } from "../../shared/ids";
-import { DraftTextSchema, MAX_RELATIONSHIP } from "../../shared/text";
+import { SettingsChangeSchema } from "../../shared/settings";
+import {
+  DraftTextSchema,
+  MAX_RELATIONSHIP,
+  TodoIdSchema,
+} from "../../shared/text";
 import { openScreenSettings } from "../capture/capturer";
+import { reopenOrigin } from "../reopen";
 import type { SessionController } from "../session/controller";
 import { summarizeViews } from "../session/snapshot";
 import { formatNote } from "../store/note";
@@ -104,13 +112,22 @@ const attachAll = <C>(
   }
 };
 
+export interface PopoverActions {
+  onHeight: (height: number) => void;
+  onDismiss: () => void;
+  openRecent: () => void;
+  openSettings: () => void;
+}
+
 export const registerPopoverChannels = (
   session: SessionController,
-  onHeight: (height: number) => void,
-  onDismiss: () => void,
+  actions: PopoverActions,
   trusted: TrustCheck
 ): void => {
   const table: Table<typeof popoverChannels> = {
+    addWindows: invoke(z.tuple([]), () =>
+      session.dispatch({ type: "chooserRequested" })
+    ),
     cancelChoice: invoke(z.tuple([]), () =>
       session.dispatch({ type: "choiceCancelled" })
     ),
@@ -118,21 +135,28 @@ export const registerPopoverChannels = (
       z.tuple([z.enum(["save", "discard", "cancel"])]),
       (choice) => session.chooseQuit(choice)
     ),
-    chooseSource: invoke(z.tuple([CandidateIdSchema]), (candidateId) =>
-      session.dispatch({ candidateId, type: "sourceChosen" })
+    chooseSources: invoke(
+      z.tuple([z.array(CandidateIdSchema).min(1).max(100)]),
+      (candidateIds) =>
+        session.dispatch({ candidateIds, type: "sourcesChosen" })
     ),
     discard: invoke(z.tuple([]), () =>
       session.dispatch({ type: "discardRequested" })
     ),
-    dismiss: send(z.tuple([]), onDismiss),
+    dismiss: send(z.tuple([]), actions.onDismiss),
     getDraft: invoke(z.tuple([]), () => session.snapshot()),
+    openRecent: send(z.tuple([]), actions.openRecent),
     openScreenSettings: invoke(z.tuple([]), () => openScreenSettings()),
+    openSettings: send(z.tuple([]), actions.openSettings),
     recheckPermission: invoke(z.tuple([]), () => session.recheckPermission()),
     relaunch: invoke(z.tuple([]), () => session.requestRelaunch()),
     removeView: invoke(z.tuple([ViewIdSchema]), (viewId) =>
       session.dispatch({ type: "viewRemoved", viewId })
     ),
-    reportHeight: send(z.tuple([z.number().int().min(40).max(4000)]), onHeight),
+    reportHeight: send(
+      z.tuple([z.number().int().min(40).max(4000)]),
+      actions.onHeight
+    ),
     save: invoke(z.tuple([DraftTextSchema]), (text) =>
       session.dispatch({ text, type: "saveRequested" })
     ),
@@ -155,9 +179,10 @@ const listItem = (entry: StoreEntry): CaptureListItem => {
     createdAt: record.createdAt,
     id: record.id,
     kind: "current",
-    nextStep: record.nextStep,
     relationship: record.relationship,
+    todos: record.todos,
     views: record.views.map((view) => ({
+      appName: view.appName,
       height: view.height,
       id: view.id,
       imageUrl: imageUrl({
@@ -181,8 +206,8 @@ const detail = (entry: StoreEntry | undefined): CaptureDetail | null => {
   return {
     createdAt: record.createdAt,
     id: record.id,
-    nextStep: record.nextStep,
     relationship: record.relationship,
+    todos: record.todos,
     updatedAt: record.updatedAt,
     views: summarizeViews(record.views, (view) =>
       imageUrl({ captureId: record.id, kind: "saved", viewId: view.id })
@@ -194,12 +219,20 @@ const EditedTextSchema = DraftTextSchema.extend({
   relationship: z.string().trim().min(1).max(MAX_RELATIONSHIP),
 });
 
+export interface LibraryActions {
+  startDrag: (file: string, icon: Electron.NativeImage) => void;
+  newCapture: () => void;
+  addWindows: () => void;
+  openSettings: () => void;
+}
+
 export const registerLibraryChannels = (
   store: CaptureStore,
-  startDrag: (file: string, icon: Electron.NativeImage) => void,
+  actions: LibraryActions,
   trusted: TrustCheck
 ): void => {
   const table: Table<typeof libraryChannels> = {
+    addWindows: send(z.tuple([]), actions.addWindows),
     copyImage: invoke(
       z.tuple([DraftIdSchema, ViewIdSchema]),
       async (captureId, viewId) => {
@@ -231,7 +264,7 @@ export const registerLibraryChannels = (
         const file = store.imagePath(captureId, viewId);
 
         if (file !== null) {
-          startDrag(
+          actions.startDrag(
             file,
             nativeImage.createFromPath(file).resize({ width: 96 })
           );
@@ -242,8 +275,35 @@ export const registerLibraryChannels = (
       detail(store.get(captureId))
     ),
     list: invoke(z.tuple([]), () => store.list().map(listItem)),
+    newCapture: send(z.tuple([]), actions.newCapture),
+    openSettings: send(z.tuple([]), actions.openSettings),
     remove: invoke(z.tuple([DraftIdSchema]), (captureId) =>
       store.remove(captureId)
+    ),
+    // Only ids cross from the page; what opens is read from the record here.
+    reopen: invoke(
+      z.tuple([DraftIdSchema, z.array(ViewIdSchema).min(1).max(100)]),
+      async (captureId, viewIds) => {
+        const entry = store.get(captureId);
+
+        const views =
+          entry?.kind === "current"
+            ? entry.record.views.filter((view) => viewIds.includes(view.id))
+            : [];
+
+        // One after another, so the windows come up in capture order.
+        const opened = await views.reduce<Promise<number>>(
+          async (count, view) =>
+            (await count) + ((await reopenOrigin(view.origin)) ? 1 : 0),
+          Promise.resolve(0)
+        );
+
+        return { failed: viewIds.length - opened };
+      }
+    ),
+    setTodoDone: invoke(
+      z.tuple([DraftIdSchema, TodoIdSchema, z.boolean()]),
+      (captureId, todoId, done) => store.setTodoDone(captureId, todoId, done)
     ),
     shortcut: invoke(z.tuple([]), () => shortcutStatus()),
     updateText: invoke(
@@ -253,4 +313,32 @@ export const registerLibraryChannels = (
   };
 
   attachAll("library", table, trusted);
+};
+
+export interface SettingsActions extends Omit<
+  SettingsApi,
+  "getView" | "fitHeight"
+> {
+  getView: SettingsApi["getView"];
+  fitHeight: (height: number) => void;
+}
+
+export const registerSettingsChannels = (
+  actions: SettingsActions,
+  trusted: TrustCheck
+): void => {
+  const table: Table<typeof settingsChannels> = {
+    allowOrigins: invoke(z.tuple([]), actions.allowOrigins),
+    fitHeight: send(
+      z.tuple([z.number().int().min(40).max(4000)]),
+      actions.fitHeight
+    ),
+    getView: invoke(z.tuple([]), actions.getView),
+    setOpenAtLogin: invoke(z.tuple([z.boolean()]), actions.setOpenAtLogin),
+    update: invoke(z.tuple([SettingsChangeSchema]), (change) =>
+      actions.update(change)
+    ),
+  };
+
+  attachAll("settings", table, trusted);
 };

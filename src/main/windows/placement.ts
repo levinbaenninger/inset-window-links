@@ -8,49 +8,48 @@ export interface Bounds extends Size {
   y: number;
 }
 
-const GAP = 12;
+export interface Point {
+  x: number;
+  y: number;
+}
+
+const EDGE = 16;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), Math.max(min, max));
 
-/** Where a popover with no source window goes: under the menu bar, or above the Windows tray. */
-export type Corner = "top-right" | "bottom-right";
+/** How far down the work area the panel's top edge sits: high enough to grow, low enough to be seen. */
+const TOP_SHARE = 0.16;
 
 /**
- * Right of the source, else left of it, else inside its top-right corner. Top-aligned with
- * the source when there is one, in the given corner of the work area when there is not. Always
- * clamped to the work area, whose origin may be negative on secondary displays.
+ * Centred across the work area, a little above the middle, so the panel opens where the eye
+ * already is instead of in a corner. The work area's origin may be negative on secondary
+ * displays.
  */
-export const placePopover = (
-  anchor: Bounds | null,
+export const centerPanel = (size: Size, workArea: Bounds): Bounds => ({
+  ...size,
+  x: Math.round(workArea.x + (workArea.width - size.width) / 2),
+  y: clamp(
+    Math.round(workArea.y + workArea.height * TOP_SHARE),
+    workArea.y + EDGE,
+    workArea.y + workArea.height - size.height - EDGE
+  ),
+});
+
+/** A position the user dragged the panel to, pulled back inside the work area if it no longer fits. */
+export const keepInside = (
+  position: Point,
   size: Size,
-  workArea: Bounds,
-  corner: Corner = "top-right"
-): Bounds => {
-  const maxX = workArea.x + workArea.width - size.width;
-  const maxY = workArea.y + workArea.height - size.height;
+  workArea: Bounds
+): Bounds => ({
+  ...size,
+  x: clamp(position.x, workArea.x, workArea.x + workArea.width - size.width),
+  y: clamp(position.y, workArea.y, workArea.y + workArea.height - size.height),
+});
 
-  if (anchor === null) {
-    return {
-      ...size,
-      x: maxX - GAP,
-      y: corner === "top-right" ? workArea.y + GAP : maxY - GAP,
-    };
-  }
-
-  const right = anchor.x + anchor.width + GAP;
-  const left = anchor.x - GAP - size.width;
-  let x = anchor.x + anchor.width - size.width - GAP;
-
-  if (right <= maxX) {
-    x = right;
-  } else if (left >= workArea.x) {
-    x = left;
-  }
-
-  return {
-    ...size,
-    x: clamp(x, workArea.x, maxX),
-    y: clamp(anchor.y, workArea.y, maxY),
-  };
-};
+/** True when the point lies in the area; a remembered position counts only on its own display. */
+export const contains = (area: Bounds, point: Point): boolean =>
+  point.x >= area.x &&
+  point.y >= area.y &&
+  point.x < area.x + area.width &&
+  point.y < area.y + area.height;

@@ -1,7 +1,7 @@
 import type { Notice } from "../../shared/dto";
 import type { DraftId } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
-import { blankText, isBlank, saveability } from "../../shared/text";
+import { blankText, hasTyped, isBlank, saveability } from "../../shared/text";
 import type {
   Activity,
   CaptureToken,
@@ -34,9 +34,7 @@ export const initialSession = (id: DraftId): SessionState => ({
 
 /** Empty is derived, never stored: a draft always exists. */
 export const isMeaningful = (draft: Draft): boolean =>
-  draft.views.length > 0 ||
-  !isBlank(draft.text.relationship) ||
-  !isBlank(draft.text.nextStep);
+  draft.views.length > 0 || hasTyped(draft.text);
 
 const isResumable = (activity: Activity) =>
   activity.kind === "idle" || activity.kind === "saveFailed";
@@ -102,6 +100,20 @@ const onCaptureFinished = (
             type: "showPopover",
           },
         ],
+      ];
+    }
+
+    case "capturedMany": {
+      return [
+        {
+          ...idle,
+          draft: {
+            ...state.draft,
+            views: [...state.draft.views, ...outcome.views],
+          },
+          notice: outcome.missing > 0 ? { kind: "sourceVanished" } : null,
+        },
+        [{ anchor: { kind: "keep" }, type: "showPopover" }],
       ];
     }
 
@@ -343,9 +355,9 @@ const onChooserRequested = (state: SessionState, ids: IdSource): Transition => {
   ];
 };
 
-const onSourceChosen = (
+const onSourcesChosen = (
   state: SessionState,
-  event: EventOf<"sourceChosen">,
+  event: EventOf<"sourcesChosen">,
   ids: IdSource
 ): Transition => {
   const { activity } = state;
@@ -354,11 +366,12 @@ const onSourceChosen = (
     return unchanged(state);
   }
 
-  const candidate = activity.candidates.find(
-    (item) => item.id === event.candidateId
-  );
+  const chosen = new Set(event.candidateIds);
 
-  if (candidate === undefined) {
+  // Kept in list order, so views land in the order the windows were shown.
+  const candidates = activity.candidates.filter((item) => chosen.has(item.id));
+
+  if (candidates.length === 0) {
     return unchanged(state);
   }
 
@@ -369,7 +382,7 @@ const onSourceChosen = (
       ...state,
       activity: { kind: "capturing", pending: null, token, via: "chosen" },
     },
-    [{ candidate, reason: activity.reason, token, type: "captureChosen" }],
+    [{ candidates, reason: activity.reason, token, type: "captureChosen" }],
   ];
 };
 
@@ -470,8 +483,8 @@ export const reduce = (
       return onChooserRequested(state, ids);
     }
 
-    case "sourceChosen": {
-      return onSourceChosen(state, event, ids);
+    case "sourcesChosen": {
+      return onSourcesChosen(state, event, ids);
     }
 
     case "choiceCancelled": {

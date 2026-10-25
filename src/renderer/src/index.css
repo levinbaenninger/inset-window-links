@@ -4,6 +4,8 @@
 @import "@fontsource-variable/inter";
 
 @custom-variant dark (&:is(.dark *));
+/* macOS only: the window's translucent material shows through the page. */
+@custom-variant mac (&:where([data-platform="macos"] *));
 /* Windows only: the library window draws its own title strip under the native caption buttons. */
 @custom-variant win (&:where([data-platform="windows"] *));
 
@@ -131,15 +133,60 @@
   html {
     @apply font-sans;
   }
-  /* Thin scrollbars in the theme's colours, instead of the light system bars on Windows. */
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: color-mix(
-        in oklch,
-        var(--muted-foreground) 45%,
-        transparent
-      )
-      transparent;
+}
+
+/*
+ * Thin scrollbars that follow the theme, on every platform: Windows draws wide light ones, and
+ * macOS draws a boxed track when scroll bars always show. The thumb shows while the pointer is
+ * over the scrolling area. Matches Inset Shelf.
+ */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: content-box;
+    background-color: transparent;
+  }
+
+  :hover::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--foreground) 22%, transparent);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--foreground) 40%, transparent);
+  }
+
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+}
+
+/* On macOS every window has the system's sidebar material behind the page. */
+@layer base {
+  [data-platform="macos"] body {
+    background: transparent;
+  }
+}
+
+/* Headers move their window; the controls in them stay clickable. */
+@layer components {
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .drag-region
+    :is(button, a, input, textarea, [role="button"], [role="combobox"]) {
+    -webkit-app-region: no-drag;
   }
 }
 

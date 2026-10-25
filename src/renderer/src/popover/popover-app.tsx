@@ -1,23 +1,31 @@
-import { ArrowDown01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons";
+import {
+  Clock01Icon,
+  MinusSignIcon,
+  Settings01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ComponentProps } from "react";
 
+import { TodoEditor } from "@/components/todo-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { popoverApi } from "@/lib/bridge";
+import { plural } from "@/lib/format";
 
 import type { DraftSnapshot } from "../../../shared/dto";
 import type { DraftText, Saveability } from "../../../shared/text";
 import {
-  isBlank,
-  MAX_NEXT_STEP,
+  hasTyped,
+  keptTodos,
   MAX_RELATIONSHIP,
   saveability,
 } from "../../../shared/text";
@@ -31,34 +39,82 @@ const discard = async () => {
 };
 
 const discardQuestion = (viewCount: number, text: DraftText): string => {
-  const views = `${viewCount} ${viewCount === 1 ? "view" : "views"}`;
-  const typed = !isBlank(text.relationship) || !isBlank(text.nextStep);
+  const views = plural(viewCount, "view");
 
   if (viewCount === 0) {
     return "Discard your text?";
   }
 
-  return typed ? `Discard ${views} and your text?` : `Discard ${views}?`;
+  return hasTyped(text)
+    ? `Discard ${views} and your text?`
+    : `Discard ${views}?`;
 };
 
 const blockedReasons = {
-  needsRelationship: "Write the connection to save.",
-  needsView: "Add a view to save.",
+  needsRelationship: "Write what connects them to save.",
+  needsView: "Add a window to save.",
 } as const;
 
 const cancelChoice = async () => {
   await popoverApi().cancelChoice();
 };
 
+const addWindows = async () => {
+  await popoverApi().addWindows();
+};
+
 const chooseQuit = async (choice: "save" | "discard" | "cancel") => {
   await popoverApi().chooseQuit(choice);
 };
 
-/** Shown when Quit meets an unsaved draft. Escape or clicking away cancels, like the Cancel button. */
+const HeaderButton = ({
+  label,
+  icon,
+  ...props
+}: { label: string; icon: typeof Clock01Icon } & ComponentProps<
+  typeof Button
+>) => (
+  <Tooltip>
+    <TooltipTrigger asChild>
+      <Button aria-label={label} size="icon-sm" variant="ghost" {...props}>
+        <HugeiconsIcon icon={icon} />
+      </Button>
+    </TooltipTrigger>
+    <TooltipContent side="bottom">{label}</TooltipContent>
+  </Tooltip>
+);
+
+/** The title strip: it moves the panel, and holds the ways out of it. */
+const PanelHeader = ({ title, detail }: { title: string; detail: string }) => (
+  <header className="drag-region flex h-11 shrink-0 items-center gap-1 pr-2 pl-3.5">
+    <h1 className="text-sm font-semibold">{title}</h1>
+    <span className="text-muted-foreground ml-1 text-xs tabular-nums">
+      {detail}
+    </span>
+    <span className="flex-1" />
+    <HeaderButton
+      icon={Clock01Icon}
+      label="Recent captures"
+      onClick={() => popoverApi().openRecent()}
+    />
+    <HeaderButton
+      icon={Settings01Icon}
+      label="Settings"
+      onClick={() => popoverApi().openSettings()}
+    />
+    <HeaderButton
+      icon={MinusSignIcon}
+      label="Hide panel"
+      onClick={() => popoverApi().dismiss()}
+    />
+  </header>
+);
+
+/** Shown when Quit meets an unsaved draft. Escape cancels, like the Cancel button. */
 const QuitPrompt = ({ check }: { check: Saveability }) => (
   <section
     aria-label="Quit Inset Window Links"
-    className="bg-muted flex flex-col gap-2.5 rounded-lg p-3"
+    className="bg-foreground/5 flex flex-col gap-2.5 rounded-lg p-3"
     data-testid="quit-prompt"
   >
     <div className="flex flex-col gap-0.5">
@@ -91,7 +147,7 @@ const QuitPrompt = ({ check }: { check: Saveability }) => (
   </section>
 );
 
-/** Keyed by draft id, so local UI state such as the open next-step field resets with each new draft. */
+/** Keyed by draft id, so local UI state such as the discard question resets with each new draft. */
 const DraftForm = ({
   snapshot,
   text,
@@ -102,23 +158,24 @@ const DraftForm = ({
   setText: (text: DraftText) => void;
 }) => {
   const relationship = useRef<HTMLTextAreaElement>(null);
-  const [nextStepOpen, setNextStepOpen] = useState(text.nextStep !== "");
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const viewCount = snapshot.views.length;
   const activity = snapshot.activity.kind;
   const quitting = activity === "confirmingQuit";
+  const choosing = activity === "choosing";
 
   const pending =
     snapshot.activity.kind === "capturing" ? snapshot.activity.pending : null;
 
   const mac = snapshot.platform === "macos";
   const check = saveability(viewCount, text);
-
-  const hasContent =
-    viewCount > 0 || !isBlank(text.relationship) || !isBlank(text.nextStep);
+  const hasContent = viewCount > 0 || hasTyped(text);
 
   const canSave =
     (activity === "idle" || activity === "saveFailed") && check.kind === "ok";
+
+  // Blank next steps are left out of what is saved.
+  const saved = (): DraftText => ({ ...text, todos: keptTodos(text.todos) });
 
   const requestDiscard = async () => {
     if (hasContent) {
@@ -136,7 +193,7 @@ const DraftForm = ({
 
   const save = async () => {
     if (canSave) {
-      await popoverApi().save(text);
+      await popoverApi().save(saved());
     }
   };
 
@@ -159,7 +216,9 @@ const DraftForm = ({
       if (event.key === "Escape") {
         event.preventDefault();
 
-        if (confirmingDiscard) {
+        if (choosing) {
+          void cancelChoice();
+        } else if (confirmingDiscard) {
           keepDraft();
         } else {
           popoverApi().dismiss();
@@ -174,129 +233,149 @@ const DraftForm = ({
         void chooseQuit("save");
       } else if (saveKeys && canSave) {
         event.preventDefault();
-        void popoverApi().save(text);
+        void popoverApi().save({ ...text, todos: keptTodos(text.todos) });
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
 
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mac, canSave, quitting, check.kind, text, confirmingDiscard, keepDraft]);
+  }, [
+    mac,
+    canSave,
+    quitting,
+    choosing,
+    check.kind,
+    text,
+    confirmingDiscard,
+    keepDraft,
+  ]);
 
   if (snapshot.activity.kind === "choosing") {
+    const { candidates } = snapshot.activity;
+
     return (
       <>
-        {snapshot.notice !== null && <NoticeBanner notice={snapshot.notice} />}
-        <SourceChooser
-          candidates={snapshot.activity.candidates}
-          onCancel={cancelChoice}
-          onChoose={async (candidate) => {
-            await popoverApi().chooseSource(candidate.id);
-          }}
-          reason={snapshot.activity.reason}
+        <PanelHeader
+          detail={
+            candidates === "loading" ? "" : plural(candidates.length, "window")
+          }
+          title="Add windows"
         />
+        <div className="flex flex-col gap-3 px-3.5 pb-3.5">
+          {snapshot.notice !== null && (
+            <NoticeBanner notice={snapshot.notice} />
+          )}
+          <SourceChooser
+            candidates={candidates}
+            mac={mac}
+            onCancel={cancelChoice}
+            onChoose={async (ids) => {
+              await popoverApi().chooseSources(ids);
+            }}
+            reason={snapshot.activity.reason}
+          />
+        </div>
       </>
     );
   }
 
   return (
     <>
-      {snapshot.notice !== null && <NoticeBanner notice={snapshot.notice} />}
-      <SourceChips
-        onRemove={async (view) => {
-          await popoverApi().removeView(view.id);
-        }}
-        pending={pending}
-        shortcut={snapshot.shortcut}
-        views={snapshot.views}
+      <PanelHeader
+        detail={viewCount === 0 ? "" : plural(viewCount, "view")}
+        title="New capture"
       />
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="relationship">What connects these views?</Label>
-        <Textarea
-          autoFocus
-          className="max-h-48 min-h-20 resize-none"
-          id="relationship"
-          maxLength={MAX_RELATIONSHIP}
-          placeholder="e.g. The budget cap rules out this quote."
-          onChange={(event) =>
-            setText({ ...text, relationship: event.target.value })
-          }
-          ref={relationship}
-          value={text.relationship}
+      <div className="flex flex-col gap-4 px-3.5 pb-3.5">
+        {snapshot.notice !== null && <NoticeBanner notice={snapshot.notice} />}
+        <SourceChips
+          onAdd={addWindows}
+          onRemove={async (view) => {
+            await popoverApi().removeView(view.id);
+          }}
+          pending={pending}
+          shortcut={snapshot.shortcut}
+          views={snapshot.views}
         />
-        {check.kind === "blocked" && (
-          <p
-            className="text-muted-foreground text-xs"
-            data-testid="save-blocked"
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="relationship">What connects these views?</Label>
+          <Textarea
+            autoFocus
+            className="max-h-48 min-h-20 resize-none"
+            id="relationship"
+            maxLength={MAX_RELATIONSHIP}
+            onChange={(event) =>
+              setText({ ...text, relationship: event.target.value })
+            }
+            placeholder="The budget cap in the sheet rules out this quote."
+            ref={relationship}
+            value={text.relationship}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-sm leading-none font-medium">Next steps</h2>
+          <TodoEditor
+            onChange={(todos) => setText({ ...text, todos })}
+            todos={text.todos}
+          />
+        </div>
+        {snapshot.activity.kind === "saveFailed" && (
+          <Alert data-testid="save-failed" variant="destructive">
+            <AlertTitle>The capture was not saved</AlertTitle>
+            <AlertDescription>
+              Your views and text are still here. {snapshot.activity.message}
+            </AlertDescription>
+            <div className="col-span-full mt-2">
+              <Button onClick={save} size="sm" variant="outline">
+                Retry
+              </Button>
+            </div>
+          </Alert>
+        )}
+        {quitting && <QuitPrompt check={check} />}
+        {!quitting && confirmingDiscard && (
+          <footer
+            className="bg-destructive/10 flex items-center justify-between gap-2 rounded-lg py-1.5 pr-1.5 pl-3"
+            data-testid="discard-confirm"
           >
-            {blockedReasons[check.reason]}
-          </p>
+            <span className="text-xs">{discardQuestion(viewCount, text)}</span>
+            <span className="flex gap-1.5">
+              <Button autoFocus onClick={keepDraft} size="sm" variant="ghost">
+                Keep
+              </Button>
+              <Button onClick={discard} size="sm" variant="destructive">
+                Discard draft
+              </Button>
+            </span>
+          </footer>
+        )}
+        {!quitting && !confirmingDiscard && (
+          <footer className="flex items-center justify-between gap-2">
+            <Button
+              className="-ml-2"
+              onClick={requestDiscard}
+              size="sm"
+              variant="ghost"
+            >
+              Discard
+            </Button>
+            <span className="flex items-center gap-3">
+              {check.kind === "blocked" && (
+                <span
+                  className="text-muted-foreground text-xs"
+                  data-testid="save-blocked"
+                >
+                  {blockedReasons[check.reason]}
+                </span>
+              )}
+              <Button disabled={!canSave} onClick={save} size="sm">
+                {activity === "saving" ? "Saving…" : "Save"}
+                <span className="opacity-70">{mac ? "⌘↵" : "Ctrl+Enter"}</span>
+              </Button>
+            </span>
+          </footer>
         )}
       </div>
-      <Collapsible onOpenChange={setNextStepOpen} open={nextStepOpen}>
-        <CollapsibleTrigger asChild>
-          <Button className="-ml-2 self-start" size="sm" variant="ghost">
-            <HugeiconsIcon
-              icon={nextStepOpen ? ArrowDown01Icon : ArrowRight01Icon}
-            />
-            Next step (optional)
-          </Button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="pt-1.5">
-            <Textarea
-              aria-label="Next step (optional)"
-              className="max-h-32 min-h-12 resize-none"
-              maxLength={MAX_NEXT_STEP}
-              onChange={(event) =>
-                setText({ ...text, nextStep: event.target.value })
-              }
-              value={text.nextStep}
-            />
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
-      {snapshot.activity.kind === "saveFailed" && (
-        <Alert data-testid="save-failed" variant="destructive">
-          <AlertTitle>The capture was not saved</AlertTitle>
-          <AlertDescription>
-            Your views and text are still here. {snapshot.activity.message}
-          </AlertDescription>
-          <div className="col-span-full mt-2">
-            <Button onClick={save} size="sm" variant="outline">
-              Retry
-            </Button>
-          </div>
-        </Alert>
-      )}
-      {quitting && <QuitPrompt check={check} />}
-      {!quitting && confirmingDiscard && (
-        <footer
-          className="bg-destructive/10 flex items-center justify-between gap-2 rounded-lg py-1.5 pr-1.5 pl-3"
-          data-testid="discard-confirm"
-        >
-          <span className="text-xs">{discardQuestion(viewCount, text)}</span>
-          <span className="flex gap-1.5">
-            <Button autoFocus onClick={keepDraft} size="sm" variant="ghost">
-              Keep
-            </Button>
-            <Button onClick={discard} size="sm" variant="destructive">
-              Discard draft
-            </Button>
-          </span>
-        </footer>
-      )}
-      {!quitting && !confirmingDiscard && (
-        <footer className="flex items-center justify-between gap-2">
-          <Button onClick={requestDiscard} size="sm" variant="ghost">
-            Discard
-          </Button>
-          <Button disabled={!canSave} onClick={save} size="sm">
-            {activity === "saving" ? "Saving…" : "Save"}
-            <span className="opacity-70">{mac ? "⌘↵" : "Ctrl+Enter"}</span>
-          </Button>
-        </footer>
-      )}
     </>
   );
 };
@@ -324,15 +403,20 @@ export const PopoverApp = () => {
   }, []);
 
   return (
-    <main className="flex flex-col gap-3 p-3 text-sm" ref={root}>
-      {snapshot !== null && (
-        <DraftForm
-          key={snapshot.draftId}
-          setText={setText}
-          snapshot={snapshot}
-          text={text}
-        />
-      )}
-    </main>
+    <TooltipProvider delayDuration={500}>
+      <main
+        className="text-foreground flex flex-col text-sm select-none [&_input]:select-text [&_textarea]:select-text"
+        ref={root}
+      >
+        {snapshot !== null && (
+          <DraftForm
+            key={snapshot.draftId}
+            setText={setText}
+            snapshot={snapshot}
+            text={text}
+          />
+        )}
+      </main>
+    </TooltipProvider>
   );
 };

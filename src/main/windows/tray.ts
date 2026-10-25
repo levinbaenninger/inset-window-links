@@ -66,6 +66,7 @@ export interface TrayActions {
   addFromWindowList: () => void;
   openRecent: () => void;
   openWelcome: () => void;
+  openSettings: () => void;
   /** A left click on Windows: the draft when it holds something, else Recent Captures. */
   openHome: () => void;
   openScreenSettings: (() => void) | null;
@@ -76,17 +77,16 @@ const menuFor = (
   actions: TrayActions,
   shortcut: ShortcutStatus
 ): MenuItemConstructorOptions[] => [
-  { click: actions.showDraft, label: "Show Draft" },
-  { click: actions.addFromWindowList, label: "Add View from Window List…" },
+  { click: actions.showDraft, label: "Capture Panel" },
+  { click: actions.addFromWindowList, label: "Add Windows…" },
   { click: actions.openRecent, label: "Recent Captures…" },
-  { click: actions.openWelcome, label: "How It Works…" },
   { type: "separator" },
   {
     enabled: false,
     label:
       shortcut.kind === "registered"
-        ? `Add View Shortcut: ${shortcut.label}`
-        : `Shortcut ${shortcut.label} is used by another app. Use Add View from Window List.`,
+        ? `Add a Window: ${shortcut.label}`
+        : `Shortcut ${shortcut.label} is used by another app. Use Add Windows.`,
   },
   ...(actions.openScreenSettings === null
     ? []
@@ -97,6 +97,8 @@ const menuFor = (
         },
       ]),
   { type: "separator" },
+  { click: actions.openWelcome, label: "How It Works" },
+  { click: actions.openSettings, label: "Settings…" },
   { click: actions.quit, label: "Quit Inset Window Links" },
 ];
 

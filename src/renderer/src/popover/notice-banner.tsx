@@ -24,13 +24,13 @@ const PermissionNotice = ({ stillDenied }: { stillDenied: boolean }) => (
       {stillDenied ? (
         <p>
           macOS still blocks capture. If Inset Window Links is already switched
-          on, this copy of the app is new to macOS: select it, remove it with −,
-          add it again, then quit and reopen.
+          on, this copy is new to macOS: remove it from the list with −, add it
+          again, then quit and reopen.
         </p>
       ) : (
         <p>
-          Turn on Inset Window Links under Privacy &amp; Security, Screen
-          Recording. macOS then asks you to quit and reopen the app.
+          Turn on Inset Window Links in Privacy &amp; Security, then quit and
+          reopen when macOS asks.
         </p>
       )}
     </AlertDescription>
@@ -53,16 +53,19 @@ const PermissionNotice = ({ stillDenied }: { stillDenied: boolean }) => (
 
 const messages = {
   needsRelationship: "Write what connects these views before saving.",
-  needsView: "Add at least one view before saving.",
+  needsView: "Add at least one window before saving.",
   sourceVanished:
-    "That window closed before it could be captured. Nothing was added.",
+    "A window closed before it could be captured, so it was not added.",
 } satisfies { [K in Exclude<Notice["kind"], "permissionDenied">]: string };
 
 export const NoticeBanner = ({ notice }: { notice: Notice }) =>
   notice.kind === "permissionDenied" ? (
     <PermissionNotice stillDenied={notice.stillDenied} />
   ) : (
-    <Alert data-testid="notice">
-      <AlertDescription>{messages[notice.kind]}</AlertDescription>
-    </Alert>
+    <output
+      className="bg-foreground/5 block rounded-lg px-3 py-2 text-xs"
+      data-testid="notice"
+    >
+      {messages[notice.kind]}
+    </output>
   );

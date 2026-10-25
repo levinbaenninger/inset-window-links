@@ -21,7 +21,8 @@ mac:
   identity: "-"
   hardenedRuntime: false
   extendInfo:
-    LSUIElement: true
+    NSAccessibilityUsageDescription: Inset Window Links reads which web page or file a window shows, so Reopen can bring it back.
+    NSAppleEventsUsageDescription: Inset Window Links reads the address of the browser page you capture, so Reopen can open it again.
 dmg:
   writeUpdateInfo: false
 win:

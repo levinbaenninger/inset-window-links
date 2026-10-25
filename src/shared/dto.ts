@@ -1,5 +1,5 @@
 import type { CandidateId, CaptureId, DraftId, ViewId } from "./ids";
-import type { DraftText } from "./text";
+import type { DraftText, Todo } from "./text";
 
 export type CapturePlatform = "macos" | "windows";
 
@@ -22,6 +22,15 @@ export type ViewSource =
   | { kind: "direct" }
   | { kind: "fallback"; reason: FallbackReason };
 
+/** What Reopen brings back for a view: the page, the file, or just the app. */
+export interface OriginSummary {
+  kind: "page" | "document" | "app";
+  /** The site's host, the file's name, or the app's name. */
+  label: string;
+  /** The whole address or path, for a tooltip. */
+  detail: string;
+}
+
 export interface ViewSummary {
   id: ViewId;
   title: string | null;
@@ -34,11 +43,13 @@ export interface ViewSummary {
   source: ViewSource;
   /** 1-based position of an earlier view of the same live window, so repeats read as intentional. */
   sameWindowAs: number | null;
+  origin: OriginSummary | null;
 }
 
 export interface CandidateSummary {
   id: CandidateId;
   title: string | null;
+  appName: string | null;
   imageUrl: string;
 }
 
@@ -75,6 +86,7 @@ export interface DraftSnapshot {
 export interface ListedView {
   id: ViewId;
   title: string | null;
+  appName: string | null;
   imageUrl: string;
   width: number;
   height: number;
@@ -86,7 +98,7 @@ export type CaptureListItem =
       id: CaptureId;
       createdAt: string;
       relationship: string;
-      nextStep: string;
+      todos: readonly Todo[];
       views: readonly ListedView[];
     }
   | { kind: "unsupported"; id: string; version: number }
@@ -97,7 +109,7 @@ export interface CaptureDetail {
   createdAt: string;
   updatedAt: string;
   relationship: string;
-  nextStep: string;
+  todos: readonly Todo[];
   views: readonly ViewSummary[];
 }
 

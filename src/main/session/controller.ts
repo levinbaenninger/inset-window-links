@@ -3,9 +3,11 @@ import { app, BrowserWindow } from "electron";
 import type { DraftSnapshot } from "../../shared/dto";
 import type { CaptureId } from "../../shared/ids";
 import { newDraftId } from "../../shared/ids";
+import { keptTodos } from "../../shared/text";
 import type { WindowCapturer } from "../capture/capturer";
 import { capturePlatform, screenAccess } from "../capture/capturer";
 import type { ImageRef } from "../ipc/image-url";
+import { CURRENT_SCHEMA_VERSION } from "../store/schema";
 import type { CaptureStore, NewCapture } from "../store/store";
 import type { PopoverWindow } from "../windows/popover-window";
 import { shortcutStatus } from "../windows/shortcut";
@@ -29,9 +31,9 @@ const toNewCapture = (draft: Draft, now: Date): NewCapture => ({
   record: {
     createdAt: now.toISOString(),
     id: draft.id,
-    nextStep: draft.text.nextStep,
     relationship: draft.text.relationship,
-    schemaVersion: 1,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    todos: keptTodos(draft.text.todos),
     updatedAt: now.toISOString(),
     views: draft.views.map(toSavedView),
   },
@@ -103,6 +105,11 @@ export class SessionController {
     return isMeaningful(this.#state.draft);
   }
 
+  /** File > Save Capture: saves the text the panel last mirrored, as ⌘↵ in the panel would. */
+  saveDraft(): void {
+    this.dispatch({ text: this.#state.draft.text, type: "saveRequested" });
+  }
+
   /** The answer to the quit prompt in the popover. */
   chooseQuit(choice: QuitChoice): void {
     this.dispatch({ choice, type: "quitChosen" });
@@ -170,7 +177,7 @@ export class SessionController {
 
       case "captureChosen": {
         void this.#capture(effect.token, () =>
-          this.#capturer.captureChosen(effect.candidate, effect.reason)
+          this.#capturer.captureChosen(effect.candidates, effect.reason)
         );
         break;
       }

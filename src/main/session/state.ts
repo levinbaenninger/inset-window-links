@@ -1,7 +1,7 @@
 import type { FallbackReason, Notice } from "../../shared/dto";
 import type { CandidateId, DraftId, ViewId } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
-import type { Acquisition } from "../store/schema";
+import type { Acquisition, ViewOrigin } from "../store/schema";
 import type { PublishResult } from "../store/store";
 import type { Bounds } from "../windows/placement";
 
@@ -15,6 +15,7 @@ export interface CapturedView {
   appName: string | null;
   boundsDip: Bounds | null;
   acquisition: Acquisition;
+  origin: ViewOrigin | null;
   png: Uint8Array;
   width: number;
   height: number;
@@ -24,11 +25,14 @@ export interface FallbackCandidate {
   id: CandidateId;
   sourceId: string;
   title: string | null;
+  appName: string | null;
   thumb: Uint8Array;
 }
 
 export type CaptureOutcome =
   | { kind: "captured"; view: CapturedView }
+  /** Windows picked from the list, captured together; missing ones closed in the meantime. */
+  | { kind: "capturedMany"; views: readonly CapturedView[]; missing: number }
   | { kind: "self" }
   | { kind: "permissionDenied" }
   | { kind: "needsChoice"; reason: FallbackReason; near: Bounds | null };
@@ -95,7 +99,7 @@ export type SessionEvent =
     }
   | { type: "showDraftRequested" }
   | { type: "chooserRequested" }
-  | { type: "sourceChosen"; candidateId: CandidateId }
+  | { type: "sourcesChosen"; candidateIds: readonly CandidateId[] }
   | { type: "choiceCancelled" }
   | { type: "viewRemoved"; viewId: ViewId }
   | { type: "textChanged"; text: DraftText }
@@ -117,7 +121,7 @@ export type SessionEffect =
   | {
       type: "captureChosen";
       token: CaptureToken;
-      candidate: FallbackCandidate;
+      candidates: readonly FallbackCandidate[];
       reason: FallbackReason;
     }
   | { type: "showPopover"; anchor: PopoverAnchor }

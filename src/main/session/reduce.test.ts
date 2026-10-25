@@ -8,7 +8,7 @@ import {
 } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
 import type { IdSource } from "./reduce";
-import { initialSession, reduce } from "./reduce";
+import { initialSession, isMeaningful, reduce } from "./reduce";
 import type {
   CapturedView,
   SessionEffect,
@@ -22,6 +22,10 @@ const D3 = DraftIdSchema.parse("d0000000-0000-4000-8000-000000000003");
 
 const CANDIDATE = CandidateIdSchema.parse(
   "c0000000-0000-4000-8000-000000000001"
+);
+
+const CANDIDATE_2 = CandidateIdSchema.parse(
+  "c0000000-0000-4000-8000-000000000002"
 );
 
 const ids = (): IdSource => {
@@ -45,15 +49,16 @@ const view = (n: number, windowKey: string): CapturedView => ({
   capturedAt: new Date(`2026-10-21T12:00:0${n}.000Z`),
   height: 1010,
   id: ViewIdSchema.parse(`a0000000-0000-4000-8000-00000000000${n}`),
+  origin: null,
   png: new Uint8Array([n]),
   sampledAt: new Date(`2026-10-21T12:00:0${n}.000Z`),
   title: `Untitled ${n}`,
   width: 1206,
 });
 
-const text = (relationship: string, nextStep = ""): DraftText => ({
-  nextStep,
+const text = (relationship: string, todo = ""): DraftText => ({
   relationship,
+  todos: todo === "" ? [] : [{ done: false, id: "todo-1", text: todo }],
 });
 
 interface Run {
@@ -316,31 +321,49 @@ describe("session lifecycle", () => {
       failed.state.draft.text,
     ]).toStrictEqual([1, text("A limits B")]);
 
-    const candidate = {
-      id: CANDIDATE,
-      sourceId: "window:42:0",
+    const candidate = (id: typeof CANDIDATE, title: string) => ({
+      appName: "Notes",
+      id,
+      sourceId: `window:${title.length}:0`,
       thumb: new Uint8Array([1]),
-      title: "Notes",
-    };
+      title,
+    });
+
+    const first = candidate(CANDIDATE, "Notes");
+    const second = candidate(CANDIDATE_2, "Budget sheet");
 
     const chosen = run(
       source,
       [
-        { candidates: [candidate], token: "t2", type: "candidatesReady" },
-        { candidateId: CANDIDATE, type: "sourceChosen" },
+        {
+          candidates: [first, second],
+          token: "t2",
+          type: "candidatesReady",
+        },
+        // Picked in reverse; the views still land in list order.
+        { candidateIds: [CANDIDATE_2, CANDIDATE], type: "sourcesChosen" },
       ],
       failed.state
     );
 
     expect(chosen.effects).toStrictEqual([
-      { candidate, reason: "noMatch", token: "t3", type: "captureChosen" },
+      {
+        candidates: [first, second],
+        reason: "noMatch",
+        token: "t3",
+        type: "captureChosen",
+      },
     ]);
 
-    const vanished = run(
+    const partly = run(
       source,
       [
         {
-          outcome: { kind: "needsChoice", near: null, reason: "vanished" },
+          outcome: {
+            kind: "capturedMany",
+            missing: 1,
+            views: [view(2, "macos:42")],
+          },
           token: "t3",
           type: "captureFinished",
         },
@@ -349,9 +372,48 @@ describe("session lifecycle", () => {
     );
 
     expect([
-      vanished.state.notice,
-      vanished.state.draft.views.length,
-    ]).toStrictEqual([{ kind: "sourceVanished" }, 1]);
+      partly.state.notice,
+      partly.state.draft.views.map((item) => item.title),
+      partly.state.activity,
+      partly.effects,
+    ]).toStrictEqual([
+      { kind: "sourceVanished" },
+      ["Untitled 1", "Untitled 2"],
+      { kind: "idle" },
+      [{ anchor: { kind: "keep" }, type: "showPopover" }],
+    ]);
+  });
+
+  it("ignores a choice of no known window", () => {
+    const source = ids();
+
+    const choosing = run(source, [
+      { type: "chooserRequested" },
+      {
+        candidates: [
+          {
+            appName: null,
+            id: CANDIDATE,
+            sourceId: "window:42:0",
+            thumb: new Uint8Array([1]),
+            title: null,
+          },
+        ],
+        token: "t1",
+        type: "candidatesReady",
+      },
+    ]);
+
+    const none = run(
+      source,
+      [{ candidateIds: [CANDIDATE_2], type: "sourcesChosen" }],
+      choosing.state
+    );
+
+    expect([none.state.activity.kind, none.effects]).toStrictEqual([
+      "choosing",
+      [],
+    ]);
   });
 
   it("keeps the draft on a failed write and retries with the same id", () => {
@@ -645,5 +707,14 @@ describe("session lifecycle", () => {
       kind: "saveFailed",
       message: "disk full",
     });
+  });
+
+  it("counts a typed next step as unsaved work, but not a blank one", () => {
+    const { draft } = initialSession(D1);
+
+    expect([
+      isMeaningful({ ...draft, text: text("", "Call Dana") }),
+      isMeaningful({ ...draft, text: text("", "   ") }),
+    ]).toStrictEqual([true, false]);
   });
 });

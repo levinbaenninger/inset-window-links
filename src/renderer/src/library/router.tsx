@@ -9,15 +9,12 @@ import { z } from "zod";
 import { libraryApi } from "@/lib/bridge";
 
 import { CaptureRecord } from "./capture-record";
-import { RecentList } from "./recent-list";
+import { Home } from "./home";
 import { Shell } from "./shell";
-import { Welcome } from "./welcome";
 
-const rootRoute = createRootRoute({ component: Shell });
-
-const recentRoute = createRoute({
-  component: RecentList,
-  getParentRoute: () => rootRoute,
+/** The sidebar's list and the shortcut's label, reloaded whenever the store changes. */
+const rootRoute = createRootRoute({
+  component: Shell,
   loader: async () => {
     const [items, shortcut] = await Promise.all([
       libraryApi().list(),
@@ -26,13 +23,17 @@ const recentRoute = createRoute({
 
     return { items, shortcut };
   },
+});
+
+const homeRoute = createRoute({
+  component: Home,
+  getParentRoute: () => rootRoute,
   path: "/",
 });
 
 const welcomeRoute = createRoute({
-  component: Welcome,
+  component: Home,
   getParentRoute: () => rootRoute,
-  loader: async () => ({ shortcut: await libraryApi().shortcut() }),
   path: "/welcome",
 });
 
@@ -47,7 +48,7 @@ const captureRoute = createRoute({
 
 export const router = createRouter({
   history: createHashHistory(),
-  routeTree: rootRoute.addChildren([recentRoute, welcomeRoute, captureRoute]),
+  routeTree: rootRoute.addChildren([homeRoute, welcomeRoute, captureRoute]),
 });
 
 declare module "@tanstack/react-router" {

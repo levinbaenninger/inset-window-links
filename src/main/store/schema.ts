@@ -1,8 +1,10 @@
 import { z } from "zod";
 
 import { DraftIdSchema, ViewIdSchema } from "../../shared/ids";
+import { isBlank, TodoSchema } from "../../shared/text";
+import type { Todo } from "../../shared/text";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 const FallbackReasonSchema = z.enum([
   "probeUnavailable",
@@ -25,7 +27,19 @@ export const AcquisitionSchema = z.discriminatedUnion("kind", [
 
 export type Acquisition = z.infer<typeof AcquisitionSchema>;
 
-export const SavedViewSchema = z.object({
+/**
+ * What brings a view's window back: the app it belongs to and, when they could be read, the web
+ * page or the file it showed. Only read where the user granted Accessibility; never prompts.
+ */
+export const ViewOriginSchema = z.object({
+  appPath: z.string().max(1024).nullable(),
+  document: z.string().max(1024).nullable(),
+  url: z.string().max(2000).nullable(),
+});
+
+export type ViewOrigin = z.infer<typeof ViewOriginSchema>;
+
+const V1ViewSchema = z.object({
   acquisition: AcquisitionSchema,
   appName: z.string().nullable(),
   capturedAt: z.iso.datetime(),
@@ -36,19 +50,57 @@ export const SavedViewSchema = z.object({
   width: z.int().positive(),
 });
 
+export const SavedViewSchema = V1ViewSchema.extend({
+  origin: ViewOriginSchema.nullable(),
+});
+
 export type SavedView = z.infer<typeof SavedViewSchema>;
 
-export const CaptureRecordSchema = z.object({
+const V1RecordSchema = z.object({
   createdAt: z.iso.datetime(),
   id: DraftIdSchema,
   nextStep: z.string(),
   relationship: z.string().trim().min(1),
+  schemaVersion: z.literal(1),
+  updatedAt: z.iso.datetime(),
+  views: z.array(V1ViewSchema).min(1),
+});
+
+export const CaptureRecordSchema = z.object({
+  createdAt: z.iso.datetime(),
+  id: DraftIdSchema,
+  relationship: z.string().trim().min(1),
   schemaVersion: z.literal(CURRENT_SCHEMA_VERSION),
+  todos: z.array(TodoSchema),
   updatedAt: z.iso.datetime(),
   views: z.array(SavedViewSchema).min(1),
 });
 
 export type CaptureRecord = z.infer<typeof CaptureRecordSchema>;
+
+const LIST_ITEM = /^(?:[-*•]\s+)?(?:\[(?<mark>[ xX]?)\]\s*)?(?<text>.*)$/u;
+
+/** A version 1 next step becomes one to-do per line, ids by position so they stay put until rewritten. */
+export const todosFromNextStep = (nextStep: string): Todo[] =>
+  nextStep
+    .split(/\r?\n/u)
+    .map((line) => LIST_ITEM.exec(line.trim())?.groups ?? {})
+    .filter((groups) => !isBlank(groups["text"] ?? ""))
+    .map((groups, index) => ({
+      done: groups["mark"]?.toLowerCase() === "x",
+      id: `v1-${index + 1}`,
+      text: (groups["text"] ?? "").trim(),
+    }));
+
+const upgradeV1 = (record: z.infer<typeof V1RecordSchema>): CaptureRecord => ({
+  createdAt: record.createdAt,
+  id: record.id,
+  relationship: record.relationship,
+  schemaVersion: CURRENT_SCHEMA_VERSION,
+  todos: todosFromNextStep(record.nextStep),
+  updatedAt: record.updatedAt,
+  views: record.views.map((view) => ({ ...view, origin: null })),
+});
 
 const VersionPeekSchema = z.object({ schemaVersion: z.number() });
 
@@ -65,7 +117,10 @@ const parseJson = (json: string) => {
   }
 };
 
-/** Peeks at schemaVersion first, so a newer app's record is kept intact rather than called corrupt. */
+/**
+ * Peeks at schemaVersion first, so a newer app's record is kept intact rather than called corrupt.
+ * Version 1 is read as version 2; the file is rewritten only when the capture is edited.
+ */
 export const readVersioned = (json: string): VersionedRead => {
   const parsed = parseJson(json);
 
@@ -77,6 +132,14 @@ export const readVersioned = (json: string): VersionedRead => {
 
   if (!peek.success) {
     return { detail: "missing schemaVersion", kind: "unreadable" };
+  }
+
+  if (peek.data.schemaVersion === 1) {
+    const old = V1RecordSchema.safeParse(parsed.value);
+
+    return old.success
+      ? { kind: "current", record: upgradeV1(old.data) }
+      : { detail: old.error.message, kind: "unreadable" };
   }
 
   if (peek.data.schemaVersion !== CURRENT_SCHEMA_VERSION) {

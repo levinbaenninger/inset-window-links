@@ -7,9 +7,12 @@ import {
   popoverChannels,
   pushChannels,
   roleArgument,
+  settingsChannels,
 } from "../shared/channels";
 
-const roles: readonly WindowRole[] = ["popover", "library"];
+const roles: readonly WindowRole[] = ["popover", "library", "settings"];
+
+const platform = process.platform === "win32" ? "windows" : "macos";
 const role = roles.find((name) => process.argv.includes(roleArgument(name)));
 
 /** Builds only the methods named in the role's channel table. Main validates every argument. */
@@ -54,6 +57,7 @@ if (role === "popover") {
       subscribe(pushChannels.draft, listener),
     onShown: (listener: () => void) =>
       subscribe(pushChannels.focusInput, () => listener()),
+    platform,
   });
 }
 
@@ -62,8 +66,19 @@ if (role === "library") {
     ...bridge("library", libraryChannels),
     onChanged: (listener: () => void) =>
       subscribe(pushChannels.libraryChanged, () => listener()),
+    onFind: (listener: () => void) =>
+      subscribe(pushChannels.find, () => listener()),
     onNavigate: (listener: (...args: readonly unknown[]) => void) =>
       subscribe(pushChannels.navigate, listener),
-    platform: process.platform === "win32" ? "windows" : "macos",
+    platform,
+  });
+}
+
+if (role === "settings") {
+  contextBridge.exposeInMainWorld("inset", {
+    ...bridge("settings", settingsChannels),
+    onView: (listener: (...args: readonly unknown[]) => void) =>
+      subscribe(pushChannels.settingsView, listener),
+    platform,
   });
 }

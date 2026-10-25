@@ -4,6 +4,7 @@ import type { MutationOutcome } from "../../shared/dto";
 import type { CaptureId, ViewId } from "../../shared/ids";
 import { DraftIdSchema } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
+import { keptTodos } from "../../shared/text";
 import type { StoreFs } from "./fs";
 import type { CaptureRecord } from "./schema";
 import { readVersioned } from "./schema";
@@ -169,10 +170,13 @@ export class CaptureStore {
     return this.#index.get(id);
   }
 
-  updateText(
+  /**
+   * Rewrites a current record; anything else is reported, never written. A record read as
+   * version 1 was upgraded on read, so it is written as the current version.
+   */
+  #rewrite(
     id: CaptureId,
-    text: DraftText,
-    now: Date
+    change: (record: CaptureRecord) => CaptureRecord | null
   ): Promise<MutationOutcome> {
     return this.#serial(async () => {
       const entry = this.#index.get(id);
@@ -188,12 +192,11 @@ export class CaptureStore {
         };
       }
 
-      const record: CaptureRecord = {
-        ...entry.record,
-        nextStep: text.nextStep,
-        relationship: text.relationship,
-        updatedAt: now.toISOString(),
-      };
+      const record = change(entry.record);
+
+      if (record === null) {
+        return { kind: "missing" };
+      }
 
       const target = path.join(this.#root, id, RECORD_FILE);
 
@@ -212,6 +215,37 @@ export class CaptureStore {
 
       return { kind: "ok" };
     });
+  }
+
+  updateText(
+    id: CaptureId,
+    text: DraftText,
+    now: Date
+  ): Promise<MutationOutcome> {
+    return this.#rewrite(id, (record) => ({
+      ...record,
+      relationship: text.relationship,
+      todos: keptTodos(text.todos),
+      updatedAt: now.toISOString(),
+    }));
+  }
+
+  /** Checks a to-do off or on. Not an edit of the text, so updatedAt stays. */
+  setTodoDone(
+    id: CaptureId,
+    todoId: string,
+    done: boolean
+  ): Promise<MutationOutcome> {
+    return this.#rewrite(id, (record) =>
+      record.todos.some((todo) => todo.id === todoId)
+        ? {
+            ...record,
+            todos: record.todos.map((todo) =>
+              todo.id === todoId ? { ...todo, done } : todo
+            ),
+          }
+        : null
+    );
   }
 
   /** Moves the record to .trash first, so a half-deleted record is never listed. */

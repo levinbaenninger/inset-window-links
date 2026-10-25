@@ -2,11 +2,14 @@ import "../index.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { markPlatform } from "@/lib/bridge";
 import { followSystemTheme } from "@/lib/theme";
 
 import { PopoverApp } from "./popover-app";
 
 followSystemTheme();
+
+markPlatform();
 
 const root = document.querySelector("#root");
 
