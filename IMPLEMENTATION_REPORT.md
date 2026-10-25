@@ -266,7 +266,7 @@ The taste skill's lint finds 0 failures in the renderer. Its 3 warnings are in g
 
 ## Third round: review fixes
 
-This round came from reading the code, not from a user report. The macOS, packaged, and Windows harnesses were not rerun, because other prototypes were using the desktop and the shortcut at the same time. The harness tables above describe earlier builds. The new behaviour is covered by unit tests and by loading the built pages in headless Chromium with a stubbed bridge. No Electron window was opened.
+This round came from reading the code, not from a user report. The macOS, packaged, and Windows harnesses were not rerun. Other prototype threads were running on the same machine, and the harnesses take focus, register ⌥⌘W, open TextEdit, overwrite the clipboard and send keystrokes, so a run could have disturbed theirs. The harness tables above describe earlier builds. The new behaviour is covered by unit tests and by loading the built pages in headless Chromium with a stubbed bridge. No Electron window was opened.
 
 - Quit and reopen could come back later. The controller kept a relaunch flag that only Cancel cleared. If Save and quit was blocked or the save failed, the next ordinary Quit started the app again. The reducer now carries the exit kind through the quit prompt and the save. Two unit tests cover it.
 - Stale notices. "Write what connects these views" stayed after the relationship was written, and a "window closed" notice came back on Show Draft. Typing clears the first. Show Draft and the window list clear every notice except the permission one. The `captureFailed` notice was never produced and is gone. Two unit tests cover it.
