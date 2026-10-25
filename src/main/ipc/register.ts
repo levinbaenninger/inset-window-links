@@ -16,7 +16,7 @@ import {
   DraftIdSchema,
   ViewIdSchema,
 } from "../../shared/ids";
-import { DraftTextSchema } from "../../shared/text";
+import { DraftTextSchema, MAX_RELATIONSHIP } from "../../shared/text";
 import { openScreenSettings } from "../capture/capturer";
 import type { SessionController } from "../session/controller";
 import { summarizeViews } from "../session/snapshot";
@@ -191,7 +191,7 @@ const detail = (entry: StoreEntry | undefined): CaptureDetail | null => {
 };
 
 const EditedTextSchema = DraftTextSchema.extend({
-  relationship: z.string().trim().min(1).max(10_000),
+  relationship: z.string().trim().min(1).max(MAX_RELATIONSHIP),
 });
 
 export const registerLibraryChannels = (

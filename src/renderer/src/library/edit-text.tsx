@@ -6,7 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { libraryApi } from "@/lib/bridge";
 
 import type { CaptureDetail } from "../../../shared/dto";
-import { isBlank } from "../../../shared/text";
+import { isBlank, MAX_NEXT_STEP, MAX_RELATIONSHIP } from "../../../shared/text";
 
 export const EditText = ({
   detail,
@@ -43,6 +43,7 @@ export const EditText = ({
         <Textarea
           autoFocus
           id="edit-relationship"
+          maxLength={MAX_RELATIONSHIP}
           onChange={(event) => setRelationship(event.target.value)}
           value={relationship}
         />
@@ -51,6 +52,7 @@ export const EditText = ({
         <Label htmlFor="edit-next-step">Next step (optional)</Label>
         <Textarea
           id="edit-next-step"
+          maxLength={MAX_NEXT_STEP}
           onChange={(event) => setNextStep(event.target.value)}
           value={nextStep}
         />
