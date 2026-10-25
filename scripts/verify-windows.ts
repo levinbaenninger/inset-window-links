@@ -23,6 +23,8 @@ import { activeWindow } from "get-windows";
 import type { ElectronApplication, Page } from "playwright";
 import { _electron } from "playwright";
 
+import type { SettingsChange } from "../src/shared/settings.ts";
+
 // The __insetE2E global is declared in verify-desktop.ts, which shares this tsconfig.
 
 interface Rect {
@@ -105,15 +107,25 @@ const APP = PACKAGED
     };
 
 const TRAY_MENU = [
-  "Show Draft",
-  "Add View from Window List…",
+  "Capture Panel",
+  "Add Windows…",
   "Recent Captures…",
-  "How It Works…",
   "---",
-  "Add View Shortcut: Ctrl+Alt+W",
+  "Add a Window: Ctrl+Alt+W",
   "---",
+  "How It Works",
+  "Settings…",
   "Quit Inset Window Links",
 ];
+
+/**
+ * The panel now stays open when another window is clicked. The harness turns click-away hiding
+ * back on, so the checks that click into a document still see it hide. iconIn is macOS only.
+ */
+const E2E_SETTINGS: SettingsChange = {
+  hideOnClickAway: true,
+  iconIn: "menuBar",
+};
 
 /** Yellow, so a stray popover in Doc A's captured image is easy to detect. */
 const YELLOW = [255, 214, 0] as const;
@@ -132,7 +144,7 @@ const DOC_B: Doc = {
   title: "Doc B - Quote",
 };
 
-/** Click targets inside each document, outside the other one and outside any popover. */
+/** Click targets inside each document, outside the other one and outside the popover, centred on a 1920-wide screen. */
 const CLICK_A = { x: 1450, y: 760 };
 const CLICK_B = { x: 150, y: 400 };
 
@@ -350,6 +362,12 @@ const launchInset = async (
   userData: string,
   extra: Readonly<Record<string, string>> = {}
 ) => {
+  await mkdir(userData, { recursive: true });
+  await writeFile(
+    path.join(userData, "settings.json"),
+    `${JSON.stringify(E2E_SETTINGS, null, 2)}\n`
+  );
+
   const app = await _electron.launch({
     args: APP.args,
     colorScheme: null,
@@ -499,18 +517,47 @@ const recordDirs = async (userData: string) => {
 const testIdShown = (page: Page, testId: string, timeout = 3000) =>
   settles(page.getByTestId(testId).waitFor({ timeout }));
 
-/** Samples Doc A's saved image where the preview popover sat over Doc A's top-right corner. */
-const overlapPixels = (app: ElectronApplication, file: string) =>
+/**
+ * Points in Doc A, relative to its window, where the preview popover sat over it. The popover
+ * is centred on the screen now, not in Doc A's top-right corner, so the samples follow its
+ * bounds. They stay 150 DIP below Doc A's top, clear of the title bar and the line of text.
+ */
+const overlapPoints = (popover: Rect | null) => {
+  const doc = DOC_A.bounds;
+
+  if (popover === null) {
+    return [];
+  }
+
+  const left = Math.max(popover.x, doc.x);
+  const right = Math.min(popover.x + popover.width, doc.x + doc.width);
+  const top = Math.max(popover.y, doc.y + 150);
+  const bottom = Math.min(popover.y + popover.height, doc.y + doc.height);
+
+  if (right - left < 60 || bottom - top < 60) {
+    return [];
+  }
+
+  const y = Math.round((top + bottom) / 2) - doc.y;
+
+  return [left + 20, (left + right) / 2, right - 20].map((x) => ({
+    x: Math.round(x) - doc.x,
+    y,
+  }));
+};
+
+/** Samples Doc A's saved image at points relative to its window. */
+const overlapPixels = (
+  app: ElectronApplication,
+  file: string,
+  points: readonly { x: number; y: number }[]
+) =>
   app.evaluate(
-    ({ nativeImage }, { png, width }) => {
+    ({ nativeImage }, { png, width, at }) => {
       const image = nativeImage.createFromPath(png);
       const scale = image.getSize().width / width;
 
-      return [
-        { x: width - 190, y: 200 },
-        { x: width - 100, y: 300 },
-        { x: width - 300, y: 120 },
-      ].map((point) => {
+      return at.map((point) => {
         const [blue, green, red] = image
           .crop({
             height: 1,
@@ -523,7 +570,7 @@ const overlapPixels = (app: ElectronApplication, file: string) =>
         return [red ?? 0, green ?? 0, blue ?? 0];
       });
     },
-    { png: file, width: DOC_A.bounds.width }
+    { at: points, png: file, width: DOC_A.bounds.width }
   );
 
 const isYellow = ([red, green, blue]: readonly number[]) =>
@@ -634,6 +681,8 @@ const firstPress = async (
     focusedAfter?.pid === insetPid && activeId === "relationship",
     json({ activeId, focusedAfter })
   );
+
+  return shown.bounds;
 };
 
 const typeAndCopy = async (
@@ -745,7 +794,8 @@ const secondPressAndSave = async (
 const checkRecord = async (
   app: ElectronApplication,
   userData: string,
-  dir: string
+  dir: string,
+  popover: Rect | null
 ) => {
   const recordPath = path.join(userData, "captures", dir);
 
@@ -767,15 +817,21 @@ const checkRecord = async (
     return;
   }
 
-  const sample = await overlapPixels(
-    app,
-    path.join(recordPath, "views", `${viewA.id}.png`)
-  );
+  const points = overlapPoints(popover);
+
+  const sample =
+    points.length === 0
+      ? []
+      : await overlapPixels(
+          app,
+          path.join(recordPath, "views", `${viewA.id}.png`),
+          points
+        );
 
   record(
     "Doc A's image shows Doc A where the preview overlapped it, not the popover",
-    sample.every(isYellow),
-    json(sample)
+    sample.length > 0 && sample.every(isYellow),
+    json({ points, popover, sample })
   );
 };
 
@@ -796,12 +852,17 @@ const libraryFlow = async (app: ElectronApplication) => {
     json(win)
   );
 
-  const strip = await page.locator(".app-drag").count();
+  // Every pane header is a drag region now; the one under the caption buttons is what counts.
+  const strip = String(
+    await page.evaluate(
+      "(() => { const header = document.elementFromPoint(innerWidth - 60, 18)?.closest('.drag-region'); return header ? header.tagName : 'none'; })()"
+    )
+  );
 
   record(
     "the window has a draggable strip under the caption buttons",
-    strip === 1,
-    String(strip)
+    strip === "HEADER",
+    strip
   );
   await page.screenshot({ path: path.join(OUT, "recent.png") });
 
@@ -837,15 +898,15 @@ const libraryFlow = async (app: ElectronApplication) => {
   );
 
   await page.keyboard.press("Escape");
-  await page.getByRole("link", { name: "Recent captures" }).click();
-  await page.getByRole("link", { name: "How Inset works" }).click();
+  // The library has no How it works link any more; the tray's How It Works opens it in place.
+  await app.evaluate(() => globalThis.__insetE2E.openWelcome());
 
   const welcome = await testIdShown(page, "welcome");
 
   record(
-    "How it works is one click from Recent Captures",
-    welcome,
-    String(welcome)
+    "How It Works opens in the open Recent Captures window",
+    welcome && page.url().endsWith("#/welcome"),
+    json({ url: page.url(), welcome })
   );
   await page.screenshot({ path: path.join(OUT, "welcome.png") });
 
@@ -1252,13 +1313,14 @@ const mainFlow = async (
 
   const popover = await pageFor(app, "popover.html");
 
-  await firstPress(app, fixtureApp, input, popover);
+  const shownAt = await firstPress(app, fixtureApp, input, popover);
+
   await typeAndCopy(app, input, popover);
 
   const dir = await secondPressAndSave(app, fixtureApp, input, userData);
 
   if (dir !== null) {
-    await checkRecord(app, userData, dir);
+    await checkRecord(app, userData, dir, shownAt);
   }
 
   // Each later flow starts from a known state, so one failure does not hide the rest.
