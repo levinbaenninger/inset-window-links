@@ -555,6 +555,76 @@ describe("session lifecycle", () => {
     expect(done.effects).toStrictEqual([{ type: "exitApp" }]);
   });
 
+  it("relaunches after Quit and reopen, saving first when asked", () => {
+    expect(
+      run(ids(), [{ relaunch: true, type: "quitRequested" }]).effects
+    ).toStrictEqual([{ relaunch: true, type: "exitApp" }]);
+
+    const source = ids();
+
+    const saving = run(source, [
+      foreignPress,
+      captured("t1", view(1, "macos:1176")),
+      { text: text("A limits B"), type: "textChanged" },
+      { relaunch: true, type: "quitRequested" },
+      { choice: "save", type: "quitChosen" },
+    ]);
+
+    expect(saving.state.activity).toStrictEqual({
+      after: "relaunch",
+      kind: "saving",
+    });
+
+    const done = run(
+      source,
+      [{ draftId: D1, result: { kind: "published" }, type: "saveFinished" }],
+      saving.state
+    );
+
+    expect(done.effects).toStrictEqual([{ relaunch: true, type: "exitApp" }]);
+  });
+
+  it("forgets Quit and reopen when its save is blocked or fails", () => {
+    const source = ids();
+
+    const blocked = run(source, [
+      { text: text("A limits B"), type: "textChanged" },
+      { relaunch: true, type: "quitRequested" },
+      { choice: "save", type: "quitChosen" },
+    ]);
+
+    expect(blocked.state.notice).toStrictEqual({ kind: "needsView" });
+    expect(
+      run(
+        source,
+        [{ type: "quitRequested" }, { choice: "discard", type: "quitChosen" }],
+        blocked.state
+      ).effects
+    ).toStrictEqual([{ type: "exitApp" }]);
+
+    const failed = run(source, [
+      foreignPress,
+      captured("t1", view(1, "macos:1176")),
+      { text: text("A limits B"), type: "textChanged" },
+      { relaunch: true, type: "quitRequested" },
+      { choice: "save", type: "quitChosen" },
+      {
+        draftId: D1,
+        result: { kind: "failed", message: "disk full" },
+        type: "saveFinished",
+      },
+    ]);
+
+    expect(failed.state.activity.kind).toBe("saveFailed");
+    expect(
+      run(
+        source,
+        [{ type: "quitRequested" }, { choice: "discard", type: "quitChosen" }],
+        failed.state
+      ).effects
+    ).toStrictEqual([{ type: "exitApp" }]);
+  });
+
   it("keeps Retry after a cancelled quit following a failed save", () => {
     const source = ids();
 
