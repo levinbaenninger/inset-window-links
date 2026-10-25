@@ -138,6 +138,7 @@ export const savedConfirmer = (
   onOpen: (captureId: string) => void
 ): ((captureId: string) => void) => {
   let last: string | null = null;
+  let clearSaved: ReturnType<typeof setTimeout> | undefined;
 
   tray.on("balloon-click", () => {
     if (last !== null) {
@@ -149,8 +150,10 @@ export const savedConfirmer = (
     last = captureId;
 
     if (process.platform === "darwin") {
+      // A second save restarts the timer, so the first one's timeout cannot cut it short.
+      clearTimeout(clearSaved);
       tray.setTitle(" Saved");
-      setTimeout(() => tray.setTitle(""), SAVED_FOR_MS);
+      clearSaved = setTimeout(() => tray.setTitle(""), SAVED_FOR_MS);
 
       return;
     }
