@@ -264,6 +264,21 @@ The second round followed the app-screen rules of the taste skill. That meant qu
 
 The taste skill's lint finds 0 failures in the renderer. Its 3 warnings are in generated shadcn components. Its browser inspector was not run, because the screens need the Electron preload bridge. The screens were checked from Electron screenshots in light and dark mode instead.
 
+## Third round: review fixes
+
+This round came from reading the code, not from a user report. The macOS, packaged, and Windows harnesses were not rerun, because other prototypes were using the desktop and the shortcut at the same time. The harness tables above describe earlier builds. The new behaviour is covered by unit tests and by loading the built pages in headless Chromium with a stubbed bridge. No Electron window was opened.
+
+- Quit and reopen could come back later. The controller kept a relaunch flag that only Cancel cleared. If Save and quit was blocked or the save failed, the next ordinary Quit started the app again. The reducer now carries the exit kind through the quit prompt and the save. Two unit tests cover it.
+- Stale notices. "Write what connects these views" stayed after the relationship was written, and a "window closed" notice came back on Show Draft. Typing clears the first. Show Draft and the window list clear every notice except the permission one. The `captureFailed` notice was never produced and is gone. Two unit tests cover it.
+- Text past the limit. Main rejects a relationship over 10,000 characters and a next step over 2,000. The fields had no limit, so main's copy of the text stopped updating silently and Save failed with no message. The fields now stop at the same lengths, taken from one place. Checked in headless Chromium.
+- Escape. While the discard question shows, Escape now answers Keep, and focus returns to the text. Escape or Enter that only ends an IME composition no longer hides or saves. The Keep and Escape paths were checked in headless Chromium. IME composition was not.
+- Many views. The view list is meant to scroll past a few views, but its chips could shrink, so with eight views every chip was squeezed to half height and nothing scrolled. The chips now keep their height. With eight views the list scrolls and Save sits at 514 pixels, inside the 560 pixel limit.
+- Library edits save with ⌘↵ (Ctrl+Enter on Windows). Checked in headless Chromium.
+- Focus with Recent Captures open (macOS). Hiding the popover skipped `app.hide()` whenever the library window was open, even behind other apps. macOS would then most likely make the library the key window instead of returning to the captured app. The popover now hides the app unless the library had focus when the popover opened, or has it when the popover hides. On macOS, blur now hides the popover one tick later, so a click into the library is seen first. Windows keeps its synchronous blur. This comes from reading the code. It has not been observed on the desktop, either before or after the change. A side effect is that Recent Captures hides with the app, as with ⌘H.
+- Smaller fixes, not observed on the desktop: the popover's native background follows a theme switch, and a second save within 2.5 seconds keeps its "Saved" title for the full time.
+
+`pnpm check` passes with 69 unit tests.
+
 ## Design notes
 
 - Main owns the draft. The renderer is the only writer of the text and mirrors every edit to main. Save carries the text too, so quit protection never needs a round trip to the renderer.
