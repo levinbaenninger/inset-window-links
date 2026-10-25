@@ -1,8 +1,12 @@
 import { z } from "zod";
 
+/** Main rejects longer text, so the text fields stop at the same lengths. */
+export const MAX_RELATIONSHIP = 10_000;
+export const MAX_NEXT_STEP = 2000;
+
 export const DraftTextSchema = z.object({
-  nextStep: z.string().max(2000),
-  relationship: z.string().max(10_000),
+  nextStep: z.string().max(MAX_NEXT_STEP),
+  relationship: z.string().max(MAX_RELATIONSHIP),
 });
 
 export type DraftText = z.infer<typeof DraftTextSchema>;

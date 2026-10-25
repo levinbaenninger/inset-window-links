@@ -15,7 +15,12 @@ import { popoverApi } from "@/lib/bridge";
 
 import type { DraftSnapshot } from "../../../shared/dto";
 import type { DraftText, Saveability } from "../../../shared/text";
-import { isBlank, saveability } from "../../../shared/text";
+import {
+  isBlank,
+  MAX_NEXT_STEP,
+  MAX_RELATIONSHIP,
+  saveability,
+} from "../../../shared/text";
 import { NoticeBanner } from "./notice-banner";
 import { SourceChips } from "./source-chips";
 import { SourceChooser } from "./source-chooser";
@@ -195,6 +200,7 @@ const DraftForm = ({
           autoFocus
           className="max-h-48 min-h-20 resize-none"
           id="relationship"
+          maxLength={MAX_RELATIONSHIP}
           placeholder="e.g. The budget cap rules out this quote."
           onChange={(event) =>
             setText({ ...text, relationship: event.target.value })
@@ -225,6 +231,7 @@ const DraftForm = ({
             <Textarea
               aria-label="Next step (optional)"
               className="max-h-32 min-h-12 resize-none"
+              maxLength={MAX_NEXT_STEP}
               onChange={(event) =>
                 setText({ ...text, nextStep: event.target.value })
               }
