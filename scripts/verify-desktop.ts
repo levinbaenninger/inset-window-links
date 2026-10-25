@@ -17,15 +17,24 @@ import type { ElectronApplication, Page } from "playwright";
 import { _electron } from "playwright";
 
 import type { DraftSnapshot } from "../src/shared/dto.ts";
+import type { SettingsChange } from "../src/shared/settings.ts";
+import type { Todo } from "../src/shared/text.ts";
 
 interface InsetE2E {
   pressShortcut: () => void;
   showDraft: () => void;
   openRecent: () => void;
+  openWelcome: () => void;
   quit: () => void;
   addFromWindowList: () => void;
+  /** Empty, and the bounds null, while the icon is in the Dock only. */
   trayMenu: () => string[];
-  trayBounds: () => { x: number; y: number; width: number; height: number };
+  trayBounds: () => {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null;
   trayPopUp: () => void;
   snapshot: () => DraftSnapshot;
   diagnostics: () => {
@@ -56,7 +65,7 @@ interface WindowInfo {
 
 interface SavedRecord {
   relationship: string;
-  nextStep: string;
+  todos: readonly Todo[];
   views: readonly { title: string | null; width: number; height: number }[];
 }
 
@@ -69,16 +78,29 @@ const PACKAGED_EXE = path.join(
 );
 
 const TRAY_MENU = [
-  "Show Draft",
-  "Add View from Window List…",
+  "Capture Panel",
+  "Add Windows…",
   "Recent Captures…",
-  "How It Works…",
   "---",
-  "Add View Shortcut: ⌥⌘W",
+  "Add a Window: ⌥⌘W",
   "Screen Recording Settings…",
   "---",
+  "How It Works",
+  "Settings…",
   "Quit Inset Window Links",
 ];
+
+/**
+ * The panel now stays open on click-away and the app shows a Dock icon by default. The harness
+ * turns both back, so the blur-hide, focus-return and no-Dock-icon checks still mean something.
+ */
+const E2E_SETTINGS: SettingsChange = {
+  hideOnClickAway: true,
+  iconIn: "menuBar",
+};
+
+/** Matches src/main/windows/popover-window.ts and placement.ts. */
+const PANEL = { maxHeight: 720, minHeight: 200, topShare: 0.16, width: 520 };
 
 const NEXT_STEP = "Ask the supplier whether 21 November is possible.";
 
@@ -190,8 +212,18 @@ const environment = (extra: ReadonlyMap<string, string>) => {
   return Object.fromEntries([...env, ...extra]);
 };
 
-const launch = (userData: string, failWrites = false) =>
-  _electron.launch({
+const writeSettings = async (userData: string) => {
+  await mkdir(userData, { recursive: true });
+  await writeFile(
+    path.join(userData, "settings.json"),
+    `${JSON.stringify(E2E_SETTINGS, null, 2)}\n`
+  );
+};
+
+const launch = async (userData: string, failWrites = false) => {
+  await writeSettings(userData);
+
+  return _electron.launch({
     ...(MODE === "packaged"
       ? { args: [], executablePath: PACKAGED_EXE }
       : { args: ["."], cwd: ROOT }),
@@ -202,6 +234,7 @@ const launch = (userData: string, failWrites = false) =>
       ])
     ),
   });
+};
 
 const windows = (app: ElectronApplication): Promise<WindowInfo[]> =>
   app.evaluate(({ BrowserWindow, screen }) =>
@@ -324,10 +357,11 @@ const checkPopoverPlacement = async (
   const sourceDisplay =
     source === null
       ? null
-      : await app.evaluate(
-          ({ screen }, bounds) => screen.getDisplayMatching(bounds).id,
-          source.bounds
-        );
+      : await app.evaluate(({ screen }, bounds) => {
+          const display = screen.getDisplayMatching(bounds);
+
+          return { id: display.id, workArea: display.workArea };
+        }, source.bounds);
 
   const size = popover?.bounds;
 
@@ -337,17 +371,41 @@ const checkPopoverPlacement = async (
     json(popover)
   );
   record(
-    "popover width is within 340-420 and height is below 600",
+    `popover width is ${PANEL.width} and height is within ${PANEL.minHeight}-${PANEL.maxHeight}`,
     size !== undefined &&
-      size.width >= 340 &&
-      size.width <= 420 &&
-      size.height < 600,
+      size.width === PANEL.width &&
+      size.height >= PANEL.minHeight &&
+      size.height <= PANEL.maxHeight,
     json(size)
   );
   record(
     "popover is on the display that contains TextEdit",
-    popover?.displayId === sourceDisplay,
-    json({ popover: popover?.displayId, source: sourceDisplay })
+    popover?.displayId === sourceDisplay?.id,
+    json({ popover: popover?.displayId, source: sourceDisplay?.id })
+  );
+
+  // The panel no longer sits beside the source window: it is centred on that display's work
+  // area, its top edge 16% of the way down, pulled up only if it would run off the bottom.
+  const area = sourceDisplay?.workArea;
+
+  const expected =
+    area === undefined || size === undefined
+      ? null
+      : {
+          x: Math.round(area.x + (area.width - size.width) / 2),
+          y: Math.min(
+            Math.round(area.y + area.height * PANEL.topShare),
+            area.y + area.height - size.height - 16
+          ),
+        };
+
+  record(
+    "popover is centred across the work area, 16% down from its top",
+    expected !== null &&
+      size !== undefined &&
+      Math.abs(size.x - expected.x) <= 2 &&
+      Math.abs(size.y - expected.y) <= 2,
+    json({ expected, workArea: area, x: size?.x, y: size?.y })
   );
 };
 
@@ -388,6 +446,12 @@ const checkFocusAndCopy = async (app: ElectronApplication, page: Page) => {
   const focusedId = (await page.locator(":focus").getAttribute("id")) ?? "";
   const label = await page.locator('label[for="relationship"]').textContent();
   const hint = (await page.getByTestId("hint").textContent()) ?? "";
+  const { shortcut } = await snapshot(app);
+
+  const expectedHint =
+    shortcut.kind === "registered"
+      ? `Or press ${shortcut.label} in any window to add it.`
+      : `${shortcut.label} is taken by another app, so pick windows with Add windows.`;
 
   record(
     "Inset is the OS-active app after the press",
@@ -401,8 +465,7 @@ const checkFocusAndCopy = async (app: ElectronApplication, page: Page) => {
   );
   record(
     "label and hint copy",
-    label === "What connects these views?" &&
-      hint.startsWith("Switch windows and press the shortcut to add a view."),
+    label === "What connects these views?" && hint === expectedHint,
     json({ hint, label })
   );
 };
@@ -636,10 +699,23 @@ const saveAndVerify = async (
   userData: string,
   docs: readonly string[]
 ) => {
-  await page.getByRole("button", { name: "Next step (optional)" }).click();
+  await page.getByRole("button", { name: "Add a next step" }).click();
   await page
-    .getByLabel("Next step (optional)")
+    .getByLabel("Next step 1", { exact: true })
     .pressSequentially(NEXT_STEP, { delay: 5 });
+  // Return starts the next row; it stays blank, so the save drops it.
+  await page.keyboard.press("Enter");
+
+  const nextRow = await waitFor(
+    async () => (await page.locator(":focus").getAttribute("aria-label")) ?? "",
+    (value) => value === "Next step 2"
+  );
+
+  record(
+    "Return in a next step adds the next row and moves into it",
+    nextRow === "Next step 2",
+    nextRow
+  );
   await page.locator("#relationship").focus();
   await page.keyboard.press("Meta+Enter");
 
@@ -674,15 +750,17 @@ const saveAndVerify = async (
     dirs.length === 1 && files.length === 2 && saved !== null,
     json({ dirs: dirs.length, files })
   );
+  const todos = saved?.todos.map((todo) => todo.text) ?? [];
+
   record(
-    "saved metadata has the relationship, next step, and both titles",
+    "saved metadata has the relationship, one next step without the blank row, and both titles",
     saved?.relationship === RELATIONSHIP &&
-      saved.nextStep === NEXT_STEP &&
+      json(todos) === json([NEXT_STEP]) &&
       json(titles) === json(docs),
     json({
-      nextStep: saved?.nextStep,
       relationship: saved?.relationship,
       titles,
+      todos,
     })
   );
   record(
@@ -733,7 +811,9 @@ const editAndDelete = async (library: Page, userData: string) => {
 
   await library.getByRole("button", { name: "Edit text" }).click();
   await library.getByLabel("What connects these views?").fill(edited);
-  await library.getByLabel("Next step (optional)").fill("Edited next step");
+  await library
+    .getByLabel("Next step 1", { exact: true })
+    .fill("Edited next step");
   await library.getByRole("button", { name: "Save changes" }).click();
   await library
     .getByTestId("record-relationship")
@@ -745,15 +825,18 @@ const editAndDelete = async (library: Page, userData: string) => {
   const route = library.url().split("#")[1] ?? "";
 
   record(
-    "editing both text fields persists to disk",
-    saved?.relationship === edited && saved.nextStep === "Edited next step",
-    json({ nextStep: saved?.nextStep, relationship: saved?.relationship })
+    "editing the text and the next step persists to disk",
+    saved?.relationship === edited &&
+      saved.todos[0]?.text === "Edited next step",
+    json({ relationship: saved?.relationship, todos: saved?.todos })
   );
   await library.getByRole("button", { name: "Delete" }).click();
   await library
     .getByRole("alertdialog")
     .getByRole("button", { name: "Delete" })
     .click();
+  // The sidebar's heading is always there now, so wait for the emptied list instead.
+  await library.getByTestId("recent-empty").waitFor();
   await library.getByRole("heading", { name: "Recent captures" }).waitFor();
 
   const remaining = await recordDirs(userData);
@@ -798,25 +881,28 @@ const reopenAndRead = async (
 
   const route = library.url().split("#")[1] ?? "";
 
+  // Top edges of the thought, the next-steps list and the sources, and whether the list holds the step.
   const order = String(
     await library.evaluate(
-      `(() => { const text = document.querySelector('main').innerText; return [text.indexOf(${JSON.stringify(
-        RELATIONSHIP
-      )}), text.indexOf(${JSON.stringify(
+      `(() => { const top = (selector) => document.querySelector('main ' + selector)?.getBoundingClientRect().top ?? -1; const steps = document.querySelector('main section[aria-label="Next steps"]'); return [top('[data-testid=record-relationship]'), top('section[aria-label="Next steps"]'), top('section[aria-label="Sources"]'), steps?.textContent?.includes(${JSON.stringify(
         NEXT_STEP
-      )}), text.indexOf('Sources')].join(','); })()`
+      )}) ? 1 : 0].join(','); })()`
     )
   );
 
-  const [relationshipAt = -1, nextStepAt = -1, sourcesAt = -1] = order
-    .split(",")
-    .map(Number);
+  const [
+    relationshipAt = -1,
+    nextStepAt = -1,
+    sourcesAt = -1,
+    hasNextStep = 0,
+  ] = order.split(",").map(Number);
 
   record(
-    "the record shows the thought, then the next step, then the sources",
+    "the record shows the thought, then the next steps, then the sources",
     relationshipAt >= 0 &&
       relationshipAt < nextStepAt &&
-      nextStepAt < sourcesAt,
+      nextStepAt < sourcesAt &&
+      hasNextStep === 1,
     order
   );
   record(
@@ -826,7 +912,7 @@ const reopenAndRead = async (
   );
   record(
     "after restart the record shows both source titles",
-    docs.every((doc, index) => titles[index] === `${index + 1}. ${doc}`),
+    json(titles) === json(docs),
     json(titles)
   );
   record(
@@ -1030,7 +1116,7 @@ const changedSameWindow = async (
   );
   record(
     "the repeat is labelled as the same window",
-    labels[1]?.includes("same window as view 1") === true,
+    labels[1]?.includes("Again, as view 1") === true,
     json(labels)
   );
   await clickDiscard(page);
@@ -1053,16 +1139,29 @@ const windowListFallback = async (
 
   const chooser = page.getByTestId("source-chooser");
 
-  const banner = await chooser
-    .getByText("Fallback: choose the window to add")
+  // Opened from the menu it is a plain picker now, not labelled as a fallback.
+  const prompt = await chooser
+    .getByText("Pick the windows this thought is about.")
     .count();
 
+  const reason =
+    choosing.activity.kind === "choosing" ? choosing.activity.reason : null;
+
   record(
-    "the window list opened from the tray is labelled as a fallback",
-    banner === 1 && choosing.views.length === 0,
-    json({ banner, views: choosing.views.length })
+    "the window list opened from the tray asks for windows, for the menu reason",
+    prompt === 1 && reason === "menu" && choosing.views.length === 0,
+    json({ prompt, reason, views: choosing.views.length })
   );
-  await chooser.getByRole("button", { exact: true, name: docA }).click();
+
+  // Each window is a toggle named by its title, then its app.
+  const escaped = docA.replaceAll(/[$()*+.?[\\\]^{|}]/gu, "\\$&");
+
+  await chooser
+    .getByRole("button", {
+      name: new RegExp(`^${escaped}\\s*(?:TextEdit|Window)$`, "u"),
+    })
+    .click();
+  await chooser.getByRole("button", { name: /^Add 1 window/u }).click();
 
   const snap = await waitFor(
     () => snapshot(app),
@@ -1070,15 +1169,14 @@ const windowListFallback = async (
   );
 
   const [view] = snap.views;
-  const badge = await page.getByText("Chosen from list").count();
 
+  // The tile no longer carries a "Chosen from list" badge, so only main's record is checked.
   record(
     "a window chosen from the list is recorded as a fallback view",
     view?.source.kind === "fallback" &&
       view.source.reason === "menu" &&
-      view.title === docA &&
-      badge === 1,
-    json({ badge, source: view?.source, title: view?.title })
+      view.title === docA,
+    json({ source: view?.source, title: view?.title })
   );
   await clickDiscard(page);
   await popoverVisible(app, false);
@@ -1189,6 +1287,7 @@ const inspectorEvaluate = async (
 const measureOpenLaunch = async (docA: string) => {
   const userData = await mkdtemp(path.join(tmpdir(), "iwl-verify-open-"));
 
+  await writeSettings(userData);
   execFileSync("open", [
     "-n",
     "--env",
@@ -1273,10 +1372,11 @@ const checkLaunch = async (app: ElectronApplication) => {
     launched.every((win) => !win.visible),
     json(launched.map((win) => [path.basename(win.url), win.visible]))
   );
+  // The Dock icon shows by default now; the harness puts the icon in the menu bar only.
   record(
-    "ordinary launch shows no dock icon",
+    "ordinary launch with the icon in the menu bar shows no dock icon",
     !dock,
-    json({ dockVisible: dock })
+    json({ dockVisible: dock, iconIn: E2E_SETTINGS.iconIn })
   );
 
   const menu = await app.evaluate(() => globalThis.__insetE2E.trayMenu());
