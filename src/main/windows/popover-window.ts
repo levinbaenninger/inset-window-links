@@ -197,13 +197,12 @@ export class PopoverWindow {
    * above the taskbar's flyouts, like a tray flyout. Hiding hands focus to a normal window.
    */
   #raise() {
-    if (process.platform === "win32") {
-      this.#win.setAlwaysOnTop(true, "pop-up-menu");
+    const { floatOnTop } = this.#options.settings();
 
-      return;
-    }
-
-    this.#win.setAlwaysOnTop(this.#options.settings().floatOnTop, "floating");
+    this.#win.setAlwaysOnTop(
+      floatOnTop,
+      process.platform === "win32" ? "pop-up-menu" : "floating"
+    );
   }
 
   /** Applies a changed float setting to a shown panel. */

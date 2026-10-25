@@ -292,7 +292,7 @@ What changed:
   - A Dock click opens the draft, or Recent Captures when there is none.
 - **The capture panel** (still the `popover` role in the code).
   - It opens centred on the screen being worked on, at 16% of its height, instead of in a corner. It can be dragged by its header, and reopens where it was left.
-  - It stays open when another window is clicked and floats above other windows. Both are settings. With "Hide when I click away" on, it behaves as before. When it hides without focus, it no longer calls `app.hide()`.
+  - It stays open when another window is clicked and floats above other windows. Both are settings, on macOS and Windows. With "Hide when I click away" on, it behaves as before. When it hides without focus, it no longer calls `app.hide()`.
   - Views are tiles, three to a row. The last tile, Add windows, opens a multi-select window list with Select all, double-click to add one, and ⌘↵ to add the picked ones.
   - The picked windows are captured together. Sources are listed once, at a size that fits the largest. Each image is scaled back to its own window, and a window that closed in the meantime counts as missing. The reducer has one batch event (`sourcesChosen`) and one batch outcome (`capturedMany`).
 - **Next steps** are a list of to-dos. Return adds the next one and Backspace removes an empty one, in the panel and in the edit form. In Recent Captures each step can be checked off; the check is written at once.
@@ -302,7 +302,8 @@ What changed:
   - The address comes from get-windows for the browsers it knows. Otherwise it comes from the window's accessibility tree, read with JavaScript for Automation as Shelf does. The file comes from `AXDocument`.
   - Nothing is read, and nothing prompts, without Accessibility.
   - Reopen all, and each view's link, open the page in the app it was in, the file, or the app. Main reads what to open from the record by id, accepts only http and https pages, existing files and `.app` bundles, and runs `open -a` with arguments, never a shell.
-  - Windows are not moved back to their old positions. That needs Accessibility scripting that could not be tried here.
+  - A window picked from the list is usually not the focused one. Its page or file is kept only when exactly one of its app's windows has its title; otherwise only the app is kept.
+  - Each view also stores where its window was on screen. Reopen does not move windows back yet. That needs Accessibility scripting of other apps' windows, which could not be tried here.
 - **Recent Captures** is a sidebar and a detail pane: the list on the window material with search, and the capture on the page background with its actions in the header.
 - **Help and first run.** The long "How it works" page is now a short page: one line of what the app is for, three actions with their keys, and New capture. It is the first-run page, the Help menu entry, and the empty state.
 - **Shelf's look.**
