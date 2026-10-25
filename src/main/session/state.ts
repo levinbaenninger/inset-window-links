@@ -51,6 +51,9 @@ export interface PendingSource {
 
 type Resumable = { kind: "idle" } | { kind: "saveFailed"; message: string };
 
+/** How a confirmed quit ends. Relaunch starts the app again, so macOS applies a new grant. */
+export type Exit = "quit" | "relaunch";
+
 export type Activity =
   | Resumable
   | {
@@ -65,8 +68,8 @@ export type Activity =
       reason: FallbackReason;
       candidates: readonly FallbackCandidate[] | "loading";
     }
-  | { kind: "saving"; after: "stay" | "quit" }
-  | { kind: "confirmingQuit"; resumeTo: Resumable };
+  | { kind: "saving"; after: "stay" | Exit }
+  | { kind: "confirmingQuit"; resumeTo: Resumable; exit: Exit };
 
 export interface SessionState {
   draft: Draft;
@@ -99,7 +102,7 @@ export type SessionEvent =
   | { type: "saveRequested"; text: DraftText }
   | { type: "saveFinished"; draftId: DraftId; result: PublishResult }
   | { type: "discardRequested" }
-  | { type: "quitRequested" }
+  | { type: "quitRequested"; relaunch?: true }
   | { type: "quitChosen"; choice: QuitChoice }
   | { type: "permissionRechecked"; granted: boolean };
 
@@ -124,4 +127,4 @@ export type SessionEffect =
   | { type: "hidePopover" }
   | { type: "publish"; draft: Draft }
   | { type: "askQuit" }
-  | { type: "exitApp" };
+  | { type: "exitApp"; relaunch?: true };

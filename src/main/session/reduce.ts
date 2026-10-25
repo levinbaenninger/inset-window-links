@@ -6,6 +6,7 @@ import type {
   Activity,
   CaptureToken,
   Draft,
+  Exit,
   SessionEffect,
   SessionEvent,
   SessionState,
@@ -54,7 +55,12 @@ const withText = (state: SessionState, text: DraftText): SessionState => ({
   draft: { ...state.draft, text },
 });
 
-const startSave = (state: SessionState, after: "stay" | "quit"): Transition => [
+const exitApp = (exit: Exit): SessionEffect =>
+  exit === "relaunch"
+    ? { relaunch: true, type: "exitApp" }
+    : { type: "exitApp" };
+
+const startSave = (state: SessionState, after: "stay" | Exit): Transition => [
   { ...state, activity: { after, kind: "saving" }, notice: null },
   [{ draft: state.draft, type: "publish" }],
 ];
@@ -170,16 +176,22 @@ const onSaveFinished = (
 
   return restart(
     ids,
-    activity.after === "quit" ? { type: "exitApp" } : { type: "hidePopover" }
+    activity.after === "stay"
+      ? { type: "hidePopover" }
+      : exitApp(activity.after)
   );
 };
 
-const onQuitRequested = (state: SessionState): Transition => {
+const onQuitRequested = (
+  state: SessionState,
+  event: EventOf<"quitRequested">
+): Transition => {
   const { activity } = state;
+  const exit: Exit = event.relaunch === true ? "relaunch" : "quit";
 
   if (activity.kind === "saving") {
     return activity.after === "stay"
-      ? [{ ...state, activity: { kind: "saving", after: "quit" } }, []]
+      ? [{ ...state, activity: { after: exit, kind: "saving" } }, []]
       : unchanged(state);
   }
 
@@ -188,14 +200,14 @@ const onQuitRequested = (state: SessionState): Transition => {
   }
 
   if (!isMeaningful(state.draft)) {
-    return [state, [{ type: "exitApp" }]];
+    return [state, [exitApp(exit)]];
   }
 
   const resumeTo =
     activity.kind === "saveFailed" ? activity : ({ kind: "idle" } as const);
 
   return [
-    { ...state, activity: { kind: "confirmingQuit", resumeTo } },
+    { ...state, activity: { exit, kind: "confirmingQuit", resumeTo } },
     [{ type: "askQuit" }],
   ];
 };
@@ -215,7 +227,7 @@ const onQuitChosen = (
 
   switch (event.choice) {
     case "discard": {
-      return restart(ids, { type: "exitApp" });
+      return restart(ids, exitApp(activity.exit));
     }
 
     case "cancel": {
@@ -226,7 +238,7 @@ const onQuitChosen = (
       const check = saveability(state.draft.views.length, state.draft.text);
 
       return check.kind === "ok"
-        ? startSave(resumed, "quit")
+        ? startSave(resumed, activity.exit)
         : [
             { ...resumed, notice: { kind: check.reason } },
             [{ anchor: { kind: "keep" }, type: "showPopover" }],
@@ -487,7 +499,7 @@ export const reduce = (
     }
 
     case "quitRequested": {
-      return onQuitRequested(state);
+      return onQuitRequested(state, event);
     }
 
     case "quitChosen": {

@@ -44,7 +44,6 @@ export class SessionController {
   readonly #savedListeners = new Set<(captureId: CaptureId) => void>();
   #state: SessionState = initialSession(newDraftId());
   #exiting = false;
-  #relaunch = false;
 
   constructor(
     capturer: WindowCapturer,
@@ -106,17 +105,12 @@ export class SessionController {
 
   /** The answer to the quit prompt in the popover. */
   chooseQuit(choice: QuitChoice): void {
-    if (choice === "cancel") {
-      this.#relaunch = false;
-    }
-
     this.dispatch({ choice, type: "quitChosen" });
   }
 
   /** macOS applies a new Screen Recording grant only to a fresh process. */
   requestRelaunch(): void {
-    this.#relaunch = true;
-    this.dispatch({ type: "quitRequested" });
+    this.dispatch({ relaunch: true, type: "quitRequested" });
   }
 
   recheckPermission(): void {
@@ -219,7 +213,7 @@ export class SessionController {
       case "exitApp": {
         this.#exiting = true;
 
-        if (this.#relaunch) {
+        if (effect.relaunch === true) {
           app.relaunch();
         }
 
