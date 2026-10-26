@@ -245,11 +245,12 @@ export const registerLibraryChannels = (
         }
       }
     ),
-    copyNote: invoke(z.tuple([DraftIdSchema]), (captureId) => {
+    copyNote: invoke(z.tuple([DraftIdSchema]), async (captureId) => {
       const entry = store.get(captureId);
 
+      // Electron's clipboard writes resolve later; the page says Copied only once this has.
       if (entry?.kind === "current") {
-        clipboard.writeText(
+        await clipboard.writeText(
           formatNote(
             entry.record,
             app.getLocale(),
@@ -291,10 +292,13 @@ export const registerLibraryChannels = (
             ? entry.record.views.filter((view) => viewIds.includes(view.id))
             : [];
 
-        // One after another, so the windows come up in capture order.
+        // One after another, so the windows come up in capture order. Two views of one app start it once.
+        const started = new Set<string>();
+
         const opened = await views.reduce<Promise<number>>(
           async (count, view) =>
-            (await count) + ((await reopenOrigin(view.origin)) ? 1 : 0),
+            (await count) +
+            ((await reopenOrigin(view.origin, started)) ? 1 : 0),
           Promise.resolve(0)
         );
 

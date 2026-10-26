@@ -219,6 +219,7 @@ export class SessionController {
 
       case "exitApp": {
         this.#exiting = true;
+        this.#popover.allowClose();
 
         if (effect.relaunch === true) {
           app.relaunch();

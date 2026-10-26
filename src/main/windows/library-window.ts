@@ -1,7 +1,9 @@
 import { app, BrowserWindow, nativeTheme } from "electron";
 
 import { pushChannels } from "../../shared/channels";
+import { cursorWorkArea } from "./cursor-display";
 import { windowIcon } from "./icon";
+import { centerIn } from "./placement";
 import type { RendererPage } from "./renderer-page";
 import { securePreferences } from "./renderer-page";
 import { themeColors, titleBarOverlay } from "./theme";
@@ -95,15 +97,16 @@ export class LibraryWindow {
       return;
     }
 
+    const size = { height: 680, width: 1040 };
+
     const win = new BrowserWindow({
       backgroundColor: mac ? "#00000000" : themeColors().background,
-      height: 680,
       minHeight: 440,
       minWidth: 720,
       show: false,
       title: "Recent Captures",
       webPreferences: securePreferences("library"),
-      width: 1040,
+      ...(windows ? centerIn(size, cursorWorkArea()) : size),
       ...chrome(),
     });
 

@@ -169,6 +169,15 @@
   ::-webkit-scrollbar-button {
     display: none;
   }
+
+  /*
+   * The capture panel is as tall as its content, so its page never needs a scrollbar. On Windows
+   * one takes 8px of the width, the tiles grow shorter to match, and the bar stays for good.
+   * The lists inside the panel keep theirs.
+   */
+  [data-window="popover"] {
+    scrollbar-width: none;
+  }
 }
 
 /* On macOS every window has the system's sidebar material behind the page. */

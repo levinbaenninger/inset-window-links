@@ -23,7 +23,10 @@ export const Home = () => {
       keys: shortcut.kind === "registered" ? shortcut.label : null,
       text: "Add the window in front",
     },
-    { keys: mac ? "⇧⌘N" : null, text: "Pick several windows at once" },
+    {
+      keys: mac ? "⇧⌘N" : "Ctrl+Shift+N",
+      text: "Pick several windows at once",
+    },
     { keys: mac ? "⌘↵" : "Ctrl+Enter", text: "Save what connects them" },
   ];
 

@@ -2,7 +2,9 @@ import { app, BrowserWindow, nativeTheme } from "electron";
 
 import { pushChannels } from "../../shared/channels";
 import type { SettingsView } from "../../shared/settings";
+import { cursorWorkArea } from "./cursor-display";
 import { windowIcon } from "./icon";
+import { centerIn } from "./placement";
 import type { RendererPage } from "./renderer-page";
 import { securePreferences } from "./renderer-page";
 import { themeColors, titleBarOverlay } from "./theme";
@@ -106,9 +108,17 @@ export class SettingsWindow {
       win.removeMenu();
     }
 
+    // Read now, while the pointer is still where the user asked for Settings.
+    const workArea = cursorWorkArea();
+
     win.setAlwaysOnTop(true, "floating", 1);
     win.once("ready-to-show", () => {
-      win.center();
+      if (windows) {
+        win.setBounds(centerIn(win.getBounds(), workArea));
+      } else {
+        win.center();
+      }
+
       win.show();
     });
     this.#win = win;

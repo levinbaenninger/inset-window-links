@@ -57,7 +57,8 @@ export const originSummary = (view: SavedView): OriginSummary | null => {
     : {
         detail: origin.appPath,
         kind: "app",
-        label: view.appName ?? path.basename(origin.appPath, ".app"),
+        // "Safari" for /Applications/Safari.app, "chrome" for C:\…\chrome.exe.
+        label: view.appName ?? path.parse(origin.appPath).name,
       };
 };
 

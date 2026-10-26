@@ -36,6 +36,22 @@ export const centerPanel = (size: Size, workArea: Bounds): Bounds => ({
   ),
 });
 
+/**
+ * Centred in the work area, and no larger than it. Windows opens new windows on the primary
+ * display; Recent Captures and Settings open here instead, on the display the user is on.
+ */
+export const centerIn = (size: Size, workArea: Bounds): Bounds => {
+  const width = Math.min(size.width, workArea.width);
+  const height = Math.min(size.height, workArea.height);
+
+  return {
+    height,
+    width,
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + (workArea.height - height) / 2),
+  };
+};
+
 /** A position the user dragged the panel to, pulled back inside the work area if it no longer fits. */
 export const keepInside = (
   position: Point,

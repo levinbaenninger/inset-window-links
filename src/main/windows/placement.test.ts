@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { centerPanel, contains, keepInside } from "./placement";
+import { centerIn, centerPanel, contains, keepInside } from "./placement";
 
 const laptop = { height: 875, width: 1512, x: 0, y: 25 };
 const left = { height: 1055, width: 1920, x: -1920, y: 0 };
@@ -52,5 +52,22 @@ describe(contains, () => {
       contains(laptop, { x: 0, y: 25 }),
       contains(laptop, { x: 1512, y: 100 }),
     ]).toStrictEqual([true, false]);
+  });
+});
+
+describe(centerIn, () => {
+  it("centres a window on a display with a negative origin", () => {
+    expect(centerIn({ height: 680, width: 1040 }, left)).toStrictEqual({
+      height: 680,
+      width: 1040,
+      x: -1480,
+      y: 188,
+    });
+  });
+
+  it("shrinks a window to a work area smaller than it", () => {
+    const small = { height: 600, width: 900, x: 0, y: 0 };
+
+    expect(centerIn({ height: 680, width: 1040 }, small)).toStrictEqual(small);
   });
 });
