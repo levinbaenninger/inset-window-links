@@ -158,6 +158,9 @@ const VK = {
   end: 0x23,
   enter: 0x0d,
   escape: 0x1b,
+  f4: 0x73,
+  n: 0x4e,
+  shift: 0x10,
   up: 0x26,
   v: 0x56,
   z: 0x5a,
@@ -1080,6 +1083,96 @@ const chromeFlow = async (
   });
 };
 
+/**
+ * Windows has no menu bar, so the panel answers the Mac menu's keys itself, and Alt+F4 must only
+ * hide it: the panel lives as long as the app.
+ */
+const panelKeys = async (
+  app: ElectronApplication,
+  fixtureApp: ElectronApplication,
+  input: Input
+) => {
+  const insetPid = await app.evaluate(() => process.pid);
+
+  await app.evaluate(() => globalThis.__insetE2E.showDraft());
+
+  const shown = await waitFor(
+    () => windowFor(app, "popover.html"),
+    (win) => win?.visible === true,
+    3000
+  );
+
+  if (shown === null) {
+    record("the panel shows for the key checks", false, "no panel");
+
+    return;
+  }
+
+  // A click on the header, so the keys go to the panel even if Windows kept another window in front.
+  const header = await fixtureApp.evaluate(
+    (_modules, dip) => globalThis.fixture.physical(dip),
+    { x: shown.bounds.x + 200, y: shown.bounds.y + 20 }
+  );
+
+  await input.click(header, [insetPid]);
+  await waitFor(foreground, (win) => win?.pid === insetPid, 2000);
+  await input.keys(harnessPids, VK.ctrl, VK.shift, VK.n);
+
+  const choosing = await waitFor(
+    () => snapshot(app),
+    (snap) => snap.activity.kind === "choosing",
+    3000
+  );
+
+  await input.keys(harnessPids, VK.escape);
+
+  const back = await waitFor(
+    () => snapshot(app),
+    (snap) => snap.activity.kind === "idle",
+    3000
+  );
+
+  record(
+    "Ctrl+Shift+N opens the window list, as ⇧⌘N does on macOS",
+    choosing.activity.kind === "choosing" && back.activity.kind === "idle",
+    json([choosing.activity.kind, back.activity.kind])
+  );
+
+  await input.keys(harnessPids, VK.alt, VK.f4);
+
+  const hidden = await waitFor(
+    () => windowFor(app, "popover.html"),
+    (win) => win?.visible === false,
+    3000
+  );
+
+  const kept = await viewCount(app);
+
+  await app.evaluate(() => globalThis.__insetE2E.showDraft());
+
+  const again = await waitFor(
+    () => windowFor(app, "popover.html"),
+    (win) => win?.visible === true,
+    3000
+  );
+
+  record(
+    "Alt+F4 hides the panel, keeps the draft, and the panel opens again",
+    hidden?.visible === false && kept === 1 && again?.visible === true,
+    json({ again: again?.visible, hidden: hidden?.visible, kept })
+  );
+
+  // Hidden again, as the quit checks after this expect.
+  await input.click(header, [insetPid]);
+  await waitFor(foreground, (win) => win?.pid === insetPid, 2000);
+  await input.keys(harnessPids, VK.escape);
+  await waitFor(
+    () => windowFor(app, "popover.html"),
+    (win) => win?.visible === false,
+    3000
+  );
+};
+
 const quitFlow = async (
   app: ElectronApplication,
   fixtureApp: ElectronApplication,
@@ -1137,6 +1230,8 @@ const quitFlow = async (
       app.process().exitCode === null,
     json(cancelled)
   );
+
+  await panelKeys(app, fixtureApp, input);
 
   await app.evaluate(() => globalThis.__insetE2E.quit());
 
