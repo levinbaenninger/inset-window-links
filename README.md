@@ -20,9 +20,13 @@ This is a research prototype. See `IMPLEMENTATION_REPORT.md` for what has been v
   - Open at Login.
   - Show the app icon in the Dock, the menu bar, or both (macOS). Menu Bar Only works as before, with no Dock icon and no menu bar.
   - Keep the panel on top, and hide it when you click away.
-  - Remember pages and files. This needs Accessibility. Without it, Reopen brings back only the app.
+  - Remember pages and files. This needs Accessibility. Without it, Reopen brings back only the app. On Windows the setting is Remember web pages, a switch that starts off.
 - **Menus.** The app has the usual Mac menus: File, Edit, View, Window and Help. Window > Keep Capture Panel on Top does the same as the setting. The menu-bar icon has Capture Panel, Add Windows…, Recent Captures…, How It Works, Settings… and Quit.
-- **Windows.** The icon sits in the notification area. Windows 11 puts new icons behind the ^ next to the clock; drag it onto the taskbar to keep it in view. A left click opens the draft when it holds something, otherwise Recent Captures. Starting the app again while it runs does the same. Reopen, and remembering pages and files, are macOS only for now.
+- **Windows.**
+  - The icon sits in the notification area. Windows 11 puts new icons behind the ^ next to the clock; drag it onto the taskbar to keep it in view. A left click opens the draft when it holds something, otherwise Recent Captures. Starting the app again while it runs does the same.
+  - There is no menu bar, but Inset's windows answer the menu keys with Ctrl: `Ctrl+N` and `Ctrl+1` open the panel, `Ctrl+Shift+N` adds windows, `Ctrl+S` saves, `Ctrl+F` finds, `Ctrl+2` opens Recent Captures, `Ctrl+,` opens Settings, and `Ctrl+W` closes the window or hides the panel. Alt+F4 also hides the panel and keeps the draft.
+  - Recent Captures and Settings open on the screen the pointer is on.
+  - Reopen starts each view's app again, once per app. Windows starts a new window of it rather than bringing a running one forward. With Remember web pages on, a page in Chrome, Edge, Brave, Vivaldi or Opera opens again, in the browser it was in. Firefox pages are not read. Inset reads the address from the browser's address bar, which hides `https://`. An address without a scheme is stored as https, or as http for localhost and IP addresses. Files other apps had open are not remembered.
 
 Captures are stored as JSON and PNG files in `~/Library/Application Support/Inset Window Links/captures` on macOS and `%APPDATA%\Inset Window Links\captures` on Windows.
 
