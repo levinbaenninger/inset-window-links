@@ -13,6 +13,11 @@ export const SettingsSchema = z.object({
   floatOnTop: z.boolean(),
   /** The capture panel hides when another window is clicked, as it did before it stayed open. */
   hideOnClickAway: z.boolean(),
+  /**
+   * Windows: read the address of a captured browser window, so Reopen opens the page. Off until
+   * turned on, as macOS reads nothing until Accessibility is granted.
+   */
+  rememberPages: z.boolean(),
 });
 
 export type Settings = z.output<typeof SettingsSchema>;
@@ -29,12 +34,14 @@ export const withChange = (
   floatOnTop: change.floatOnTop ?? settings.floatOnTop,
   hideOnClickAway: change.hideOnClickAway ?? settings.hideOnClickAway,
   iconIn: change.iconIn ?? settings.iconIn,
+  rememberPages: change.rememberPages ?? settings.rememberPages,
 });
 
 export const DEFAULT_SETTINGS: Settings = {
   floatOnTop: true,
   hideOnClickAway: false,
   iconIn: "dockAndMenuBar",
+  rememberPages: false,
 };
 
 /** Settings from their file; missing, unknown or damaged values fall back to the defaults. */
@@ -58,7 +65,7 @@ export const readSettings = (raw: string | null): Settings => {
 export interface SettingsView {
   settings: Settings;
   openAtLogin: boolean;
-  /** Whether pages and files can be remembered: Accessibility is granted (macOS). */
+  /** Whether pages and files can be remembered: Accessibility is granted (macOS), or the setting is on (Windows). */
   originsReadable: boolean;
   shortcut: ShortcutStatus;
   platform: CapturePlatform;

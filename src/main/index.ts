@@ -12,7 +12,8 @@ import {
 import type { Tray } from "electron";
 
 import type { IconPlace, SettingsView } from "../shared/settings";
-import { appMenuTemplate } from "./app-menu";
+import type { AppMenuActions } from "./app-menu";
+import { appMenuTemplate, keyAction } from "./app-menu";
 import { loadAppState, saveAppState } from "./app-state";
 import {
   capturePlatform,
@@ -81,6 +82,20 @@ const start = async () => {
   await app.whenReady();
   denyEverything();
 
+  /** Set once the app's actions exist; until then a key press does nothing. */
+  let answerMenuKeys:
+    | ((event: Electron.Event, input: Electron.Input) => void)
+    | null = null;
+
+  // Windows has no menu bar, so every Inset window answers the Mac menu's keys itself.
+  if (!mac) {
+    app.on("browser-window-created", (_event, win) => {
+      win.webContents.on("before-input-event", (event, input) =>
+        answerMenuKeys?.(event, input)
+      );
+    });
+  }
+
   const settings = await openSettingsStore(
     app.getPath("userData"),
     nodeStoreFs
@@ -112,7 +127,8 @@ const start = async () => {
           library.mediaSourceId(),
           settingsWindow.window()?.getMediaSourceId() ?? null,
         ].filter((id) => id !== null)
-      )
+      ),
+    () => settings.current().rememberPages
   );
 
   const session = new SessionController(capturer, store, popover);
@@ -215,6 +231,38 @@ const start = async () => {
     }
   };
 
+  const menuActions: AppMenuActions = {
+    addWindows,
+    closeWindow: () => {
+      if (popover.isFocused()) {
+        popover.hide();
+      } else {
+        BrowserWindow.getFocusedWindow()?.close();
+      }
+    },
+    find: () => library.find(),
+    newCapture: showDraft,
+    openHelp: actions.openWelcome,
+    openRecent,
+    openScreenSettings: () => {
+      void openScreenSettings();
+    },
+    openSettings,
+    saveCapture: () => session.saveDraft(),
+    setFloatOnTop: (on) => {
+      void settings.update({ floatOnTop: on });
+    },
+  };
+
+  answerMenuKeys = (event, input) => {
+    const action = keyAction(input);
+
+    if (action !== null) {
+      event.preventDefault();
+      menuActions[action]();
+    }
+  };
+
   const refreshAppMenu = () => {
     if (!mac) {
       return;
@@ -227,28 +275,7 @@ const start = async () => {
             floatOnTop: settings.current().floatOnTop,
             shortcut: shortcut.kind === "registered" ? shortcut.label : null,
           },
-          {
-            addWindows,
-            closeWindow: () => {
-              if (popover.isFocused()) {
-                popover.hide();
-              } else {
-                BrowserWindow.getFocusedWindow()?.close();
-              }
-            },
-            find: () => library.find(),
-            newCapture: showDraft,
-            openHelp: actions.openWelcome,
-            openRecent,
-            openScreenSettings: () => {
-              void openScreenSettings();
-            },
-            openSettings,
-            saveCapture: () => session.saveDraft(),
-            setFloatOnTop: (on) => {
-              void settings.update({ floatOnTop: on });
-            },
-          }
+          menuActions
         )
       )
     );
@@ -256,7 +283,7 @@ const start = async () => {
 
   const settingsView = (): SettingsView => ({
     openAtLogin: app.getLoginItemSettings().openAtLogin,
-    originsReadable: canReadOrigins(),
+    originsReadable: mac ? canReadOrigins() : settings.current().rememberPages,
     platform: capturePlatform,
     settings: settings.current(),
     shortcut,

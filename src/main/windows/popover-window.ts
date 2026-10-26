@@ -6,6 +6,7 @@ import { pushChannels } from "../../shared/channels";
 import type { DraftSnapshot } from "../../shared/dto";
 import type { Settings } from "../../shared/settings";
 import type { PopoverAnchor } from "../session/state";
+import { cursorWorkArea } from "./cursor-display";
 import type { Point } from "./placement";
 import { centerPanel, contains, keepInside } from "./placement";
 import type { RendererPage } from "./renderer-page";
@@ -23,7 +24,7 @@ const mac = process.platform === "darwin";
 const workAreaFor = (anchor: PopoverAnchor) =>
   anchor.kind === "window"
     ? screen.getDisplayMatching(anchor.bounds).workArea
-    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    : cursorWorkArea();
 
 export interface PanelOptions {
   /**
@@ -49,6 +50,8 @@ export class PopoverWindow {
   #hiding = false;
   #placing = false;
   #returnToOtherWindow = false;
+  /** Set once the app is exiting; until then a close only hides the panel. */
+  #closable = false;
   /** Where the user dragged the panel, kept for this run. */
   #dragged: Point | null = null;
   readonly #hiddenListeners = new Set<() => void>();
@@ -128,6 +131,20 @@ export class PopoverWindow {
         listener();
       }
     });
+    // Alt+F4 on Windows closes the focused window. The panel lives as long as the app, so a close
+    // hides it like Escape and keeps the draft. A prevented close would also stop a quit, so the
+    // exit path allows it first.
+    this.#win.on("close", (event) => {
+      if (!this.#closable) {
+        event.preventDefault();
+        this.hide();
+      }
+    });
+  }
+
+  /** Lets the app's own quit close the panel. */
+  allowClose(): void {
+    this.#closable = true;
   }
 
   get webContents(): Electron.WebContents {

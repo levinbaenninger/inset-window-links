@@ -69,6 +69,7 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
   const iconId = useId();
   const floatId = useId();
   const clickAwayId = useId();
+  const pagesId = useId();
   const page = useRef<HTMLElement>(null);
   const { settings } = view;
   const mac = view.platform === "macos";
@@ -103,10 +104,10 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
           Settings
         </h1>
       ) : (
-        <>
-          <div aria-hidden className="drag-region -mx-3 -mb-2 h-9" />
-          <h1 className="sr-only">Settings</h1>
-        </>
+        // A Windows title bar: the title on the left, the close button drawn over the right.
+        <h1 className="drag-region -mx-3 -mb-2 flex h-9 items-center pl-4.5 text-xs">
+          Settings
+        </h1>
       )}
       <Group title="General">
         <Row label="Open at Login" labelFor={loginId}>
@@ -185,6 +186,28 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
           />
         </Row>
       </Group>
+      {/* Windows needs no permission to read a browser's address, so it is a plain switch. */}
+      {!mac && (
+        <Group title="Reopening">
+          <Row
+            label="Remember web pages"
+            labelFor={pagesId}
+            note={
+              settings.rememberPages
+                ? "Reopen opens the page a browser window showed. Other windows reopen their app."
+                : "Reopen brings back the app each window came from. On, it also reads the address of a browser window you capture."
+            }
+          >
+            <Switch
+              checked={settings.rememberPages}
+              id={pagesId}
+              onCheckedChange={(checked) => {
+                void settingsApi().update({ rememberPages: checked });
+              }}
+            />
+          </Row>
+        </Group>
+      )}
       {mac && (
         <Group title="Reopening">
           <Row

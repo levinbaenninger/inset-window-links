@@ -23,9 +23,61 @@ export interface AppMenuActions {
 
 const SEPARATOR: MenuItemConstructorOptions = { type: "separator" };
 
+/** The menu items that have a key of their own. */
+export type KeyAction = keyof Omit<
+  AppMenuActions,
+  "openHelp" | "openScreenSettings" | "setFloatOnTop"
+>;
+
+/** The parts of a key press that pick a menu key, as Electron's before-input-event reports them. */
+export interface KeyPress {
+  type: string;
+  key: string;
+  control: boolean;
+  shift: boolean;
+  alt: boolean;
+  meta: boolean;
+  isAutoRepeat: boolean;
+}
+
+/** The menu's keys on Windows, where Ctrl stands for ⌘. */
+const KEY_ACTIONS = new Map<string, KeyAction>([
+  ["ctrl+,", "openSettings"],
+  ["ctrl+1", "newCapture"],
+  ["ctrl+2", "openRecent"],
+  ["ctrl+f", "find"],
+  ["ctrl+n", "newCapture"],
+  ["ctrl+s", "saveCapture"],
+  ["ctrl+shift+n", "addWindows"],
+  ["ctrl+w", "closeWindow"],
+]);
+
+/**
+ * Windows has no menu bar, so Inset's windows answer the menu's keys themselves. Alt is never
+ * part of them: Ctrl+Alt is AltGr on many layouts, and Ctrl+Alt+W is the capture shortcut.
+ */
+export const keyAction = (press: KeyPress): KeyAction | null => {
+  if (
+    press.type !== "keyDown" ||
+    press.isAutoRepeat ||
+    !press.control ||
+    press.alt ||
+    press.meta
+  ) {
+    return null;
+  }
+
+  return (
+    KEY_ACTIONS.get(
+      `ctrl+${press.shift ? "shift+" : ""}${press.key.toLowerCase()}`
+    ) ?? null
+  );
+};
+
 /**
  * The menu bar of a regular Mac app. The Edit roles stay, so typing, copying and undo
- * work in every text field. macOS only: on Windows the windows keep no menu bar.
+ * work in every text field. macOS only: on Windows the windows keep no menu bar, and
+ * keyAction gives them the same keys.
  */
 export const appMenuTemplate = (
   state: AppMenuState,

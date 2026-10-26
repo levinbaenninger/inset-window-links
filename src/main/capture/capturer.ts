@@ -25,6 +25,7 @@ import {
   nativeWindowKey,
   parseWindowSourceId,
 } from "./window-key";
+import { windowsOrigins } from "./windows-origin";
 
 export const capturePlatform: CapturePlatform =
   process.platform === "win32" ? "windows" : "macos";
@@ -193,11 +194,28 @@ const toView = (
 
 /**
  * The page or file of the window the probe found. Browsers' addresses come from a second probe
- * that may read them; it counts only if the same window is still in front.
+ * that may read them; it counts only if the same window is still in front. On Windows the
+ * browser's address bar is read by window handle, when readPages allows it.
  */
 const foregroundOrigin = async (
-  probed: NonNullable<Awaited<ReturnType<typeof activeWindow>>>
+  probed: NonNullable<Awaited<ReturnType<typeof activeWindow>>>,
+  readPages: boolean
 ): Promise<ViewOrigin | null> => {
+  if (capturePlatform === "windows") {
+    const [origin] = await windowsOrigins(
+      [
+        {
+          bounds: geometry(probed.bounds).dip,
+          hwnd: probed.id,
+          ownerPath: probed.owner.path,
+        },
+      ],
+      readPages
+    );
+
+    return origin ?? null;
+  }
+
   let knownUrl: string | undefined;
 
   if (canReadOrigins()) {
@@ -226,10 +244,16 @@ const foregroundOrigin = async (
 
 export class WindowCapturer {
   readonly #ownSourceIds: () => ReadonlySet<string>;
+  readonly #readPages: () => boolean;
   #diagnostics: ProbeDiagnostics | null = null;
 
-  constructor(ownSourceIds: () => ReadonlySet<string>) {
+  /** readPages: whether browser addresses may be read (Windows; macOS asks Accessibility instead). */
+  constructor(
+    ownSourceIds: () => ReadonlySet<string>,
+    readPages: () => boolean
+  ) {
     this.#ownSourceIds = ownSourceIds;
+    this.#readPages = readPages;
   }
 
   get diagnostics(): ProbeDiagnostics | null {
@@ -354,7 +378,7 @@ export class WindowCapturer {
     let sources: DesktopCapturerSource[];
 
     // Read while the sources are listed, so remembering the page or file adds no wait.
-    const origin = foregroundOrigin(probed);
+    const origin = foregroundOrigin(probed, this.#readPages());
 
     try {
       sources = await this.#windowSources(pixels);
@@ -422,6 +446,44 @@ export class WindowCapturer {
     return { kind: "captured", view };
   }
 
+  /** Where each picked window came from; null where the helper did not list the window. */
+  async #chosenOrigins(
+    listed: readonly (ListedWindow | undefined)[]
+  ): Promise<(ViewOrigin | null)[]> {
+    if (capturePlatform === "windows") {
+      const known = listed.flatMap((item) =>
+        item === undefined ? [] : [item]
+      );
+
+      const origins = await windowsOrigins(
+        known.map((item) => ({
+          bounds: geometry(item.bounds).dip,
+          hwnd: item.id,
+          ownerPath: item.owner.path,
+        })),
+        this.#readPages()
+      );
+
+      return listed.map((item) =>
+        item === undefined ? null : (origins[known.indexOf(item)] ?? null)
+      );
+    }
+
+    return Promise.all(
+      listed.map((item) =>
+        item === undefined
+          ? null
+          : readOrigin({
+              bounds: geometry(item.bounds).dip,
+              ownerPath: item.owner.path,
+              pid: item.owner.processId,
+              strict: true,
+              title: nonEmpty(item.title),
+            })
+      )
+    );
+  }
+
   /** Low-resolution previews for the window list, with each window's app. Never persisted. */
   async listCandidates(): Promise<readonly FallbackCandidate[]> {
     const [sources, windows] = await Promise.all([
@@ -474,19 +536,7 @@ export class WindowCapturer {
       this.#windowSources(
         batchPixels(chosen.flatMap((item) => item.pixels ?? []))
       ),
-      Promise.all(
-        chosen.map((item) =>
-          item.listed === undefined
-            ? null
-            : readOrigin({
-                bounds: geometry(item.listed.bounds).dip,
-                ownerPath: item.listed.owner.path,
-                pid: item.listed.owner.processId,
-                strict: true,
-                title: nonEmpty(item.listed.title),
-              })
-        )
-      ),
+      this.#chosenOrigins(chosen.map((item) => item.listed)),
     ]);
 
     const views = chosen.flatMap((item, index) => {
