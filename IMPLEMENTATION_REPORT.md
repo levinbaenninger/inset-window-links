@@ -10,6 +10,7 @@ This report covers the Inset Window Links prototype. It separates what was verif
 - The Vite dev server path was exercised once by hand. The built main process loaded both pages from the renderer dev server. Capture, typing, the chip preview image, Discard, and the library list worked there. No console messages were captured, but the listener was attached only after the popover had loaded, and the library page had no listener.
 - Every shortcut press in the harness went through the `INSET_E2E` seam, which calls the same function the global shortcut calls. A physical press of the key combination was not exercised.
 - Windows 11 Enterprise 10.0.26100, x64, one 1920 by 1080 display at 100% scale, dark mode. Same Electron, get-windows and Node versions. See "Windows round" below. The macOS sections were not rerun after that round.
+- The redesign on the same Windows machine, now with three displays at 100% scale. See "Fifth round" below.
 
 ## Real capabilities on macOS
 
@@ -42,7 +43,7 @@ Add View from Window List in the menu, and any failed direct capture, open a cho
 
 ## Untested or not observed
 
-- Windows: see "Windows round" for what was observed and what was not.
+- Windows: see "Windows round" and "Fifth round" for what was observed and what was not.
 - The menu bar icon was not seen. The menu bar on the test machine hides status items behind a collapse control, and Electron reported the item at zero height. The tray menu entries were read through the seam.
 - A physical press of the shortcut has not been observed. The harness now has one check that sends a real ⌥⌘W through System Events, which Accessibility now allows. It has not run to completion yet (see Harness results).
 - Shortcut conflict: macOS let two processes register Option+Command+W, and both reported success. The conflict message in the menu and popover was never triggered.
@@ -327,6 +328,78 @@ The two desktop harnesses were updated to the new behaviour but not run. They wr
 - One check could not be kept: that a shown panel stays put when a view is added. With click-away hiding on, each press reopens a hidden panel.
 
 `pnpm check` passes with 80 unit tests.
+
+## Fifth round: the redesign on Windows
+
+The fourth round's redesign had never run on Windows. This round ran it there and fixed what broke or fell short of the Mac version.
+
+The machine ran Windows 11 Enterprise 10.0.26100 in dark mode. It had three displays at 100% scale: a 2560 by 1440 primary, a second 2560 by 1440 to its left, and a 1920 by 1200 below that, so two of them have negative origins. Other prototypes' sessions used the same desktop. I drove the development build through Playwright and the `INSET_E2E` seam, and used real clicks and SendInput keys wherever focus mattered. Every burst of real input held the shared desktop lock.
+
+### Found
+
+- **Alt+F4 broke the app.** On the focused capture panel it destroyed the panel's window. The panel lives for the whole run, so every later capture, Show Draft and quit prompt threw "Object has been destroyed" until a restart. On macOS, ⌘W goes through the menu and only hides the panel.
+- **A stray scrollbar in the panel.** Windows scrollbars take 8 pixels of layout width. With the bar the tiles get narrower and shorter, the page then fits, and the bar stays. The right margin was 22 pixels against 14 on the left, in the form and in the window list.
+- **No menu keys.** Windows has no menu bar, so ⌘N, ⇧⌘N, ⌘S, ⌘F, ⌘W, ⌘, and ⌘1/⌘2 had no Ctrl versions. The help page showed no key for "Pick several windows at once".
+- **No Reopen.** Views stored nothing about where they came from, so Recent Captures had no Reopen button and no links.
+- Recent Captures and Settings always opened on the primary display, even with the panel and the pointer on another one.
+- Settings had an empty title strip.
+- In light mode an unchecked switch was a pale grey track on a white row, easy to miss.
+- Every page logged a console error, because a meta CSP cannot set `frame-ancestors`.
+- Copy note did not wait for the clipboard. Electron 45's clipboard calls return promises.
+
+### Changed
+
+- A close of the panel now hides it, so Alt+F4 acts like Escape and keeps the draft. The quit path allows the close first, because a prevented close also stops a quit.
+- The panel's page hides its own scrollbar with `scrollbar-width: none`. Main sizes the window to the page anyway. The view list and the window list inside it keep their thin themed bars.
+- On Windows every Inset window answers the menu keys through `before-input-event`.
+  - Ctrl+N and Ctrl+1 open the panel, Ctrl+Shift+N opens the window list, and Ctrl+S saves.
+  - Ctrl+F focuses search in Recent Captures, Ctrl+2 opens it, and Ctrl+, opens Settings.
+  - Ctrl+W closes the window, or hides the panel.
+  - One table maps the keys to the menu's own actions. A unit test checks that every accelerator in the Mac menu reaches the same action.
+  - Presses with Alt, and key repeats, are ignored, so AltGr and Ctrl+Alt+W pass through. Ctrl+A, C, V, Z and Ctrl+Enter still reach the page.
+  - The help page shows Ctrl+Shift+N.
+- Reopen on Windows:
+  - Each view keeps its app's `.exe` when that is an absolute path outside `WindowsApps`. Store apps cannot be started by path. Reopen checks the file still exists, then starts it with `spawn`, never through a shell.
+  - Starting an `.exe` opens a new instance. macOS's `open -a` brings the running app forward instead. So Reopen all starts each app once, however many of its views a capture holds, and a Chrome view without a page opens one new Chrome window.
+  - Settings has a "Remember web pages" switch under Reopening. It starts off, as macOS reads nothing until Accessibility is granted.
+  - With it on, capturing a window of Chrome, Edge, Brave, Vivaldi, Opera or Chromium reads that window's first text field through UI Automation. One Windows PowerShell call reads every browser window in a capture, by window handle, so titles play no part.
+  - The address bar hides the scheme. Inset stores an address without one as https, or as http for localhost and IP addresses. An http-only site anywhere else gets the wrong scheme. A `file://` address is stored as a file.
+  - Reopen opens the page in the browser it came from.
+  - The read takes about 1.3 seconds and runs while the window sources are listed, which took 1.1 to 2.1 seconds here. The first version took 2.5 seconds. Add-Type, New-Object and ConvertTo-Json each load a PowerShell module, and the script now uses none of them.
+  - Firefox showed UI Automation no text field with a value, so its pages are not read. A Firefox view reopens the app.
+  - Files other apps had open are not remembered on Windows.
+- On Windows, Recent Captures and Settings open centred on the display under the pointer. macOS keeps the system's placement.
+- Settings shows its title in the strip on Windows.
+- In light mode on Windows the unchecked switch track is darker. macOS keeps the preset's switch.
+- The meta CSPs drop `frame-ancestors`. Copy note waits for the clipboard write.
+
+### Checked
+
+By hand, on the development build:
+
+- The panel's page is as wide as its window when empty, in the window list, with two views and with eleven. With eleven the view list scrolls inside itself.
+- Alt+F4 on the focused panel hid it and kept both views, and Show Draft brought it back. Alt+F4 during the quit prompt counted as Cancel, and the app kept running. Ctrl+W hid the panel.
+- Real Ctrl+Shift+N, Ctrl+2, Ctrl+F, Ctrl+comma, Ctrl+W in Settings and in Recent Captures, Ctrl+N, Ctrl+S and Ctrl+A each did what the menu item does. Recent Captures opened at (-1785, 1681), centred on the 1920 by 1200 display under the pointer. Settings opened on that display too.
+- With Remember web pages on, I added Character Map, `C:\Windows\System32\charmap.exe`, and a temporary-profile Chrome showing `http://127.0.0.1:47813/quote?id=7` from the window list. A real Ctrl+Alt+W added each of them as well. The record kept `charmap.exe`, Chrome's path, and the page address with http. Character Map's link in Recent Captures started a new Character Map. I did not click the page link, because Chrome would have opened the page in the user's own profile.
+- A capture with two views of one Character Map: Reopen all started exactly one new Character Map. It still reports "Opened 2 windows", because a view whose app is already started counts as opened.
+- Copy image put PNG, DIB and Bitmap on the clipboard. Copy note put the expected text there.
+- Recent Captures, the panel, the quit prompt and Settings in light mode, caption buttons included.
+- Dragging the panel by its header, on the primary display and on display 1, and its reopening where it was left. One earlier drag on the primary display did nothing while another session's window sat over that spot.
+
+`pnpm verify:windows` passed 33 of 33 on the development build. The same harness passed 33 of 33 on `release/win-unpacked` from `electron-builder --dir`. Two of the checks are new: Ctrl+Shift+N opens the window list and Escape goes back, and Alt+F4 hides the panel, keeps the draft, and the panel opens again. I wrote them after the fix. I had reproduced the Alt+F4 failure by hand before it. The harness still turns click-away hiding on.
+
+`pnpm check` passes, with 94 unit tests. On this machine the pnpm 12 shim is broken, so I ran its four steps directly and packaged through a wrapper that calls pnpm's `pnpm.mjs`.
+
+### Not verified, or seen once
+
+- Opening a page again in a browser. Only Chrome's address bar was read. Edge is not installed on this machine, and Brave, Vivaldi and Opera were not tried. If one of them has another text field first, Inset stores whatever that field holds when it parses as an address.
+- A left click on the tray icon, a click on the save notification, and the installer.
+- Displays at any scale other than 100%.
+- One direct capture of Chrome, just after Reopen had started Character Map, showed the panel and added nothing. The probe left no diagnostics and the panel was visible afterwards, so going by the reducer, Inset took one of its own windows for the focused one while get-windows reported Chrome in front. Replaying the same steps did not repeat it.
+- Ctrl+1 and Ctrl+2 on layouts where the digits need Shift, such as AZERTY. The key arrives as "&" or "é", so these two do nothing there.
+- The window list names windows that get-windows skips, such as other apps' tool windows, "Window" instead of their app.
+- Open at Login in a development run registers `electron.exe` without the app's path, so it would start a bare Electron. Packaged builds register their own exe. Unchanged.
+- macOS was not run. The changes that reach it are the panel's close-to-hide with its exit path, the hidden root scrollbar in the panel, which should change nothing there because macOS scrollbars overlay the page, the origin label read with `path.parse`, and Copy note's wait.
 
 ## Design notes
 
