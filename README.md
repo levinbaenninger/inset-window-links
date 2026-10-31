@@ -74,8 +74,20 @@ The test windows belong to a separate fixture process. The harness refuses any c
 
 ## Download
 
-- Every push to `main` and every pull request builds macOS and Windows installers. Open the run on the GitHub Actions page and download `inset-window-links-mac-arm64` (Apple silicon), `inset-window-links-mac-x64` (Intel), or `inset-window-links-win-x64`. Downloading artifacts needs a GitHub login. They are kept for 14 days.
-- Pushing a `v*` tag publishes the dmg, zip, and exe files as a prerelease on the GitHub Releases page. These downloads need no login.
+- Download macOS and Windows builds from the [Releases page](https://github.com/levinbaenninger/inset-window-links/releases). The **Preview build** prerelease is replaced after each successful release workflow on `main`. These downloads need no login.
+- Every push to `main` and every pull request also builds installers as GitHub Actions artifacts: `inset-window-links-mac-arm64` (Apple silicon), `inset-window-links-mac-x64` (Intel), and `inset-window-links-win-x64`. Downloading artifacts needs a GitHub login. They are kept for 14 days.
+
+### Publish a versioned release
+
+1. Set `version` in `package.json` to the release version, for example `0.2.0`, and merge the change into `main`.
+2. Tag that commit and push the tag:
+
+   ```sh
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+The release workflow checks that the tag matches `version` in `package.json`, then publishes the dmg, zip, and exe files as a versioned release. A mismatch fails before packaging. To rebuild the preview manually, run the Release workflow from GitHub Actions with `main` selected.
 
 ### macOS first run
 
