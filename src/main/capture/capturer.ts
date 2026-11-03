@@ -332,7 +332,7 @@ export class WindowCapturer {
       };
     };
 
-    // The helper resolves null, not the typed undefined, when no window is frontmost.
+    // The helper resolves undefined when no window is frontmost.
     if (!probed) {
       record("no foreground window", 0, null, 0);
 
