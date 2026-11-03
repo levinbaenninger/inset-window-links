@@ -22,8 +22,6 @@ export interface PopoverApi {
   addWindows: () => Promise<void>;
   chooseSources: (candidateIds: readonly CandidateId[]) => Promise<void>;
   cancelChoice: () => Promise<void>;
-  openRecent: () => void;
-  openSettings: () => void;
   /** Answers the quit prompt. Hiding the popover any other way counts as cancel. */
   chooseQuit: (choice: "save" | "discard" | "cancel") => Promise<void>;
   reportHeight: (height: number) => void;

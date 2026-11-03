@@ -68,11 +68,6 @@ export const Shell = () => {
             <SidebarToggle />
             <span className="flex-1" />
             <IconButton
-              icon={Settings01Icon}
-              label="Settings"
-              onClick={() => libraryApi().openSettings()}
-            />
-            <IconButton
               icon={Add01Icon}
               label="New capture"
               onClick={() => libraryApi().newCapture()}
@@ -84,6 +79,15 @@ export const Shell = () => {
           <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
             <RecentList activeId={captureId} items={items} query={query} />
           </nav>
+          <footer className="flex shrink-0 items-center px-2 pb-2">
+            <IconButton
+              icon={Settings01Icon}
+              keys={libraryApi().platform === "macos" ? "⌘," : "Ctrl+,"}
+              label="Settings"
+              onClick={() => libraryApi().openSettings()}
+              side="top"
+            />
+          </footer>
           <ResizeHandle />
         </aside>
         <div

@@ -133,7 +133,7 @@ const CopyImage = ({
         icon={copied ? Tick02Icon : Copy01Icon}
         label={copied ? "Copied" : "Copy image"}
         onClick={copy}
-        variant="outline"
+        variant="overlay"
       />
     </span>
   );
