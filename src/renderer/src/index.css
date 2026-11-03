@@ -58,8 +58,8 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.21 0 0);
-  --primary-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.5 0.134 242.749);
+  --primary-foreground: oklch(0.977 0.013 236.62);
   --secondary: oklch(0.967 0 0);
   --secondary-foreground: oklch(0.21 0 0);
   --muted: oklch(0.97 0 0);
@@ -70,8 +70,8 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  /* The app icon's blue, and the one accent: it marks only a picked or open window, and focus. */
-  --brand: #1d5fbf;
+  /* The one accent, also the primary: the main action, a picked or open window, and focus. */
+  --brand: var(--primary);
   --brand-foreground: oklch(1 0 0);
   --ring: var(--brand);
   --radius: 0.5rem;
@@ -93,8 +93,8 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.93 0 0);
-  --primary-foreground: oklch(0.205 0 0);
+  --primary: oklch(0.443 0.11 240.79);
+  --primary-foreground: oklch(0.977 0.013 236.62);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
@@ -104,8 +104,9 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --brand: #4f8fea;
-  --brand-foreground: oklch(1 0 0);
+  /* Lighter than the dark primary, so a ring or a check reads on the dark ground. */
+  --brand: oklch(0.685 0.169 237.323);
+  --brand-foreground: oklch(0.145 0 0);
   --ring: var(--brand);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
