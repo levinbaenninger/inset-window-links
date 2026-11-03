@@ -90,7 +90,7 @@ const PendingChip = ({ pending }: { pending: PendingView }) => (
     className="flex min-w-0 flex-col gap-1"
     data-testid="pending-chip"
   >
-    <span className={cn(TILE_IMAGE, "animate-pulse")} />
+    <span className={TILE_IMAGE} />
     <span className={TILE_TITLE}>{viewTitle(pending.title)}</span>
   </li>
 );
