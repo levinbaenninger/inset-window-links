@@ -20,8 +20,8 @@ const chrome = (): Electron.BrowserWindowConstructorOptions => {
   if (mac) {
     return {
       titleBarStyle: "hiddenInset",
-      // Centred in the page's 40-point title strip.
-      trafficLightPosition: { x: 14, y: 13 },
+      // Centred in the page's 44-point title strip, as in Recent Captures.
+      trafficLightPosition: { x: 16, y: 15 },
       vibrancy: "sidebar",
       visualEffectState: "active",
     };
