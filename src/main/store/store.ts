@@ -171,8 +171,8 @@ export class CaptureStore {
   }
 
   /**
-   * Rewrites a current record; anything else is reported, never written. A record read as
-   * version 1 was upgraded on read, so it is written as the current version.
+   * Rewrites a current record; anything else is reported, never written. A record read as an
+   * older version was upgraded on read, so it is written as the current version.
    */
   #rewrite(
     id: CaptureId,
@@ -224,6 +224,7 @@ export class CaptureStore {
   ): Promise<MutationOutcome> {
     return this.#rewrite(id, (record) => ({
       ...record,
+      description: text.description.trim(),
       relationship: text.relationship,
       todos: keptTodos(text.todos),
       updatedAt: now.toISOString(),

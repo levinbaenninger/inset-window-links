@@ -1,6 +1,10 @@
+import { isBlank } from "../../shared/text";
 import type { CaptureRecord } from "./schema";
 
-/** Plain text for the clipboard: the thought, its to-dos as a checklist, then the sources it connects. */
+/**
+ * Plain text for the clipboard: the thought, its description when there is one, its to-dos as a
+ * checklist, then the windows it connects.
+ */
 export const formatNote = (
   record: CaptureRecord,
   locale: string,
@@ -16,19 +20,17 @@ export const formatNote = (
     year: "numeric",
   });
 
-  const sources = record.views.map((view, index) => {
+  const windows = record.views.map((view, index) => {
     const app = view.appName === null ? "" : ` (${view.appName})`;
-
-    const chosen =
-      view.acquisition.kind === "fallback"
-        ? ", chosen from the window list"
-        : "";
-
     const where = view.origin?.url ?? view.origin?.document ?? null;
     const link = where === null ? "" : `\n   ${where}`;
 
-    return `${index + 1}. ${view.title ?? "Untitled window"}${app}, captured ${time.format(new Date(view.capturedAt))}${chosen}${link}`;
+    return `${index + 1}. ${view.title ?? "Untitled window"}${app}, captured ${time.format(new Date(view.capturedAt))}${link}`;
   });
+
+  const description = isBlank(record.description)
+    ? []
+    : [record.description.trim(), ""];
 
   const todos =
     record.todos.length === 0
@@ -44,8 +46,9 @@ export const formatNote = (
   return [
     record.relationship.trim(),
     "",
+    ...description,
     ...todos,
-    "Sources:",
-    ...sources,
+    "Windows:",
+    ...windows,
   ].join("\n");
 };

@@ -30,6 +30,7 @@ export const EditText = ({
     }
 
     const outcome = await libraryApi().updateText(detail.id, {
+      description: detail.description,
       relationship,
       todos: keptTodos(todos),
     });

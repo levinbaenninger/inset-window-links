@@ -7,6 +7,7 @@ import {
   ViewIdSchema,
 } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
+import { hasTyped, saveability } from "../../shared/text";
 import type { IdSource } from "./reduce";
 import { initialSession, isMeaningful, reduce } from "./reduce";
 import type {
@@ -56,7 +57,12 @@ const view = (n: number, windowKey: string): CapturedView => ({
   width: 1206,
 });
 
-const text = (relationship: string, todo = ""): DraftText => ({
+const text = (
+  relationship: string,
+  todo = "",
+  description = ""
+): DraftText => ({
+  description,
   relationship,
   todos: todo === "" ? [] : [{ done: false, id: "todo-1", text: todo }],
 });
@@ -490,6 +496,38 @@ describe("session lifecycle", () => {
 
     expect(blank.effects).toStrictEqual([]);
     expect(blank.state.notice).toStrictEqual({ kind: "needsRelationship" });
+  });
+
+  it("counts a description alone as typed, but still refuses to save it", () => {
+    const only = text("", "", "Chairs are CHF 280 over.");
+
+    const saved = run(ids(), [
+      foreignPress,
+      captured("t1", view(1, "macos:1176")),
+      { text: only, type: "saveRequested" },
+    ]);
+
+    expect([
+      hasTyped(only),
+      hasTyped(text("", "", " \n ")),
+      saveability(1, only),
+      isMeaningful({ ...initialSession(D1).draft, text: only }),
+      saved.effects,
+      saved.state.notice,
+      saved.state.draft.text,
+    ]).toStrictEqual([
+      true,
+      false,
+      { kind: "blocked", reason: "needsRelationship" },
+      true,
+      [],
+      { kind: "needsRelationship" },
+      {
+        description: "Chairs are CHF 280 over.",
+        relationship: "",
+        todos: [],
+      },
+    ]);
   });
 
   it("drops the relationship notice once the relationship is written", () => {

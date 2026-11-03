@@ -177,6 +177,7 @@ const listItem = (entry: StoreEntry): CaptureListItem => {
 
   return {
     createdAt: record.createdAt,
+    description: record.description,
     id: record.id,
     kind: "current",
     relationship: record.relationship,
@@ -205,6 +206,7 @@ const detail = (entry: StoreEntry | undefined): CaptureDetail | null => {
 
   return {
     createdAt: record.createdAt,
+    description: record.description,
     id: record.id,
     relationship: record.relationship,
     todos: record.todos,

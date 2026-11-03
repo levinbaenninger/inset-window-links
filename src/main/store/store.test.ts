@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { CaptureId, ViewId } from "../../shared/ids";
 import { DraftIdSchema, ViewIdSchema } from "../../shared/ids";
+import { toNewCapture } from "../session/snapshot";
 import type { StoreFs } from "./fs";
 import { failingWrites, nodeStoreFs } from "./fs";
 import type { CaptureRecord } from "./schema";
@@ -28,9 +29,10 @@ const png = (seed: number) =>
 const newCapture = (): NewCapture => {
   const record: CaptureRecord = {
     createdAt: "2026-10-21T12:00:00.000Z",
+    description: "",
     id: CAPTURE_ID,
     relationship: "The budget cap in the sheet limits the quote in the mail.",
-    schemaVersion: 2,
+    schemaVersion: 3,
     todos: [{ done: false, id: "t1", text: "Ask Dana" }],
     updatedAt: "2026-10-21T12:00:00.000Z",
     views: VIEW_IDS.map((id, index) => ({
@@ -151,6 +153,7 @@ describe(CaptureStore, () => {
     const outcome = await store.updateText(
       CAPTURE_ID,
       {
+        description: "  Delivery comes three days late.\n",
         relationship: "Edited thought",
         todos: [
           { done: false, id: "t1", text: " Ask Dana today " },
@@ -167,13 +170,65 @@ describe(CaptureStore, () => {
     expect(
       entry?.kind === "current" && [
         entry.record.relationship,
+        entry.record.description,
         entry.record.todos,
         entry.record.updatedAt,
       ]
     ).toStrictEqual([
       "Edited thought",
+      "Delivery comes three days late.",
       [{ done: false, id: "t1", text: "Ask Dana today" }],
       "2026-10-22T08:00:00.000Z",
+    ]);
+  });
+
+  it("saves a draft's description trimmed and reads it back after reopening", async () => {
+    const store = await CaptureStore.open(root, nodeStoreFs);
+
+    const capture = toNewCapture(
+      {
+        id: CAPTURE_ID,
+        text: {
+          description: "\n  Chairs are CHF 280 over.\nDelivery adds CHF 980.  ",
+          relationship: "The quote breaks the furniture cap",
+          todos: [{ done: false, id: "t1", text: "  " }],
+        },
+        views: [
+          {
+            acquisition: { kind: "direct", windowKeyAtCapture: "macos:1176" },
+            appName: "Numbers",
+            boundsDip: null,
+            capturedAt: new Date("2026-10-21T11:59:00.000Z"),
+            height: 505,
+            id: ViewIdSchema.parse("0a000000-0000-4000-8000-000000000001"),
+            origin: null,
+            png: png(0),
+            sampledAt: new Date("2026-10-21T11:58:59.000Z"),
+            title: "Budget 2027",
+            width: 603,
+          },
+        ],
+      },
+      new Date("2026-10-21T12:00:00.000Z")
+    );
+
+    await store.publish(capture);
+
+    const reopened = await reopen(root);
+    const entry = reopened.get(CAPTURE_ID);
+
+    expect(
+      entry?.kind === "current" && [
+        entry.record.schemaVersion,
+        entry.record.relationship,
+        entry.record.description,
+        entry.record.todos,
+      ]
+    ).toStrictEqual([
+      3,
+      "The quote breaks the furniture cap",
+      "Chairs are CHF 280 over.\nDelivery adds CHF 980.",
+      [],
     ]);
   });
 
@@ -199,9 +254,9 @@ describe(CaptureStore, () => {
     ]);
   });
 
-  it("reads a version 1 record, turning its next step into to-dos, and writes version 2 on edit", async () => {
+  it("reads a version 1 record, turning its next step into to-dos, and writes version 3 on edit", async () => {
     const { record } = newCapture();
-    const { todos: _todos, ...rest } = record;
+    const { description: _description, todos: _todos, ...rest } = record;
 
     const v1 = {
       ...rest,
@@ -225,8 +280,11 @@ describe(CaptureStore, () => {
       { done: false, id: "v1-3", text: "Call the vendor" },
     ]);
     expect(
-      entry?.kind === "current" && entry.record.views[0]?.origin
-    ).toBeNull();
+      entry?.kind === "current" && [
+        entry.record.views[0]?.origin,
+        entry.record.description,
+      ]
+    ).toStrictEqual([null, ""]);
 
     await store.setTodoDone(CAPTURE_ID, "v1-1", true);
 
@@ -234,8 +292,54 @@ describe(CaptureStore, () => {
       await readFile(path.join(root, CAPTURE_ID, "record.json"), "utf-8")
     );
 
-    expect(written).toMatchObject({ schemaVersion: 2 });
+    expect(written).toMatchObject({ description: "", schemaVersion: 3 });
     expect(written).not.toHaveProperty("nextStep");
+  });
+
+  it("reads a version 2 record with an empty description and rewrites it only when edited", async () => {
+    const { record } = newCapture();
+    const { description: _description, ...rest } = record;
+    const v2Json = JSON.stringify({ ...rest, schemaVersion: 2 });
+    const file = path.join(root, CAPTURE_ID, "record.json");
+
+    await mkdir(path.join(root, CAPTURE_ID, "views"), { recursive: true });
+    await writeFile(file, v2Json);
+
+    const store = await CaptureStore.open(root, nodeStoreFs);
+    const entry = store.get(CAPTURE_ID);
+
+    expect(
+      entry?.kind === "current" && [
+        entry.record.schemaVersion,
+        entry.record.description,
+        entry.record.relationship,
+        entry.record.todos,
+      ]
+    ).toStrictEqual([
+      3,
+      "",
+      "The budget cap in the sheet limits the quote in the mail.",
+      [{ done: false, id: "t1", text: "Ask Dana" }],
+    ]);
+    await expect(readFile(file, "utf-8")).resolves.toBe(v2Json);
+
+    await store.updateText(
+      CAPTURE_ID,
+      {
+        description: "Dana said the cap is firm.",
+        relationship: record.relationship,
+        todos: record.todos,
+      },
+      new Date("2026-10-22T08:00:00.000Z")
+    );
+
+    const written: unknown = JSON.parse(await readFile(file, "utf-8"));
+
+    expect(written).toMatchObject({
+      description: "Dana said the cap is firm.",
+      schemaVersion: 3,
+      updatedAt: "2026-10-22T08:00:00.000Z",
+    });
   });
 
   it("deletes by moving into the trash, and the record stays gone after a restart", async () => {
@@ -272,7 +376,7 @@ describe(CaptureStore, () => {
 
     const futureJson = JSON.stringify({
       id,
-      schemaVersion: 3,
+      schemaVersion: 4,
       thought: "from the future",
     });
 
@@ -285,18 +389,18 @@ describe(CaptureStore, () => {
     const outcomes = [
       await store.updateText(
         futureId,
-        { relationship: "x", todos: [] },
+        { description: "", relationship: "x", todos: [] },
         new Date()
       ),
       await store.remove(futureId),
     ];
 
     expect(store.list()).toStrictEqual([
-      { id, kind: "unsupported", version: 3 },
+      { id, kind: "unsupported", version: 4 },
     ]);
     expect(outcomes).toStrictEqual([
-      { kind: "readOnly", version: 3 },
-      { kind: "readOnly", version: 3 },
+      { kind: "readOnly", version: 4 },
+      { kind: "readOnly", version: 4 },
     ]);
     await expect(
       readFile(path.join(root, id, "record.json"), "utf-8")

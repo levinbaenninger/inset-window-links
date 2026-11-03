@@ -3,17 +3,15 @@ import { app, BrowserWindow } from "electron";
 import type { DraftSnapshot } from "../../shared/dto";
 import type { CaptureId } from "../../shared/ids";
 import { newDraftId } from "../../shared/ids";
-import { keptTodos } from "../../shared/text";
 import type { WindowCapturer } from "../capture/capturer";
 import { capturePlatform, screenAccess } from "../capture/capturer";
 import type { ImageRef } from "../ipc/image-url";
-import { CURRENT_SCHEMA_VERSION } from "../store/schema";
-import type { CaptureStore, NewCapture } from "../store/store";
+import type { CaptureStore } from "../store/store";
 import type { PopoverWindow } from "../windows/popover-window";
 import { shortcutStatus } from "../windows/shortcut";
 import type { IdSource } from "./reduce";
 import { initialSession, isMeaningful, reduce } from "./reduce";
-import { toSavedView, toSnapshot } from "./snapshot";
+import { toNewCapture, toSnapshot } from "./snapshot";
 import type {
   CaptureOutcome,
   Draft,
@@ -25,19 +23,6 @@ import type {
 } from "./state";
 
 const ids: IdSource = { draftId: newDraftId, token: () => crypto.randomUUID() };
-
-const toNewCapture = (draft: Draft, now: Date): NewCapture => ({
-  images: new Map(draft.views.map((view) => [view.id, view.png])),
-  record: {
-    createdAt: now.toISOString(),
-    id: draft.id,
-    relationship: draft.text.relationship,
-    schemaVersion: CURRENT_SCHEMA_VERSION,
-    todos: keptTodos(draft.text.todos),
-    updatedAt: now.toISOString(),
-    views: draft.views.map(toSavedView),
-  },
-});
 
 export class SessionController {
   readonly #capturer: WindowCapturer;
