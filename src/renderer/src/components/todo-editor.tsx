@@ -152,7 +152,7 @@ export const TodoEditor = ({
               />
               <button
                 aria-label={`Remove next step ${index + 1}`}
-                className="text-muted-foreground hover:text-foreground hover:bg-foreground/10 grid size-6 shrink-0 place-items-center rounded-md opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+                className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 grid size-6 shrink-0 place-items-center rounded-md opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
                 onClick={() => remove(index)}
                 tabIndex={-1}
                 type="button"

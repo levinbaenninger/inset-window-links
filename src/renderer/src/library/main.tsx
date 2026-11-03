@@ -8,6 +8,7 @@ import { libraryApi, markPlatform } from "@/lib/bridge";
 import { followSystemTheme } from "@/lib/theme";
 
 import { router } from "./router";
+import { SidebarProvider } from "./sidebar";
 
 /** Main only asks for app routes such as /captures/<id>; anything else is ignored. */
 const RouteSchema = z.string().regex(/^\/[\w/-]{0,120}$/u);
@@ -33,7 +34,9 @@ const root = document.querySelector("#root");
 if (root) {
   createRoot(root).render(
     <StrictMode>
-      <RouterProvider router={router} />
+      <SidebarProvider>
+        <RouterProvider router={router} />
+      </SidebarProvider>
     </StrictMode>
   );
 }

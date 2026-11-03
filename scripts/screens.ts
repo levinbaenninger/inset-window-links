@@ -435,6 +435,15 @@ const SCENES: readonly Scene[] = [
   },
   {
     act: async (page) => {
+      await page.getByRole("button", { name: "Hide sidebar" }).click();
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-sidebar-hidden",
+    page: "library",
+  },
+  {
+    act: async (page) => {
       await page.getByTestId("record-relationship").focus();
     },
     data: { captures: CAPTURES },
