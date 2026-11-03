@@ -14,10 +14,13 @@ export interface TextStore {
   ) => Promise<MutationOutcome>;
 }
 
-/** What main stores: blank next steps are dropped, so they never make the text differ. */
+/**
+ * What main stores: it trims the text and drops blank next steps. Comparing in this form keeps a
+ * trailing space being typed from reading as a change that the reload after a save then undoes.
+ */
 const stored = (text: DraftText): DraftText => ({
-  description: text.description,
-  relationship: text.relationship,
+  description: text.description.trim(),
+  relationship: text.relationship.trim(),
   todos: keptTodos(text.todos),
 });
 
@@ -59,7 +62,10 @@ export class InlineSaver {
   readonly #id: CaptureId;
   readonly #store: TextStore;
   readonly #listeners = new Set<() => void>();
+  /** What was last sent, in stored form. */
   #saved: DraftText = blankText;
+  /** What main last confirmed, so a failed save is sent again on the next flush. */
+  #confirmed: DraftText = blankText;
   #state: InlineState = { outcome: null, text: null };
   #timer: ReturnType<typeof setTimeout> | undefined;
   #chain: Promise<MutationOutcome | null> = Promise.resolve(null);
@@ -93,8 +99,12 @@ export class InlineSaver {
     this.#timer = setTimeout(() => this.flush(), SAVE_AFTER_MS);
   }
 
-  /** Nothing is saved while the title is blank; the capture keeps its last title. */
-  flush(): void {
+  /**
+   * Nothing is saved while the title is blank; the capture keeps its last title. When the page
+   * is going away, the save goes straight to main: a call queued behind one still in flight would
+   * never be sent.
+   */
+  flush({ leaving = false }: { leaving?: boolean } = {}): void {
     clearTimeout(this.#timer);
     this.#timer = undefined;
 
@@ -108,8 +118,15 @@ export class InlineSaver {
       return;
     }
 
-    this.#saved = text;
-    this.#enqueue(() => this.#store.updateText(this.#id, stored(text)));
+    const sent = stored(text);
+
+    this.#saved = sent;
+
+    if (leaving) {
+      void this.#store.updateText(this.#id, sent);
+    } else {
+      this.#enqueue(sent, () => this.#store.updateText(this.#id, sent));
+    }
   }
 
   /**
@@ -125,7 +142,9 @@ export class InlineSaver {
     if (savedStep && sameText(this.#latest, saved)) {
       clearTimeout(this.#timer);
       this.#saved = saved;
-      this.#enqueue(() => this.#store.setTodoDone(this.#id, todoId, done));
+      this.#enqueue(saved, () =>
+        this.#store.setTodoDone(this.#id, todoId, done)
+      );
     } else {
       this.flush();
     }
@@ -148,7 +167,8 @@ export class InlineSaver {
       return;
     }
 
-    this.#saved = text;
+    this.#saved = stored(text);
+    this.#confirmed = this.#saved;
     this.#latest = text;
   }
 
@@ -170,12 +190,19 @@ export class InlineSaver {
     }
   }
 
-  #enqueue(call: () => Promise<MutationOutcome>): void {
+  #enqueue(sent: DraftText, call: () => Promise<MutationOutcome>): void {
     this.#inFlight += 1;
     this.#chain = this.#chain.then(async () => {
       const outcome = await settle(call);
 
       this.#inFlight -= 1;
+
+      if (outcome.kind === "ok") {
+        this.#confirmed = sent;
+      } else {
+        this.#saved = this.#confirmed;
+      }
+
       this.#set({
         ...this.#state,
         outcome: outcome.kind === "ok" ? null : outcome,

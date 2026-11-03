@@ -15,7 +15,7 @@ const initial: DraftText = {
   todos: [{ done: false, id: "t1", text: "Call" }],
 };
 
-const setup = () => {
+const setup = (outcomes: MutationOutcome[] = []) => {
   const calls: string[] = [];
 
   const store = {
@@ -29,7 +29,9 @@ const setup = () => {
         `text ${text.relationship} ${text.todos.map((todo) => `${todo.text}:${String(todo.done)}`).join(",")}`
       );
 
-      return Promise.resolve<MutationOutcome>({ kind: "ok" });
+      return Promise.resolve<MutationOutcome>(
+        outcomes.shift() ?? { kind: "ok" }
+      );
     }),
   };
 
@@ -156,5 +158,46 @@ describe(InlineSaver, () => {
       "readOnly",
       "failed",
     ]);
+  });
+
+  it("keeps a trailing space being typed when the trimmed copy comes back", async () => {
+    const { saver } = setup();
+
+    saver.edit({ ...initial, relationship: "A limits C " });
+    saver.flush();
+    await vi.runAllTimersAsync();
+    saver.adopt({ ...initial, relationship: "A limits C" });
+
+    expect(saver.state().text?.relationship).toBe("A limits C ");
+  });
+
+  it("does not check off a step that was still blank at the last save", async () => {
+    const { calls, saver } = setup();
+    const call = { done: false, id: "t1", text: "Call Bob" };
+    const blank = { done: false, id: "t2", text: "" };
+
+    saver.edit({ ...initial, todos: [call, blank] });
+    saver.flush();
+    await vi.runAllTimersAsync();
+    saver.toggle("t2", true);
+    await vi.runAllTimersAsync();
+
+    expect(calls).toStrictEqual(["text A limits B Call Bob:false"]);
+  });
+
+  it("sends a failed save again on the next flush", async () => {
+    const { calls, saver } = setup([{ kind: "failed", message: "disk full" }]);
+
+    saver.edit({ ...initial, relationship: "A limits C" });
+    saver.flush();
+    await vi.runAllTimersAsync();
+    saver.flush();
+    await vi.runAllTimersAsync();
+
+    expect(calls).toStrictEqual([
+      "text A limits C Call:false",
+      "text A limits C Call:false",
+    ]);
+    expect(saver.state().outcome).toBeNull();
   });
 });
