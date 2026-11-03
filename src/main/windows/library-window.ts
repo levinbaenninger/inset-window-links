@@ -29,7 +29,8 @@ const chrome = (): Electron.BrowserWindowConstructorOptions => {
   return mac
     ? {
         titleBarStyle: "hiddenInset",
-        trafficLightPosition: { x: 16, y: 18 },
+        // Centred in the page's 44-point header.
+        trafficLightPosition: { x: 16, y: 15 },
         vibrancy: "sidebar",
         visualEffectState: "followWindow",
       }

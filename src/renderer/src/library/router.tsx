@@ -9,7 +9,7 @@ import { z } from "zod";
 import { libraryApi } from "@/lib/bridge";
 
 import { CaptureRecord } from "./capture-record";
-import { Home } from "./home";
+import { Home, Newest } from "./home";
 import { Shell } from "./shell";
 
 /** The sidebar's list and the shortcut's label, reloaded whenever the store changes. */
@@ -25,12 +25,14 @@ const rootRoute = createRootRoute({
   },
 });
 
+/** Opens on the newest capture; only an empty library shows the guide here. */
 const homeRoute = createRoute({
-  component: Home,
+  component: Newest,
   getParentRoute: () => rootRoute,
   path: "/",
 });
 
+/** Help > How It Works: the guide, even with captures saved. */
 const welcomeRoute = createRoute({
   component: Home,
   getParentRoute: () => rootRoute,

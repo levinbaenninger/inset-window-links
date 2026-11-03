@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
  * caption buttons drawn over its right end.
  */
 export const PaneHeader = ({ children }: { children?: ReactNode }) => (
-  <header className="drag-region win:pr-36 flex h-13 shrink-0 items-center gap-1 px-4">
+  <header className="drag-region win:pr-36 flex h-11 shrink-0 items-center gap-0.5 px-4">
     {children}
   </header>
 );

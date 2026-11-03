@@ -1,18 +1,18 @@
 import {
   ArrowLeft01Icon,
+  ArrowLeft02Icon,
   ArrowRight01Icon,
   Copy01Icon,
   Tick02Icon,
   ZoomInAreaIcon,
   ZoomOutAreaIcon,
 } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
 import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/icon-button";
 import { libraryApi } from "@/lib/bridge";
 import { formatDateTime, viewTitle } from "@/lib/format";
 
@@ -37,15 +37,19 @@ export const ImageViewer = ({
   const previous = detail.views[index - 1];
   const next = detail.views[index + 1];
 
-  useEffect(() => {
-    const go = async (viewId?: string) => {
+  /** To another window of this capture, or back to the capture without one. */
+  const go = useCallback(
+    async (viewId?: string) => {
       await navigate({
         params: { captureId },
         search: viewId === undefined ? {} : { view: viewId },
         to: "/captures/$captureId",
       });
-    };
+    },
+    [captureId, navigate]
+  );
 
+  useEffect(() => {
     const onKeyDown = async (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         await go();
@@ -67,7 +71,7 @@ export const ImageViewer = ({
     window.addEventListener("keydown", onKeyDown);
 
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [captureId, navigate, previous, next]);
+  }, [go, previous, next]);
 
   if (view === undefined) {
     return null;
@@ -86,79 +90,58 @@ export const ImageViewer = ({
   return (
     <main className="flex h-full flex-col">
       {/* The title strip: it moves the window, with room for the traffic lights or the caption buttons. */}
-      <header className="drag-region mac:pl-20 win:pr-36 border-foreground/10 flex h-13 shrink-0 items-center gap-3 border-b px-4">
-        <Button asChild className="app-no-drag" size="sm" variant="ghost">
-          <Link params={{ captureId }} search={{}} to="/captures/$captureId">
-            <HugeiconsIcon icon={ArrowLeft01Icon} />
-            Back to capture
-          </Link>
-        </Button>
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-medium">
-            Window {index + 1} of {detail.views.length}: {viewTitle(view.title)}
+      <header className="drag-region mac:pl-20 win:pr-36 border-foreground/10 flex h-11 shrink-0 items-center gap-0.5 border-b px-3">
+        <IconButton
+          icon={ArrowLeft02Icon}
+          keys="Esc"
+          label="Back"
+          onClick={() => go()}
+        />
+        <div className="ml-1.5 min-w-0 flex-1 leading-tight">
+          <p className="flex min-w-0 items-baseline gap-2 text-sm">
+            <span className="truncate font-medium">
+              {viewTitle(view.title)}
+            </span>
+            <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+              {index + 1} of {detail.views.length}
+            </span>
           </p>
           <p className="text-muted-foreground truncate text-xs">
-            {[view.appName, `captured ${formatDateTime(view.capturedAt)}`]
+            {[view.appName, formatDateTime(view.capturedAt)]
               .filter((part) => part !== null)
               .join(" · ")}
           </p>
         </div>
-        <Button
+        <IconButton
           aria-keyshortcuts="Z"
-          className="app-no-drag"
           aria-pressed={actualSize}
+          icon={actualSize ? ZoomOutAreaIcon : ZoomInAreaIcon}
+          keys="Z"
+          label={actualSize ? "Fit to window" : "Actual size"}
           onClick={() => setActualSize(!actualSize)}
-          size="sm"
-          title="Switch with Z"
-          variant="ghost"
-        >
-          <HugeiconsIcon icon={actualSize ? ZoomOutAreaIcon : ZoomInAreaIcon} />
-          {actualSize ? "Fit to window" : "Actual size"}
-        </Button>
-        <Button
-          className="app-no-drag"
+        />
+        <IconButton
+          icon={copied ? Tick02Icon : Copy01Icon}
+          label={copied ? "Copied" : "Copy image"}
           onClick={copy}
-          size="sm"
-          variant="ghost"
-        >
-          <HugeiconsIcon icon={copied ? Tick02Icon : Copy01Icon} />
-          {copied ? "Copied" : "Copy image"}
-        </Button>
+        />
         {detail.views.length > 1 && (
-          <div className="app-no-drag flex gap-1">
-            <Button
-              aria-label="Previous window"
+          <>
+            <IconButton
               disabled={previous === undefined}
-              onClick={() =>
-                previous !== undefined &&
-                navigate({
-                  params: { captureId },
-                  search: { view: previous.id },
-                  to: "/captures/$captureId",
-                })
-              }
-              size="icon-sm"
-              variant="outline"
-            >
-              <HugeiconsIcon icon={ArrowLeft01Icon} />
-            </Button>
-            <Button
-              aria-label="Next window"
+              icon={ArrowLeft01Icon}
+              keys="←"
+              label="Previous window"
+              onClick={() => go(previous?.id)}
+            />
+            <IconButton
               disabled={next === undefined}
-              onClick={() =>
-                next !== undefined &&
-                navigate({
-                  params: { captureId },
-                  search: { view: next.id },
-                  to: "/captures/$captureId",
-                })
-              }
-              size="icon-sm"
-              variant="outline"
-            >
-              <HugeiconsIcon icon={ArrowRight01Icon} />
-            </Button>
-          </div>
+              icon={ArrowRight01Icon}
+              keys="→"
+              label="Next window"
+              onClick={() => go(next?.id)}
+            />
+          </>
         )}
       </header>
       <div className="bg-muted flex min-h-0 flex-1 overflow-auto p-4">
