@@ -115,8 +115,6 @@ const attachAll = <C>(
 export interface PopoverActions {
   onHeight: (height: number) => void;
   onDismiss: () => void;
-  openRecent: () => void;
-  openSettings: () => void;
 }
 
 export const registerPopoverChannels = (
@@ -145,9 +143,7 @@ export const registerPopoverChannels = (
     ),
     dismiss: send(z.tuple([]), actions.onDismiss),
     getDraft: invoke(z.tuple([]), () => session.snapshot()),
-    openRecent: send(z.tuple([]), actions.openRecent),
     openScreenSettings: invoke(z.tuple([]), () => openScreenSettings()),
-    openSettings: send(z.tuple([]), actions.openSettings),
     recheckPermission: invoke(z.tuple([]), () => session.recheckPermission()),
     relaunch: invoke(z.tuple([]), () => session.requestRelaunch()),
     removeView: invoke(z.tuple([ViewIdSchema]), (viewId) =>

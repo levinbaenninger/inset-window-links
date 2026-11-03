@@ -1,8 +1,4 @@
-import {
-  Clock01Icon,
-  MinusSignIcon,
-  Settings01Icon,
-} from "@hugeicons/core-free-icons";
+import { MinusSignIcon } from "@hugeicons/core-free-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 
@@ -45,20 +41,10 @@ const chooseQuit = async (choice: "save" | "discard" | "cancel") => {
   await popoverApi().chooseQuit(choice);
 };
 
-/** The title strip: it moves the panel, and holds the ways out of it. */
+/** The title strip: it moves the panel, and hides it. */
 const PanelHeader = ({ title }: { title: string }) => (
   <header className="drag-region flex h-11 shrink-0 items-center gap-0.5 pr-2 pl-3.5">
     <h1 className="mr-auto text-sm font-semibold">{title}</h1>
-    <IconButton
-      icon={Clock01Icon}
-      label="Recent captures"
-      onClick={() => popoverApi().openRecent()}
-    />
-    <IconButton
-      icon={Settings01Icon}
-      label="Settings"
-      onClick={() => popoverApi().openSettings()}
-    />
     <IconButton
       icon={MinusSignIcon}
       label="Hide panel"
@@ -363,7 +349,6 @@ const DraftForm = ({
         {!quitting && !confirmingDiscard && (
           <footer className="flex items-center justify-between gap-2">
             <Button
-              className="-ml-2"
               onClick={requestDiscard}
               size="sm"
               variant="destructive-ghost"

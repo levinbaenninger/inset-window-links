@@ -198,7 +198,7 @@ export const SourceChips = ({
       className="flex flex-col gap-2"
     >
       <ul
-        className="-mx-1 grid max-h-[22.5rem] grid-cols-3 gap-x-2 gap-y-3 overflow-y-auto px-1 pt-0.5 pb-1"
+        className="-m-1 grid max-h-[22.5rem] grid-cols-3 gap-x-2 gap-y-3 overflow-y-auto p-1"
         ref={list}
       >
         {views.map((view, index) => (

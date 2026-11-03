@@ -145,8 +145,6 @@ const start = async () => {
     {
       onDismiss: () => popover.hide(),
       onHeight: (height) => popover.fitHeight(height),
-      openRecent,
-      openSettings,
     },
     trustedSender(() => popover.webContents, popover.page)
   );
