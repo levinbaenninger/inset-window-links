@@ -1,43 +1,19 @@
 import { Add01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
 import {
   getRouteApi,
   Outlet,
   useParams,
   useSearch,
 } from "@tanstack/react-router";
-import type { ComponentProps } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { IconButton } from "@/components/icon-button";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { libraryApi } from "@/lib/bridge";
 
 import { RecentList, SearchField } from "./recent-list";
 
 const root = getRouteApi("__root__");
-
-const SidebarButton = ({
-  label,
-  icon,
-  ...props
-}: { label: string; icon: typeof Add01Icon } & ComponentProps<
-  typeof Button
->) => (
-  <Tooltip>
-    <TooltipTrigger asChild>
-      <Button aria-label={label} size="icon-sm" variant="ghost" {...props}>
-        <HugeiconsIcon icon={icon} />
-      </Button>
-    </TooltipTrigger>
-    <TooltipContent side="bottom">{label}</TooltipContent>
-  </Tooltip>
-);
 
 /**
  * A Mac app's two panes: captures in a sidebar on the window's translucent material, the open
@@ -78,12 +54,12 @@ export const Shell = () => {
         >
           <header className="drag-region mac:pl-20 flex h-13 shrink-0 items-center justify-end gap-0.5 px-2">
             <h1 className="sr-only">Recent captures</h1>
-            <SidebarButton
+            <IconButton
               icon={Settings01Icon}
               label="Settings"
               onClick={() => libraryApi().openSettings()}
             />
-            <SidebarButton
+            <IconButton
               icon={Add01Icon}
               label="New capture"
               onClick={() => libraryApi().newCapture()}

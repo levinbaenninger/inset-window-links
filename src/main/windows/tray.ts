@@ -86,7 +86,7 @@ const menuFor = (
     label:
       shortcut.kind === "registered"
         ? `Add a Window: ${shortcut.label}`
-        : `Shortcut ${shortcut.label} is used by another app. Use Add Windows.`,
+        : `${shortcut.label} Is Taken by Another App`,
   },
   ...(actions.openScreenSettings === null
     ? []
@@ -161,8 +161,7 @@ export const savedConfirmer = (
     }
 
     tray.displayBalloon({
-      content:
-        "Click to open it. Recent Captures in the Inset menu lists them all.",
+      content: "Click to open it in Recent Captures.",
       iconType: "none",
       noSound: true,
       title: "Capture saved",

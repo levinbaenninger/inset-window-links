@@ -95,7 +95,7 @@ export const ImageViewer = ({
         </Button>
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium">
-            Source {index + 1} of {detail.views.length}: {viewTitle(view.title)}
+            Window {index + 1} of {detail.views.length}: {viewTitle(view.title)}
           </p>
           <p className="text-muted-foreground truncate text-xs">
             {[view.appName, `captured ${formatDateTime(view.capturedAt)}`]
@@ -127,7 +127,7 @@ export const ImageViewer = ({
         {detail.views.length > 1 && (
           <div className="app-no-drag flex gap-1">
             <Button
-              aria-label="Previous source"
+              aria-label="Previous window"
               disabled={previous === undefined}
               onClick={() =>
                 previous !== undefined &&
@@ -143,7 +143,7 @@ export const ImageViewer = ({
               <HugeiconsIcon icon={ArrowLeft01Icon} />
             </Button>
             <Button
-              aria-label="Next source"
+              aria-label="Next window"
               disabled={next === undefined}
               onClick={() =>
                 next !== undefined &&
@@ -174,7 +174,7 @@ export const ImageViewer = ({
           type="button"
         >
           <img
-            alt={`Source ${index + 1}, ${viewTitle(view.title)}`}
+            alt={`Window ${index + 1}, ${viewTitle(view.title)}`}
             className={
               actualSize
                 ? "h-(--image-h) w-(--image-w) max-w-none"

@@ -39,7 +39,7 @@ const SourceChip = ({
     >
       <button
         aria-expanded={open}
-        aria-label={`${open ? "Hide" : "Show"} preview of view ${index + 1}, ${title}`}
+        aria-label={`${open ? "Hide" : "Show"} preview of window ${index + 1}, ${title}`}
         className={cn(
           TILE_IMAGE,
           "focus-visible:ring-ring/50 outline-none focus-visible:ring-3",
@@ -65,11 +65,11 @@ const SourceChip = ({
         <span className="text-muted-foreground truncate text-xs">
           {view.sameWindowAs === null
             ? (view.appName ?? "Window")
-            : `Again, as view ${view.sameWindowAs}`}
+            : `Again, as window ${view.sameWindowAs}`}
         </span>
       </span>
       <button
-        aria-label={`Remove view ${index + 1}, ${title}`}
+        aria-label={`Remove window ${index + 1}, ${title}`}
         className="bg-background/90 text-foreground hover:bg-background focus-visible:ring-ring/50 absolute top-1 right-1 grid size-6 place-items-center rounded-full opacity-0 shadow-sm outline-none group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:ring-3"
         onClick={onRemove}
         type="button"
@@ -167,7 +167,10 @@ export const SourceChips = ({
   }, [count]);
 
   return (
-    <section aria-label="Views in this capture" className="flex flex-col gap-2">
+    <section
+      aria-label="Windows in this capture"
+      className="flex flex-col gap-2"
+    >
       <ul
         className="-mx-1 grid max-h-[22.5rem] grid-cols-3 gap-x-2 gap-y-3 overflow-y-auto px-1 pt-0.5 pb-1"
         ref={list}

@@ -26,7 +26,8 @@
     "verify:packaged:current": "node scripts/verify-desktop.ts --packaged",
     "verify:windows": "pnpm build && node scripts/verify-windows.ts",
     "verify:windows:packaged": "pnpm package:dir && node scripts/verify-windows.ts --packaged",
-    "icon": "electron scripts/render-icon.mjs"
+    "icon": "electron scripts/render-icon.mjs",
+    "screens": "pnpm build && node scripts/screens.ts"
   },
   "dependencies": {
     "get-windows": "10.0.0",
