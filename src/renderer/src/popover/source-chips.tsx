@@ -98,50 +98,69 @@ const PendingChip = ({ pending }: { pending: PendingView }) => (
 /**
  * Where the next window lands: opens the window list to pick several at once. It also shows the
  * other way in, the shortcut from any window, which verify-desktop reads by the hint test id.
- * Before the first window it is a short bar across the row.
+ * It takes the next free cell, or a short bar across the row when the row above is full, so it
+ * never opens a whole row of tile-high empty space. Before the first window the bar is taller.
  */
 const AddTile = ({
-  first,
+  layout,
   shortcut,
   onAdd,
 }: {
-  first: boolean;
+  layout: AddLayout;
   shortcut: ShortcutStatus;
   onAdd: () => void;
-}) => (
-  <li className={cn("flex min-w-0 flex-col", first && "col-span-3")}>
-    <button
-      aria-label="Add windows"
-      className={cn(
-        "border-foreground/15 text-muted-foreground hover:text-foreground hover:bg-foreground/5 focus-visible:ring-ring/50 flex w-full items-center justify-center rounded-md border border-dashed text-xs outline-none focus-visible:ring-3",
-        first ? "h-[4.75rem] gap-2" : "aspect-[16/10] flex-col gap-1.5"
-      )}
-      onClick={onAdd}
-      title={
-        shortcut.kind === "registered"
-          ? undefined
-          : `${shortcut.label} is taken by another app`
-      }
-      type="button"
-    >
-      <span
+}) => {
+  const bar = layout !== "cell";
+
+  return (
+    <li className={cn("flex min-w-0 flex-col", bar && "col-span-3")}>
+      <button
+        aria-label="Add windows"
         className={cn(
-          "flex items-center gap-1",
-          first && "text-foreground text-sm font-medium"
+          "border-foreground/15 text-muted-foreground hover:text-foreground hover:bg-foreground/5 focus-visible:ring-ring/50 flex w-full items-center justify-center rounded-md border border-dashed text-xs outline-none focus-visible:ring-3",
+          {
+            bar: "h-10 gap-2",
+            cell: "aspect-[16/10] flex-col gap-1.5",
+            first: "h-[4.75rem] gap-2",
+          }[layout]
         )}
+        onClick={onAdd}
+        title={
+          shortcut.kind === "registered"
+            ? undefined
+            : `${shortcut.label} is taken by another app`
+        }
+        type="button"
       >
-        <HugeiconsIcon icon={Add01Icon} size={first ? 16 : 18} />
-        {first && "Add windows"}
-      </span>
-      {shortcut.kind === "registered" && (
-        <span className="flex items-center gap-1.5">
-          {first && "or"}
-          <Kbd data-testid="hint">{shortcut.label}</Kbd>
+        <span
+          className={cn(
+            "flex items-center gap-1",
+            layout === "first" && "text-foreground text-sm font-medium"
+          )}
+        >
+          <HugeiconsIcon icon={Add01Icon} size={bar ? 16 : 18} />
+          {bar && "Add windows"}
         </span>
-      )}
-    </button>
-  </li>
-);
+        {shortcut.kind === "registered" && (
+          <span className="flex items-center gap-1.5">
+            {bar && "or"}
+            <Kbd data-testid="hint">{shortcut.label}</Kbd>
+          </span>
+        )}
+      </button>
+    </li>
+  );
+};
+
+type AddLayout = "first" | "bar" | "cell";
+
+const addLayout = (count: number): AddLayout => {
+  if (count === 0) {
+    return "first";
+  }
+
+  return count % 3 === 0 ? "bar" : "cell";
+};
 
 /**
  * The windows as tiles, three to a row, with Add windows last. Past three rows the tiles scroll
@@ -193,7 +212,7 @@ export const SourceChips = ({
           />
         ))}
         {pending === null ? null : <PendingChip pending={pending} />}
-        <AddTile first={count === 0} onAdd={onAdd} shortcut={shortcut} />
+        <AddTile layout={addLayout(count)} onAdd={onAdd} shortcut={shortcut} />
       </ul>
       {open !== null && (
         <img
