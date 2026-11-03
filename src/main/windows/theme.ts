@@ -9,7 +9,8 @@ const palette = {
 export const themeColors = () =>
   nativeTheme.shouldUseDarkColors ? palette.dark : palette.light;
 
-export const TITLE_BAR_HEIGHT = 36;
+/** The height of every window header, so the caption buttons fill it. */
+export const TITLE_BAR_HEIGHT = 44;
 
 /** Windows draws only its caption buttons over the page; the page supplies the draggable strip. */
 export const titleBarOverlay = (): Electron.TitleBarOverlayOptions => {

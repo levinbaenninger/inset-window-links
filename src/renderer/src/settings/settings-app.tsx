@@ -18,9 +18,9 @@ import type { IconPlace, SettingsView } from "../../../shared/settings";
 import { ICON_PLACES } from "../../../shared/settings";
 
 const ICON_LABELS = {
-  dock: "Dock Only",
-  dockAndMenuBar: "Dock and Menu Bar",
-  menuBar: "Menu Bar Only",
+  dock: "Dock only",
+  dockAndMenuBar: "Dock and menu bar",
+  menuBar: "Menu bar only",
 } satisfies { [K in IconPlace]: string };
 
 const isIconPlace = (value: string): value is IconPlace =>
@@ -55,10 +55,10 @@ const Row = ({
 
 const Group = ({ children, title }: { title: string; children: ReactNode }) => (
   <section className="flex flex-col gap-1">
-    <h2 className="text-muted-foreground flex h-7 items-center px-1.5 text-xs font-medium">
+    <h2 className="text-muted-foreground flex h-7 items-center px-1 text-xs font-medium">
       {title}
     </h2>
-    <div className="bg-background/60 border-foreground/10 divide-foreground/10 flex flex-col divide-y rounded-lg border">
+    <div className="bg-background mac:dark:bg-card border-foreground/10 divide-foreground/10 flex flex-col divide-y rounded-lg border">
       {children}
     </div>
   </section>
@@ -98,19 +98,13 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
       className="text-foreground win:bg-background flex flex-col gap-3 px-3 pb-3"
       ref={page}
     >
-      {mac ? (
-        // The title strip under the traffic lights, which moves the window.
-        <h1 className="drag-region -mx-3 flex h-10 items-center justify-center text-sm font-semibold">
-          Settings
-        </h1>
-      ) : (
-        // A Windows title bar: the title on the left, the close button drawn over the right.
-        <h1 className="drag-region -mx-3 -mb-2 flex h-9 items-center pl-4.5 text-xs">
-          Settings
-        </h1>
-      )}
+      {/* The title strip, which moves the window: centred under the traffic lights, or on the
+          left with the Windows close button drawn over the right. */}
+      <h1 className="drag-region mac:justify-center win:px-3.5 -mx-3 -mb-2 flex h-11 shrink-0 items-center text-sm font-semibold">
+        Settings
+      </h1>
       <Group title="General">
-        <Row label="Open at Login" labelFor={loginId}>
+        <Row label="Open at login" labelFor={loginId}>
           <Switch
             checked={view.openAtLogin}
             id={loginId}
@@ -122,11 +116,11 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
         {/* On Windows the notification-area icon is the app's only icon, so there is no choice. */}
         {mac && (
           <Row
-            label="Show app icon in"
+            label="Show icon in"
             labelFor={iconId}
             note={
               settings.iconIn === "menuBar"
-                ? "Without a Dock icon, the app has no menu bar of its own; use the menu-bar icon instead."
+                ? "No Dock icon means no menu bar. Use the menu bar icon."
                 : undefined
             }
           >
@@ -154,16 +148,16 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
       </Group>
       <Group title="Capture panel">
         <Row
-          label="Add a window"
+          label="Shortcut"
           note={
             view.shortcut.kind === "registered"
               ? undefined
-              : "Another app holds this shortcut. Use Add windows in the panel instead."
+              : "Taken by another app."
           }
         >
           <Kbd>{view.shortcut.label}</Kbd>
         </Row>
-        <Row label="Keep on top of other windows" labelFor={floatId}>
+        <Row label="Keep on top" labelFor={floatId}>
           <Switch
             checked={settings.floatOnTop}
             id={floatId}
@@ -172,11 +166,7 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
             }}
           />
         </Row>
-        <Row
-          label="Hide when I click away"
-          labelFor={clickAwayId}
-          note="Off keeps the panel open while you add windows; Escape hides it."
-        >
+        <Row label="Hide on click away" labelFor={clickAwayId}>
           <Switch
             checked={settings.hideOnClickAway}
             id={clickAwayId}
@@ -188,16 +178,8 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
       </Group>
       {/* Windows needs no permission to read a browser's address, so it is a plain switch. */}
       {!mac && (
-        <Group title="Reopening">
-          <Row
-            label="Remember web pages"
-            labelFor={pagesId}
-            note={
-              settings.rememberPages
-                ? "Reopen opens the page a browser window showed. Other windows reopen their app."
-                : "Reopen brings back the app each window came from. On, it also reads the address of a browser window you capture."
-            }
-          >
+        <Group title="Reopen">
+          <Row label="Remember web pages" labelFor={pagesId}>
             <Switch
               checked={settings.rememberPages}
               id={pagesId}
@@ -209,14 +191,10 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
         </Group>
       )}
       {mac && (
-        <Group title="Reopening">
+        <Group title="Reopen">
           <Row
             label="Remember pages and files"
-            note={
-              view.originsReadable
-                ? "Reopen brings back the web page or file each window showed."
-                : "Needs Accessibility. Without it, Reopen brings back only the app."
-            }
+            note={view.originsReadable ? undefined : "Needs Accessibility."}
           >
             {view.originsReadable ? (
               <span className="text-muted-foreground text-xs">On</span>
@@ -228,7 +206,7 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
                 size="sm"
                 variant="outline"
               >
-                Turn On…
+                Turn on…
               </Button>
             )}
           </Row>
@@ -237,8 +215,7 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
       {/* macOS has the app menu's About panel; elsewhere it is here. */}
       {!mac && (
         <p className="text-muted-foreground px-1 text-xs">
-          Inset Window Links {view.version}. A prototype for the Inset capture
-          experiments.
+          Inset Window Links {view.version}
         </p>
       )}
     </main>
