@@ -366,7 +366,7 @@ const DraftForm = ({
               className="-ml-2"
               onClick={requestDiscard}
               size="sm"
-              variant="ghost"
+              variant="destructive-ghost"
             >
               Discard
             </Button>

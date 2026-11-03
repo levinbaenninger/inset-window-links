@@ -73,7 +73,7 @@ const SourceChip = ({
       </span>
       <button
         aria-label={`Remove window ${index + 1}, ${title}`}
-        className="bg-background/90 text-foreground hover:bg-background focus-visible:ring-ring/50 border-foreground/10 absolute top-1 right-1 grid size-6 place-items-center rounded-full border opacity-0 outline-none group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:ring-3"
+        className="bg-background/90 text-foreground hover:bg-destructive hover:border-destructive focus-visible:ring-ring/50 border-foreground/10 absolute top-1 right-1 grid size-6 place-items-center rounded-full border opacity-0 outline-none group-focus-within:opacity-100 group-hover:opacity-100 hover:text-white focus-visible:ring-3"
         onClick={onRemove}
         type="button"
       >

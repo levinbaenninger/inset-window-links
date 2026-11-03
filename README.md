@@ -13,6 +13,7 @@ This is a research prototype. See `IMPLEMENTATION_REPORT.md` for what has been v
 - **Write and save.** The title says what connects the windows; Return moves on to the optional details. Next steps is a list: Return starts the next step, Backspace in an empty one removes it. Save with `⌘↵` (`Ctrl+Enter` on Windows), the Save button, or File > Save Capture (`⌘S`). Without a window or a title, Save says what is missing. Discard asks once; while it asks, Escape keeps the draft.
 - **Quit** with an unsaved draft asks inside the panel: Save, Discard, or Cancel.
 - **Recent Captures** (View > Recent Captures, `⌘2`) opens on the newest capture, with the captures by day in a sidebar and search (`⌘F`) over the title, details, next steps, window titles and apps.
+  - Drag the sidebar's edge to make it wider or narrower; double-click the edge for the default width. Hide it with the sidebar button or `⌃⌘S` (`Ctrl+B` on Windows), or by dragging the edge far to the left. The width and whether it is hidden are kept.
   - Edit the title, details and next steps right in the capture. Changes save as you type; a blank title goes back to the saved one. Each checked step is saved at once.
   - Reopen all opens the web page, file or app each window showed. Each window also has its own link.
   - Copy as text puts the title, the details, the steps as a checklist, and the windows with their addresses on the clipboard. Each image can be copied, dragged into another app, or opened at full size (`Z` switches to actual size, the arrow keys step between windows).

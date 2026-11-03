@@ -241,7 +241,11 @@ const RecordActions = ({ detail }: { detail: CaptureDetail }) => {
       />
       <AlertDialog>
         <AlertDialogTrigger asChild>
-          <IconButton icon={Delete02Icon} label="Delete" />
+          <IconButton
+            icon={Delete02Icon}
+            label="Delete"
+            variant="destructive-ghost"
+          />
         </AlertDialogTrigger>
         <AlertDialogContent>
           <AlertDialogHeader>
