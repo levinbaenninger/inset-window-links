@@ -57,6 +57,9 @@ if (process.platform === "win32") {
 }
 
 /** Every harness launch has a fresh profile, so the first-run window opens there only when asked for. */
+/** Shown notifications, held so they are not collected while on screen, which drops the click. */
+const shownNotifications = new Set<Notification>();
+
 /** One notification for everything one sweep woke; clicking it opens the first of them. */
 const announceWoken = (
   woken: readonly CaptureRecord[],
@@ -64,7 +67,7 @@ const announceWoken = (
 ) => {
   const [first] = woken;
 
-  if (e2e || first === undefined || !Notification.isSupported()) {
+  if (first === undefined || !Notification.isSupported()) {
     return;
   }
 
@@ -79,7 +82,14 @@ const announceWoken = (
         : `${woken.length} captures are back from snooze`,
   });
 
-  notification.on("click", () => open(`/captures/${first.id}`));
+  const release = () => shownNotifications.delete(notification);
+
+  notification.on("click", () => {
+    release();
+    open(`/captures/${first.id}`);
+  });
+  notification.on("close", release);
+  shownNotifications.add(notification);
   notification.show();
 };
 
