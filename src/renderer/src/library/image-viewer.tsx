@@ -1,8 +1,7 @@
 import {
-  ArrowLeft01Icon,
   ArrowLeft02Icon,
-  ArrowRight01Icon,
   Copy01Icon,
+  RepeatIcon,
   Tick02Icon,
   ZoomInAreaIcon,
   ZoomOutAreaIcon,
@@ -16,11 +15,54 @@ import { IconButton } from "@/components/icon-button";
 import { libraryApi } from "@/lib/bridge";
 import { formatDateTime, viewTitle } from "@/lib/format";
 
-import type { CaptureDetail } from "../../../shared/dto";
+import type { CaptureDetail, ViewSummary } from "../../../shared/dto";
+
+const FEEDBACK_MS = 2000;
+
+/** The capture's windows along the foot of the viewer; the open one is marked. */
+const Filmstrip = ({
+  views,
+  current,
+  onPick,
+}: {
+  views: readonly ViewSummary[];
+  current: number;
+  onPick: (view: ViewSummary) => void;
+}) => (
+  <nav
+    aria-label="Windows in this capture"
+    className="flex shrink-0 justify-center gap-2 overflow-x-auto px-4 pt-1 pb-4"
+  >
+    {views.map((item, position) => (
+      <button
+        aria-current={position === current ? "true" : undefined}
+        aria-label={`Window ${position + 1}, ${viewTitle(item.title)}`}
+        className={cn(
+          "bg-background focus-visible:ring-ring/50 h-12 w-20 shrink-0 overflow-hidden rounded-md outline-none focus-visible:ring-3",
+          position === current
+            ? "ring-brand ring-2"
+            : "ring-foreground/10 opacity-70 ring-1 hover:opacity-100"
+        )}
+        key={item.id}
+        onClick={() => onPick(item)}
+        title={viewTitle(item.title)}
+        type="button"
+      >
+        <img
+          alt=""
+          className="size-full object-cover object-top"
+          src={item.imageUrl}
+        />
+      </button>
+    ))}
+  </nav>
+);
 
 /**
- * Fits the whole capture in the window first. Actual size shows one image pixel per device pixel,
- * so small captured text stays readable; clicking the image or Z switches between the two.
+ * One window of a capture on a single quiet surface, as Quick Look shows a file. It fits the
+ * window first; actual size shows one image pixel per device pixel, so small captured text stays
+ * readable. Clicking the image or Z switches between the two, the arrow keys step through the
+ * capture's windows, and Escape goes back.
  */
 export const ImageViewer = ({
   detail,
@@ -31,6 +73,7 @@ export const ImageViewer = ({
 }) => {
   const navigate = useNavigate();
   const [copied, setCopied] = useState(false);
+  const [reopened, setReopened] = useState<string | null>(null);
   const [actualSize, setActualSize] = useState(false);
   const captureId = detail.id;
   const view = detail.views[index];
@@ -84,13 +127,20 @@ export const ImageViewer = ({
   const copy = async () => {
     await libraryApi().copyImage(captureId, view.id);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setTimeout(() => setCopied(false), FEEDBACK_MS);
+  };
+
+  const reopen = async () => {
+    const { failed } = await libraryApi().reopen(captureId, [view.id]);
+
+    setReopened(failed === 0 ? "Opened" : "Couldn't open");
+    setTimeout(() => setReopened(null), FEEDBACK_MS);
   };
 
   return (
-    <main className="flex h-full flex-col">
+    <main className="bg-muted/60 dark:bg-background flex h-full flex-col">
       {/* The title strip: it moves the window, with room for the traffic lights or the caption buttons. */}
-      <header className="drag-region mac:pl-20 win:pr-36 border-foreground/10 flex h-11 shrink-0 items-center gap-0.5 border-b px-3">
+      <header className="drag-region mac:pl-20 win:pr-36 flex h-11 shrink-0 items-center gap-0.5 px-3">
         <IconButton
           icon={ArrowLeft02Icon}
           keys="Esc"
@@ -102,9 +152,11 @@ export const ImageViewer = ({
             <span className="truncate font-medium">
               {viewTitle(view.title)}
             </span>
-            <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-              {index + 1} of {detail.views.length}
-            </span>
+            {detail.views.length > 1 && (
+              <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                {index + 1} of {detail.views.length}
+              </span>
+            )}
           </p>
           <p className="text-muted-foreground truncate text-xs">
             {[view.appName, formatDateTime(view.capturedAt)]
@@ -112,6 +164,18 @@ export const ImageViewer = ({
               .join(" · ")}
           </p>
         </div>
+        {reopened !== null && (
+          <output className="text-muted-foreground mr-1 text-xs">
+            {reopened}
+          </output>
+        )}
+        {view.origin !== null && (
+          <IconButton
+            icon={RepeatIcon}
+            label={`Reopen ${view.origin.label}`}
+            onClick={reopen}
+          />
+        )}
         <IconButton
           aria-keyshortcuts="Z"
           aria-pressed={actualSize}
@@ -125,30 +189,12 @@ export const ImageViewer = ({
           label={copied ? "Copied" : "Copy image"}
           onClick={copy}
         />
-        {detail.views.length > 1 && (
-          <>
-            <IconButton
-              disabled={previous === undefined}
-              icon={ArrowLeft01Icon}
-              keys="←"
-              label="Previous window"
-              onClick={() => go(previous?.id)}
-            />
-            <IconButton
-              disabled={next === undefined}
-              icon={ArrowRight01Icon}
-              keys="→"
-              label="Next window"
-              onClick={() => go(next?.id)}
-            />
-          </>
-        )}
       </header>
-      <div className="bg-muted flex min-h-0 flex-1 overflow-auto p-4">
+      <div className="flex min-h-0 flex-1 overflow-auto px-6 pt-2 pb-4">
         <button
           aria-label={actualSize ? "Fit to window" : "Show at actual size"}
           className={cn(
-            "focus-visible:ring-ring/50 rounded-sm outline-none focus-visible:ring-3",
+            "focus-visible:ring-ring/50 rounded-lg outline-none focus-visible:ring-3",
             actualSize
               ? "m-auto shrink-0 cursor-zoom-out"
               : "flex size-full cursor-zoom-in"
@@ -158,11 +204,12 @@ export const ImageViewer = ({
         >
           <img
             alt={`Window ${index + 1}, ${viewTitle(view.title)}`}
-            className={
+            className={cn(
+              "ring-foreground/10 rounded-lg shadow-lg ring-1",
               actualSize
                 ? "h-(--image-h) w-(--image-w) max-w-none"
                 : "m-auto aspect-(--image-ratio) max-h-(--image-fit-h) max-w-(--image-fit-w) object-contain"
-            }
+            )}
             data-testid="viewer-image"
             src={view.imageUrl}
             // SAFETY: CSSProperties has no index for custom properties; every key here is a --image-* variable the classes above read.
@@ -178,6 +225,13 @@ export const ImageViewer = ({
           />
         </button>
       </div>
+      {detail.views.length > 1 && (
+        <Filmstrip
+          current={index}
+          onPick={(item) => go(item.id)}
+          views={detail.views}
+        />
+      )}
     </main>
   );
 };
