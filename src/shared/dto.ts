@@ -1,4 +1,5 @@
 import type { CandidateId, CaptureId, DraftId, ViewId } from "./ids";
+import type { CaptureStatus } from "./status";
 import type { DraftText, Todo } from "./text";
 
 export type CapturePlatform = "macos" | "windows";
@@ -99,6 +100,7 @@ export type CaptureListItem =
       createdAt: string;
       relationship: string;
       description: string;
+      status: CaptureStatus;
       todos: readonly Todo[];
       views: readonly ListedView[];
     }
@@ -111,6 +113,7 @@ export interface CaptureDetail {
   updatedAt: string;
   relationship: string;
   description: string;
+  status: CaptureStatus;
   todos: readonly Todo[];
   views: readonly ViewSummary[];
 }

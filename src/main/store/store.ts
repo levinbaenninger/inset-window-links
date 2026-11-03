@@ -3,6 +3,8 @@ import path from "node:path";
 import type { MutationOutcome } from "../../shared/dto";
 import type { CaptureId, ViewId } from "../../shared/ids";
 import { DraftIdSchema } from "../../shared/ids";
+import type { CaptureStatus } from "../../shared/status";
+import { ACTIVE } from "../../shared/status";
 import type { DraftText } from "../../shared/text";
 import { keptTodos } from "../../shared/text";
 import type { StoreFs } from "./fs";
@@ -245,6 +247,23 @@ export class CaptureStore {
               todo.id === todoId ? { ...todo, done } : todo
             ),
           }
+        : null
+    );
+  }
+
+  /** Moves a capture between the list, snoozed and done. Not an edit of the text, so updatedAt stays. */
+  setStatus(id: CaptureId, status: CaptureStatus): Promise<MutationOutcome> {
+    return this.#rewrite(id, (record) => ({ ...record, status }));
+  }
+
+  /**
+   * Puts a snoozed capture back in the list, but only if it is still snoozed until `until`: a
+   * capture the user snoozed again, or moved, in the meantime is left as it is.
+   */
+  wake(id: CaptureId, until: string): Promise<MutationOutcome> {
+    return this.#rewrite(id, (record) =>
+      record.status.kind === "snoozed" && record.status.until === until
+        ? { ...record, status: ACTIVE }
         : null
     );
   }

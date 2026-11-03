@@ -6,6 +6,8 @@ import {
   session as electronSession,
   globalShortcut,
   Menu,
+  Notification,
+  powerMonitor,
   shell,
   systemPreferences,
 } from "electron";
@@ -30,7 +32,9 @@ import {
 } from "./ipc/register";
 import { SessionController } from "./session/controller";
 import { openSettingsStore } from "./settings-store";
+import { startSnoozeClock } from "./snooze-clock";
 import { failingWrites, nodeStoreFs } from "./store/fs";
+import type { CaptureRecord } from "./store/schema";
 import { CaptureStore } from "./store/store";
 import { LibraryWindow } from "./windows/library-window";
 import { PopoverWindow } from "./windows/popover-window";
@@ -53,6 +57,32 @@ if (process.platform === "win32") {
 }
 
 /** Every harness launch has a fresh profile, so the first-run window opens there only when asked for. */
+/** One notification for everything one sweep woke; clicking it opens the first of them. */
+const announceWoken = (
+  woken: readonly CaptureRecord[],
+  open: (route: string) => void
+) => {
+  const [first] = woken;
+
+  if (e2e || first === undefined || !Notification.isSupported()) {
+    return;
+  }
+
+  const notification = new Notification({
+    body:
+      woken.length === 1
+        ? "Back from snooze"
+        : woken.map((record) => record.relationship).join("\n"),
+    title:
+      woken.length === 1
+        ? first.relationship
+        : `${woken.length} captures are back from snooze`,
+  });
+
+  notification.on("click", () => open(`/captures/${first.id}`));
+  notification.show();
+};
+
 const welcomeAllowed = !e2e || process.env["INSET_E2E_WELCOME"] === "1";
 
 registerImageScheme();
@@ -134,6 +164,21 @@ const start = async () => {
   const session = new SessionController(capturer, store, popover);
 
   store.onChange(() => library.notifyChanged());
+
+  const snoozeClock = startSnoozeClock<NodeJS.Timeout>({
+    notify: (woken) => announceWoken(woken, (route) => library.open(route)),
+    now: () => new Date(),
+    store,
+    timers: {
+      clear: (handle) => clearTimeout(handle),
+      set: (run, ms) => setTimeout(run, ms),
+    },
+  });
+
+  void snoozeClock.sweep();
+  powerMonitor.on("resume", () => {
+    void snoozeClock.sweep();
+  });
   handleImageProtocol(session, store);
   const showDraft = () => session.dispatch({ type: "showDraftRequested" });
   const addWindows = () => session.dispatch({ type: "chooserRequested" });
