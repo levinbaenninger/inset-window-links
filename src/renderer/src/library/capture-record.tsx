@@ -8,7 +8,12 @@ import {
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
+import {
+  getRouteApi,
+  Link,
+  useNavigate,
+  useRouter,
+} from "@tanstack/react-router";
 import {
   useEffect,
   useMemo,
@@ -198,6 +203,7 @@ const SourceCard = ({
 
 const RecordActions = ({ detail }: { detail: CaptureDetail }) => {
   const navigate = useNavigate();
+  const router = useRouter();
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -211,6 +217,8 @@ const RecordActions = ({ detail }: { detail: CaptureDetail }) => {
     const outcome = await libraryApi().remove(detail.id);
 
     if (outcome.kind === "ok" || outcome.kind === "missing") {
+      // "/" opens the newest capture, so the list must no longer hold this one.
+      await router.invalidate({ sync: true });
       await navigate({ to: "/" });
     } else {
       setError(
@@ -452,8 +460,7 @@ const Record = ({
 /**
  * One capture, edited in place. Keyed by the capture's id, so its text starts from the stored
  * copy once and is not reset by every reload: each save makes main report a change, and the
- * reload that follows would otherwise overwrite what is being typed. The image viewer is shown
- * from here too, so opening an image keeps unsaved text instead of remounting from an older copy.
+ * reload that follows would otherwise overwrite what is being typed.
  */
 const CapturePane = ({
   detail,
@@ -479,7 +486,7 @@ const CapturePane = ({
    * window runs no cleanup and, with ⌘W from the menu, no blur either, so pagehide saves then.
    */
   useEffect(() => {
-    const flush = () => saver.flush();
+    const flush = () => saver.flush({ leaving: true });
 
     window.addEventListener("pagehide", flush);
 
