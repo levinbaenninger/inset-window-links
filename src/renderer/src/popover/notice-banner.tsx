@@ -19,28 +19,19 @@ const relaunch = async () => {
 /** macOS keys the grant to this exact build, so a rebuilt or updated copy can show On and still be refused. */
 const PermissionNotice = ({ stillDenied }: { stillDenied: boolean }) => (
   <Alert data-testid="permission-notice">
-    <AlertTitle>Allow Screen Recording to capture windows</AlertTitle>
+    <AlertTitle>Allow Screen Recording</AlertTitle>
     <AlertDescription>
-      {stillDenied ? (
-        <p>
-          macOS still blocks capture. If Inset Window Links is already switched
-          on, this copy is new to macOS: remove it from the list with −, add it
-          again, then quit and reopen.
-        </p>
-      ) : (
-        <p>
-          Turn on Inset Window Links in Privacy &amp; Security, then quit and
-          reopen when macOS asks.
-        </p>
-      )}
+      {stillDenied
+        ? "macOS still blocks capture. Remove Inset Window Links from the list, add it again, then reopen."
+        : "Turn on Inset Window Links in System Settings, then reopen the app."}
     </AlertDescription>
     <div className="col-span-full mt-2 flex flex-wrap gap-1.5">
       <Button onClick={openSettings} size="sm" variant="outline">
-        Open Screen Recording settings
+        Open System Settings
       </Button>
       {stillDenied ? (
         <Button onClick={relaunch} size="sm" variant="ghost">
-          Quit and reopen
+          Reopen app
         </Button>
       ) : (
         <Button onClick={recheck} size="sm" variant="ghost">
@@ -51,11 +42,14 @@ const PermissionNotice = ({ stillDenied }: { stillDenied: boolean }) => (
   </Alert>
 );
 
-const messages = {
+export const blockedReasons = {
   needsRelationship: "Add a title to save.",
-  needsView: "Add at least one window before saving.",
-  sourceVanished:
-    "A window closed before it could be captured, so it was not added.",
+  needsView: "Add a window to save.",
+} as const;
+
+const messages = {
+  ...blockedReasons,
+  sourceVanished: "That window closed before it was added.",
 } satisfies { [K in Exclude<Notice["kind"], "permissionDenied">]: string };
 
 export const NoticeBanner = ({ notice }: { notice: Notice }) =>
@@ -63,7 +57,7 @@ export const NoticeBanner = ({ notice }: { notice: Notice }) =>
     <PermissionNotice stillDenied={notice.stillDenied} />
   ) : (
     <output
-      className="bg-foreground/5 block rounded-lg px-3 py-2 text-xs"
+      className="bg-muted block rounded-lg px-3 py-2 text-xs"
       data-testid="notice"
     >
       {messages[notice.kind]}

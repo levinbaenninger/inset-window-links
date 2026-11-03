@@ -1,14 +1,10 @@
-import {
-  Add01Icon,
-  Cancel01Icon,
-  Tick02Icon,
-} from "@hugeicons/core-free-icons";
+import { Add01Icon, Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "cn";
 import { useRef } from "react";
 import type { KeyboardEvent } from "react";
 
-import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 
 import type { Todo } from "../../../shared/text";
 import { MAX_TODO, MAX_TODOS } from "../../../shared/text";
@@ -21,15 +17,18 @@ const newTodo = (): Todo => ({
 
 /**
  * Next steps as a short list, typed like a checklist in a notes app: Return starts the next
- * one, Backspace in an empty one removes it, the arrow keys move between them.
+ * one, Backspace in an empty one removes it, the arrow keys move between them. The circle checks
+ * a step off; onToggle lets a saved capture store that at once instead of with the text.
  */
 export const TodoEditor = ({
   todos,
   onChange,
+  onToggle,
   label = "Next steps",
 }: {
   todos: readonly Todo[];
   onChange: (todos: Todo[]) => void;
+  onToggle?: (todo: Todo, done: boolean) => void;
   label?: string;
 }) => {
   const fields = useRef(new Map<string, HTMLInputElement>());
@@ -60,6 +59,18 @@ export const TodoEditor = ({
     focus(neighbour?.id);
   };
 
+  const toggle = (todo: Todo) => {
+    if (onToggle === undefined) {
+      onChange(
+        todos.map((item) =>
+          item.id === todo.id ? { ...item, done: !todo.done } : item
+        )
+      );
+    } else {
+      onToggle(todo, !todo.done);
+    }
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>, index: number) => {
     // Return also ends an IME composition, which must not start a new step.
     if (event.nativeEvent.isComposing) {
@@ -85,33 +96,24 @@ export const TodoEditor = ({
   };
 
   return (
-    <div className="flex flex-col gap-0.5" data-testid="todo-editor">
+    <div className="flex flex-col" data-testid="todo-editor">
       {todos.length > 0 && (
         <ul aria-label={label} className="flex flex-col">
           {todos.map((todo, index) => (
             <li
-              className="group hover:bg-foreground/5 focus-within:bg-foreground/5 -mx-1.5 flex items-center gap-2 rounded-md py-0.5 pr-0.5 pl-2"
+              className="group hover:bg-foreground/5 focus-within:bg-foreground/5 flex items-center gap-2.5 rounded-md pr-0.5 pl-1.5"
               key={todo.id}
             >
-              {/* Done steps stay marked while their words are edited. */}
-              <span
-                aria-hidden
-                className={cn(
-                  "grid size-3.5 shrink-0 place-items-center rounded-full border",
-                  todo.done
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-foreground/30"
-                )}
-              >
-                {todo.done && (
-                  <HugeiconsIcon icon={Tick02Icon} size={9} strokeWidth={3} />
-                )}
-              </span>
+              <Checkbox
+                aria-label={`Done, next step ${index + 1}`}
+                checked={todo.done}
+                onCheckedChange={() => toggle(todo)}
+              />
               <input
                 aria-label={`Next step ${index + 1}`}
                 className={cn(
-                  "placeholder:text-muted-foreground h-7 min-w-0 flex-1 bg-transparent text-sm outline-none",
-                  todo.done && "text-muted-foreground"
+                  "placeholder:text-muted-foreground h-8 min-w-0 flex-1 bg-transparent text-sm outline-none",
+                  todo.done && "text-muted-foreground line-through"
                 )}
                 maxLength={MAX_TODO}
                 onChange={(event) =>
@@ -124,7 +126,7 @@ export const TodoEditor = ({
                   )
                 }
                 onKeyDown={(event) => onKeyDown(event, index)}
-                placeholder="Something to do next"
+                placeholder="Next step"
                 ref={(element) => {
                   if (element === null) {
                     fields.current.delete(todo.id);
@@ -155,15 +157,16 @@ export const TodoEditor = ({
         </ul>
       )}
       {todos.length < MAX_TODOS && (
-        <Button
-          className="-ml-2 self-start"
+        <button
+          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex h-8 items-center gap-2.5 self-start rounded-md pr-2 pl-1.5 text-sm outline-none focus-visible:ring-3"
           onClick={() => insertAfter(todos.length - 1)}
-          size="sm"
-          variant="ghost"
+          type="button"
         >
-          <HugeiconsIcon icon={Add01Icon} />
-          Add a next step
-        </Button>
+          <span className="grid size-4 place-items-center">
+            <HugeiconsIcon icon={Add01Icon} size={14} />
+          </span>
+          Next step
+        </button>
       )}
     </div>
   );
