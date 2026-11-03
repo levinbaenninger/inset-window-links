@@ -12,11 +12,13 @@ This is a research prototype. See `IMPLEMENTATION_REPORT.md` for what has been v
 - **Several windows at once.** The dashed Add tile in the panel (File > Add Windows…, `⇧⌘N`) lists every open window. Click the windows you want, then Add. Select all (`⌘A`) picks all of them; double-click adds just one.
 - **Write and save.** The title says what connects the windows; Return moves on to the optional details. Next steps is a list: Return starts the next step, Backspace in an empty one removes it. Save with `⌘↵` (`Ctrl+Enter` on Windows), the Save button, or File > Save Capture (`⌘S`). Without a window or a title, Save says what is missing. Discard asks once; while it asks, Escape keeps the draft.
 - **Quit** with an unsaved draft asks inside the panel: Save, Discard, or Cancel.
-- **Recent Captures** (View > Recent Captures, `⌘2`) opens on the newest capture, with the captures by day in a sidebar and search (`⌘F`) over the title, details, next steps, window titles and apps.
+- **Recent Captures** (View > Recent Captures, `⌘2`) opens on the newest capture, with the captures by day in a sidebar and search (`⌘F`) over the title, details, next steps, window titles and apps. Settings sits at the foot of the sidebar.
   - Drag the sidebar's edge to make it wider or narrower; double-click the edge for the default width. Hide it with the sidebar button or `⌃⌘S` (`Ctrl+B` on Windows), or by dragging the edge far to the left. The width and whether it is hidden are kept.
   - Edit the title, details and next steps right in the capture. Changes save as you type; a blank title goes back to the saved one. Each checked step is saved at once.
   - Reopen all opens the web page, file or app each window showed. Each window also has its own link.
-  - Copy as text puts the title, the details, the steps as a checklist, and the windows with their addresses on the clipboard. Each image can be copied, dragged into another app, or opened at full size (`Z` switches to actual size, the arrow keys step between windows).
+  - Right-click a capture in the sidebar, or open the capture's `…` menu, for Reopen, Copy as text, Snooze, Mark as done and Delete. Delete asks first.
+  - Mark as done (the check button in the capture's header) keeps a capture without leaving it in the list. Snooze hides it until in an hour, this evening, tomorrow at 9:00 or next Monday at 9:00; then it comes back to the list with a notification, also after the computer slept or the app was closed. Snoozed and Done sit at the foot of the sidebar and open their own lists.
+  - Copy as text (in the `…` menu) puts the title, the details, the steps as a checklist, and the windows with their addresses on the clipboard. Each image can be copied, dragged into another app, or opened at full size (`Z` switches to actual size, the arrow keys step between windows).
 - **Settings** (`⌘,`):
   - Open at login.
   - Show the app icon in the Dock, the menu bar, or both (macOS). Menu bar only means no Dock icon and no menu bar.
