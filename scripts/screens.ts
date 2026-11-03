@@ -373,6 +373,23 @@ const SCENES: readonly Scene[] = [
     platforms: ["macos"],
   },
   {
+    data: {
+      draft: draft({
+        ...FULL_DRAFT,
+        text: {
+          ...FULL_DRAFT.text,
+          description:
+            "Chairs are CHF 280 over and delivery adds CHF 980 we never planned for.\nRieder can only deliver from the 24th, three days after the team moves in.\nMarco signs off on anything above the cap, so he needs the numbers by Friday.",
+          relationship:
+            "Rieder's quote breaks the furniture cap, comes too late for the move, and leaves out the shelving we asked for, so we need a second quote before Marco signs anything",
+        },
+      }),
+    },
+    name: "popover-long-text",
+    page: "popover",
+    platforms: ["macos"],
+  },
+  {
     act: async (page) => {
       await page
         .getByRole("button", { exact: true, name: /^discard/iu })
