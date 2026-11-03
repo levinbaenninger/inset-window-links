@@ -103,6 +103,8 @@ export type CaptureListItem =
       status: CaptureStatus;
       todos: readonly Todo[];
       views: readonly ListedView[];
+      /** The views Reopen can bring back, for the right-click menu. */
+      reopenable: readonly ViewId[];
     }
   | { kind: "unsupported"; id: string; version: number }
   | { kind: "unreadable"; id: string };

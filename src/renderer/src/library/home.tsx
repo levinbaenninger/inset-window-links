@@ -64,10 +64,13 @@ export const Home = () => {
   );
 };
 
-/** The library opens on the newest capture, so there is no empty pane to pick from. */
+/** The library opens on the newest capture in the list, so there is no empty pane to pick from. */
 export const Newest = () => {
   const { items } = root.useLoaderData();
-  const newest = items.find((item) => item.kind === "current");
+
+  const newest = items.find(
+    (item) => item.kind === "current" && item.status.kind === "active"
+  );
 
   return newest === undefined ? (
     <Home />

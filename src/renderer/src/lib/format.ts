@@ -13,7 +13,7 @@ const startOfDay = (date: Date): number =>
 
 const DAY_MS = 86_400_000;
 
-/** "Today", "Yesterday", then the weekday and date, so a list reads by recency. */
+/** "Today", "Yesterday" or "Tomorrow", then the weekday and date, so a list reads by recency. */
 export const formatDay = (iso: string, now: Date = new Date()): string => {
   const date = new Date(iso);
   const days = Math.round((startOfDay(now) - startOfDay(date)) / DAY_MS);
@@ -24,6 +24,10 @@ export const formatDay = (iso: string, now: Date = new Date()): string => {
 
   if (days === 1) {
     return "Yesterday";
+  }
+
+  if (days === -1) {
+    return "Tomorrow";
   }
 
   const options: Intl.DateTimeFormatOptions = {
@@ -41,3 +45,7 @@ export const formatDay = (iso: string, now: Date = new Date()): string => {
 
 export const plural = (count: number, noun: string): string =>
   `${count} ${count === 1 ? noun : `${noun}s`}`;
+
+/** "Tomorrow, 9:00": a day and a time, for when a snooze ends. */
+export const formatWhen = (iso: string, now: Date = new Date()): string =>
+  `${formatDay(iso, now)}, ${formatClock(iso)}`;

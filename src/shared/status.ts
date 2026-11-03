@@ -14,6 +14,18 @@ export type CaptureStatus = z.infer<typeof CaptureStatusSchema>;
 
 export type StatusKind = CaptureStatus["kind"];
 
+/** What the page asks for; main stamps the time a capture was marked done. */
+export const StatusRequestSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("active") }),
+  z.object({ kind: z.literal("snoozed"), until: z.iso.datetime() }),
+  z.object({ kind: z.literal("done") }),
+]);
+
+export type StatusRequest = z.infer<typeof StatusRequestSchema>;
+
+export const statusFor = (request: StatusRequest, now: Date): CaptureStatus =>
+  request.kind === "done" ? { at: now.toISOString(), kind: "done" } : request;
+
 export const ACTIVE: CaptureStatus = { kind: "active" };
 
 export interface SnoozePreset {

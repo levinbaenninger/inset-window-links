@@ -8,7 +8,7 @@ import type {
 } from "./dto";
 import type { CandidateId, CaptureId, ViewId } from "./ids";
 import type { SettingsChange, SettingsView } from "./settings";
-import type { CaptureStatus } from "./status";
+import type { StatusRequest } from "./status";
 import type { DraftText } from "./text";
 
 export interface PopoverApi {
@@ -42,7 +42,7 @@ export interface LibraryApi {
   remove: (captureId: CaptureId) => Promise<MutationOutcome>;
   setStatus: (
     captureId: CaptureId,
-    status: CaptureStatus
+    status: StatusRequest
   ) => Promise<MutationOutcome>;
   copyNote: (captureId: CaptureId) => Promise<void>;
   shortcut: () => Promise<ShortcutStatus>;
