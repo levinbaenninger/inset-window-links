@@ -142,10 +142,7 @@ export const SourceChooser = ({
           className="grid grid-cols-3 gap-2"
         >
           {Array.from({ length: 6 }, (_, index) => (
-            <li
-              className="bg-muted aspect-video animate-pulse rounded-md"
-              key={index}
-            />
+            <li className="bg-muted aspect-video rounded-md" key={index} />
           ))}
         </ul>
       ) : (
