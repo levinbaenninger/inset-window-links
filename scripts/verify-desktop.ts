@@ -846,7 +846,8 @@ const editAndDelete = async (library: Page, userData: string) => {
       saved.todos[0]?.text === "Edited next step",
     json({ relationship: saved?.relationship, todos: saved?.todos })
   );
-  await library.getByRole("button", { name: "Delete" }).click();
+  await library.getByRole("button", { name: "More" }).click();
+  await library.getByRole("menuitem", { name: "Delete…" }).click();
   await library
     .getByRole("alertdialog")
     .getByRole("button", { name: "Delete" })
@@ -937,7 +938,8 @@ const reopenAndRead = async (
     route
   );
   await checkImageViewer(library);
-  await library.getByRole("button", { name: "Copy as text" }).click();
+  await library.getByRole("button", { name: "More" }).click();
+  await library.getByRole("menuitem", { name: "Copy as text" }).click();
 
   const clipboard = await waitFor(
     () => app.evaluate(({ clipboard: board }) => board.readText()),
