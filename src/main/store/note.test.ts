@@ -9,7 +9,8 @@ const record: CaptureRecord = {
   description: "",
   id: DraftIdSchema.parse("6f1c2b52-3d4e-4f60-8a71-92b3c4d5e6f7"),
   relationship: "The cap in the budget sheet rules out the quote in this mail.",
-  schemaVersion: 3,
+  schemaVersion: 4,
+  status: { kind: "active" },
   todos: [
     { done: false, id: "a", text: "Ask Dana before Friday" },
     { done: true, id: "b", text: "Find the old quote" },

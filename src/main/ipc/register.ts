@@ -19,6 +19,7 @@ import {
   ViewIdSchema,
 } from "../../shared/ids";
 import { SettingsChangeSchema } from "../../shared/settings";
+import { CaptureStatusSchema } from "../../shared/status";
 import {
   DraftTextSchema,
   MAX_RELATIONSHIP,
@@ -177,6 +178,7 @@ const listItem = (entry: StoreEntry): CaptureListItem => {
     id: record.id,
     kind: "current",
     relationship: record.relationship,
+    status: record.status,
     todos: record.todos,
     views: record.views.map((view) => ({
       appName: view.appName,
@@ -205,6 +207,7 @@ const detail = (entry: StoreEntry | undefined): CaptureDetail | null => {
     description: record.description,
     id: record.id,
     relationship: record.relationship,
+    status: record.status,
     todos: record.todos,
     updatedAt: record.updatedAt,
     views: summarizeViews(record.views, (view) =>
@@ -278,6 +281,10 @@ export const registerLibraryChannels = (
     openSettings: send(z.tuple([]), actions.openSettings),
     remove: invoke(z.tuple([DraftIdSchema]), (captureId) =>
       store.remove(captureId)
+    ),
+    setStatus: invoke(
+      z.tuple([DraftIdSchema, CaptureStatusSchema]),
+      (captureId, status) => store.setStatus(captureId, status)
     ),
     // Only ids cross from the page; what opens is read from the record here.
     reopen: invoke(

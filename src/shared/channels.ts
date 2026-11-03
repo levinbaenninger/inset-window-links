@@ -32,6 +32,7 @@ export const libraryChannels = {
   openSettings: "send",
   remove: "invoke",
   reopen: "invoke",
+  setStatus: "invoke",
   setTodoDone: "invoke",
   shortcut: "invoke",
   updateText: "invoke",

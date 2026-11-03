@@ -32,7 +32,8 @@ const newCapture = (): NewCapture => {
     description: "",
     id: CAPTURE_ID,
     relationship: "The budget cap in the sheet limits the quote in the mail.",
-    schemaVersion: 3,
+    schemaVersion: 4,
+    status: { kind: "active" },
     todos: [{ done: false, id: "t1", text: "Ask Dana" }],
     updatedAt: "2026-10-21T12:00:00.000Z",
     views: VIEW_IDS.map((id, index) => ({
@@ -225,7 +226,7 @@ describe(CaptureStore, () => {
         entry.record.todos,
       ]
     ).toStrictEqual([
-      3,
+      4,
       "The quote breaks the furniture cap",
       "Chairs are CHF 280 over.\nDelivery adds CHF 980.",
       [],
@@ -254,7 +255,7 @@ describe(CaptureStore, () => {
     ]);
   });
 
-  it("reads a version 1 record, turning its next step into to-dos, and writes version 3 on edit", async () => {
+  it("reads a version 1 record, turning its next step into to-dos, and writes the current version on edit", async () => {
     const { record } = newCapture();
     const { description: _description, todos: _todos, ...rest } = record;
 
@@ -292,13 +293,17 @@ describe(CaptureStore, () => {
       await readFile(path.join(root, CAPTURE_ID, "record.json"), "utf-8")
     );
 
-    expect(written).toMatchObject({ description: "", schemaVersion: 3 });
+    expect(written).toMatchObject({
+      description: "",
+      schemaVersion: 4,
+      status: { kind: "active" },
+    });
     expect(written).not.toHaveProperty("nextStep");
   });
 
   it("reads a version 2 record with an empty description and rewrites it only when edited", async () => {
     const { record } = newCapture();
-    const { description: _description, ...rest } = record;
+    const { description: _description, status: _status, ...rest } = record;
     const v2Json = JSON.stringify({ ...rest, schemaVersion: 2 });
     const file = path.join(root, CAPTURE_ID, "record.json");
 
@@ -316,7 +321,7 @@ describe(CaptureStore, () => {
         entry.record.todos,
       ]
     ).toStrictEqual([
-      3,
+      4,
       "",
       "The budget cap in the sheet limits the quote in the mail.",
       [{ done: false, id: "t1", text: "Ask Dana" }],
@@ -337,8 +342,63 @@ describe(CaptureStore, () => {
 
     expect(written).toMatchObject({
       description: "Dana said the cap is firm.",
-      schemaVersion: 3,
+      schemaVersion: 4,
+      status: { kind: "active" },
       updatedAt: "2026-10-22T08:00:00.000Z",
+    });
+  });
+
+  it("reads a version 3 record as in the list, and writes its status once it is snoozed", async () => {
+    const { record } = newCapture();
+    const { status: _status, ...rest } = record;
+    const v3Json = JSON.stringify({ ...rest, schemaVersion: 3 });
+    const file = path.join(root, CAPTURE_ID, "record.json");
+
+    await mkdir(path.join(root, CAPTURE_ID, "views"), { recursive: true });
+    await writeFile(file, v3Json);
+
+    const store = await CaptureStore.open(root, nodeStoreFs);
+    const entry = store.get(CAPTURE_ID);
+
+    expect(entry?.kind === "current" && entry.record.status).toStrictEqual({
+      kind: "active",
+    });
+    await expect(readFile(file, "utf-8")).resolves.toBe(v3Json);
+
+    await store.setStatus(CAPTURE_ID, {
+      kind: "snoozed",
+      until: "2026-10-22T07:00:00.000Z",
+    });
+
+    expect(JSON.parse(await readFile(file, "utf-8"))).toMatchObject({
+      schemaVersion: 4,
+      status: { kind: "snoozed", until: "2026-10-22T07:00:00.000Z" },
+      updatedAt: "2026-10-21T12:00:00.000Z",
+    });
+  });
+
+  it("wakes a snoozed capture only while it is still snoozed until that time", async () => {
+    const store = await CaptureStore.open(root, nodeStoreFs);
+    const first = "2026-10-22T07:00:00.000Z";
+
+    await store.publish(newCapture());
+    await store.setStatus(CAPTURE_ID, { kind: "snoozed", until: first });
+    await store.setStatus(CAPTURE_ID, {
+      kind: "snoozed",
+      until: "2026-10-26T07:00:00.000Z",
+    });
+
+    const stale = await store.wake(CAPTURE_ID, first);
+
+    await store.setStatus(CAPTURE_ID, { kind: "snoozed", until: first });
+
+    const due = await store.wake(CAPTURE_ID, first);
+    const reopened = await reopen(root);
+    const entry = reopened.get(CAPTURE_ID);
+
+    expect([stale, due]).toStrictEqual([{ kind: "missing" }, { kind: "ok" }]);
+    expect(entry?.kind === "current" && entry.record.status).toStrictEqual({
+      kind: "active",
     });
   });
 
@@ -376,7 +436,7 @@ describe(CaptureStore, () => {
 
     const futureJson = JSON.stringify({
       id,
-      schemaVersion: 4,
+      schemaVersion: 5,
       thought: "from the future",
     });
 
@@ -396,11 +456,11 @@ describe(CaptureStore, () => {
     ];
 
     expect(store.list()).toStrictEqual([
-      { id, kind: "unsupported", version: 4 },
+      { id, kind: "unsupported", version: 5 },
     ]);
     expect(outcomes).toStrictEqual([
-      { kind: "readOnly", version: 4 },
-      { kind: "readOnly", version: 4 },
+      { kind: "readOnly", version: 5 },
+      { kind: "readOnly", version: 5 },
     ]);
     await expect(
       readFile(path.join(root, id, "record.json"), "utf-8")

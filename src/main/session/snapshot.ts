@@ -8,6 +8,7 @@ import type {
   ShortcutStatus,
   ViewSummary,
 } from "../../shared/dto";
+import { ACTIVE } from "../../shared/status";
 import { keptTodos } from "../../shared/text";
 import { imageUrl } from "../ipc/image-url";
 import type { SavedView } from "../store/schema";
@@ -36,6 +37,7 @@ export const toNewCapture = (draft: Draft, now: Date): NewCapture => ({
     id: draft.id,
     relationship: draft.text.relationship,
     schemaVersion: CURRENT_SCHEMA_VERSION,
+    status: ACTIVE,
     todos: keptTodos(draft.text.todos),
     updatedAt: now.toISOString(),
     views: draft.views.map(toSavedView),
