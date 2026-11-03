@@ -72,28 +72,40 @@ const ORIGIN_VERB = {
   page: "Open the page",
 } as const;
 
-/** Where a view came from, as a button that opens it again. */
+/**
+ * Where a window came from, as a button that opens it again. A file's name is usually the
+ * window's title already, so then only the icon shows.
+ */
 const OriginButton = ({
   origin,
+  title,
   onOpen,
 }: {
   origin: OriginSummary;
+  title: string;
   onOpen: () => void;
-}) => (
-  <button
-    className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex min-w-0 items-center gap-1 self-start rounded-sm px-0.5 text-left text-xs outline-none focus-visible:ring-3"
-    onClick={onOpen}
-    title={`${ORIGIN_VERB[origin.kind]}: ${origin.detail}`}
-    type="button"
-  >
-    <HugeiconsIcon
-      className="shrink-0"
-      icon={ORIGIN_ICON[origin.kind]}
-      size={12}
-    />
-    <span className="truncate">{origin.label}</span>
-  </button>
-);
+}) => {
+  const repeated = title
+    .toLocaleLowerCase()
+    .includes(origin.label.toLocaleLowerCase());
+
+  return (
+    <button
+      aria-label={`${ORIGIN_VERB[origin.kind]}: ${origin.label}`}
+      className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex max-w-1/2 min-w-0 shrink-0 items-center gap-1 rounded-sm px-0.5 text-xs outline-none focus-visible:ring-3"
+      onClick={onOpen}
+      title={`${ORIGIN_VERB[origin.kind]}: ${origin.detail}`}
+      type="button"
+    >
+      <HugeiconsIcon
+        className="shrink-0"
+        icon={ORIGIN_ICON[origin.kind]}
+        size={12}
+      />
+      {!repeated && <span className="truncate">{origin.label}</span>}
+    </button>
+  );
+};
 
 const CopyImage = ({
   captureId,
@@ -161,20 +173,26 @@ const SourceCard = ({
       </Link>
       <CopyImage captureId={captureId} view={view} />
     </div>
-    <p
-      className="truncate px-0.5 text-sm font-medium"
-      data-testid="record-source-title"
-      title={
-        view.appName === null
-          ? viewTitle(view.title)
-          : `${viewTitle(view.title)} · ${view.appName}`
-      }
-    >
-      {viewTitle(view.title)}
-    </p>
-    {view.origin !== null && (
-      <OriginButton onOpen={() => onReopen(view)} origin={view.origin} />
-    )}
+    <div className="flex min-w-0 items-center gap-2 px-0.5">
+      <p
+        className="min-w-0 flex-1 truncate text-sm font-medium"
+        data-testid="record-source-title"
+        title={
+          view.appName === null
+            ? viewTitle(view.title)
+            : `${viewTitle(view.title)} · ${view.appName}`
+        }
+      >
+        {viewTitle(view.title)}
+      </p>
+      {view.origin !== null && (
+        <OriginButton
+          onOpen={() => onReopen(view)}
+          origin={view.origin}
+          title={viewTitle(view.title)}
+        />
+      )}
+    </div>
   </li>
 );
 

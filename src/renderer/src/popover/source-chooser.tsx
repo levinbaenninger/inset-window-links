@@ -132,24 +132,8 @@ export const SourceChooser = ({
       className="flex flex-col gap-3"
       data-testid="source-chooser"
     >
-      {(why !== null || list.length > 0) && (
-        <div className="-mt-1 flex min-h-6 items-center justify-between gap-3">
-          <p className="text-muted-foreground text-xs">{why}</p>
-          {list.length > 0 && (
-            <Button
-              className="-mr-2"
-              onClick={() =>
-                setPicked(
-                  allPicked ? new Set() : new Set(list.map((item) => item.id))
-                )
-              }
-              size="xs"
-              variant="ghost"
-            >
-              {allPicked ? "Select none" : "Select all"}
-            </Button>
-          )}
-        </div>
+      {why !== null && (
+        <p className="text-muted-foreground -mt-1 text-xs">{why}</p>
       )}
       {candidates === "loading" ? (
         <ul
@@ -189,10 +173,25 @@ export const SourceChooser = ({
         <Button className="-ml-2" onClick={onCancel} size="sm" variant="ghost">
           Back
         </Button>
-        <Button disabled={picked.size === 0} onClick={add} size="sm">
-          {picked.size === 0 ? "Add" : `Add ${plural(picked.size, "window")}`}
-          <Kbd>{mac ? "⌘↵" : "Ctrl+Enter"}</Kbd>
-        </Button>
+        <span className="flex items-center gap-1.5">
+          {list.length > 1 && (
+            <Button
+              onClick={() =>
+                setPicked(
+                  allPicked ? new Set() : new Set(list.map((item) => item.id))
+                )
+              }
+              size="sm"
+              variant="ghost"
+            >
+              {allPicked ? "Select none" : "Select all"}
+            </Button>
+          )}
+          <Button disabled={picked.size === 0} onClick={add} size="sm">
+            {picked.size === 0 ? "Add" : `Add ${plural(picked.size, "window")}`}
+            <Kbd>{mac ? "⌘↵" : "Ctrl+Enter"}</Kbd>
+          </Button>
+        </span>
       </footer>
     </section>
   );
