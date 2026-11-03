@@ -4,6 +4,7 @@ import { cn } from "cn";
 import { useEffect, useEffectEvent, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { plural, viewTitle } from "@/lib/format";
 
 import type { CandidateSummary, FallbackReason } from "../../../shared/dto";
@@ -11,13 +12,13 @@ import type { CandidateId } from "../../../shared/ids";
 
 /** Why the list opened instead of the window in front being added. Picking from the menu needs no reason. */
 const reasons = {
-  ambiguous: "The window in front could not be told apart from another.",
-  captureFailed: "The window in front could not be captured.",
-  invalidId: "The window in front could not be identified.",
+  ambiguous: "Couldn't tell the window in front apart. Pick it here.",
+  captureFailed: "Couldn't capture the window in front. Pick it here.",
+  invalidId: "Couldn't identify the window in front. Pick it here.",
   menu: null,
-  noMatch: "The window in front could not be found to capture.",
-  probeUnavailable: "The window in front could not be read.",
-  vanished: "The window in front closed before it was captured.",
+  noMatch: "Couldn't find the window in front. Pick it here.",
+  probeUnavailable: "Couldn't read the window in front. Pick it here.",
+  vanished: "The window in front closed before it was added.",
 } satisfies { [K in FallbackReason]: string | null };
 
 const Tile = ({
@@ -37,13 +38,14 @@ const Tile = ({
       className="group focus-visible:ring-ring/50 flex w-full min-w-0 flex-col gap-1 rounded-md text-left outline-none focus-visible:ring-3"
       onClick={onToggle}
       onDoubleClick={onAddOnly}
+      title={candidate.appName ?? undefined}
       type="button"
     >
       <span
         className={cn(
           "bg-muted relative aspect-video w-full overflow-hidden rounded-md border",
           picked
-            ? "border-primary ring-primary ring-1"
+            ? "ring-brand border-transparent ring-2"
             : "border-foreground/10 group-hover:border-foreground/25"
         )}
       >
@@ -53,18 +55,13 @@ const Tile = ({
           src={candidate.imageUrl}
         />
         {picked && (
-          <span className="bg-primary text-primary-foreground absolute top-1.5 left-1.5 grid size-5 place-items-center rounded-full">
+          <span className="bg-brand text-brand-foreground absolute top-1.5 left-1.5 grid size-5 place-items-center rounded-full">
             <HugeiconsIcon icon={Tick02Icon} size={12} strokeWidth={2.5} />
           </span>
         )}
       </span>
-      <span className="flex min-w-0 flex-col px-0.5">
-        <span className="truncate text-xs font-medium">
-          {viewTitle(candidate.title)}
-        </span>
-        <span className="text-muted-foreground truncate text-xs">
-          {candidate.appName ?? "Window"}
-        </span>
+      <span className="text-muted-foreground truncate px-0.5 text-xs">
+        {viewTitle(candidate.title)}
       </span>
     </button>
   </li>
@@ -135,25 +132,25 @@ export const SourceChooser = ({
       className="flex flex-col gap-3"
       data-testid="source-chooser"
     >
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-muted-foreground text-xs">
-          {why ?? "Pick the windows this thought is about."}
-        </p>
-        {list.length > 0 && (
-          <Button
-            className="-mr-2"
-            onClick={() =>
-              setPicked(
-                allPicked ? new Set() : new Set(list.map((item) => item.id))
-              )
-            }
-            size="xs"
-            variant="ghost"
-          >
-            {allPicked ? "Select none" : "Select all"}
-          </Button>
-        )}
-      </div>
+      {(why !== null || list.length > 0) && (
+        <div className="-mt-1 flex min-h-6 items-center justify-between gap-3">
+          <p className="text-muted-foreground text-xs">{why}</p>
+          {list.length > 0 && (
+            <Button
+              className="-mr-2"
+              onClick={() =>
+                setPicked(
+                  allPicked ? new Set() : new Set(list.map((item) => item.id))
+                )
+              }
+              size="xs"
+              variant="ghost"
+            >
+              {allPicked ? "Select none" : "Select all"}
+            </Button>
+          )}
+        </div>
+      )}
       {candidates === "loading" ? (
         <ul
           aria-busy
@@ -183,20 +180,18 @@ export const SourceChooser = ({
           ))}
           {candidates.length === 0 && (
             <li className="text-muted-foreground col-span-3 py-8 text-center text-xs">
-              No other windows are open.
+              No other windows open.
             </li>
           )}
         </ul>
       )}
       <footer className="flex items-center justify-between gap-2">
-        <Button onClick={onCancel} size="sm" variant="ghost">
+        <Button className="-ml-2" onClick={onCancel} size="sm" variant="ghost">
           Back
         </Button>
         <Button disabled={picked.size === 0} onClick={add} size="sm">
-          {picked.size === 0
-            ? "Add windows"
-            : `Add ${plural(picked.size, "window")}`}
-          <span className="opacity-70">{mac ? "⌘↵" : "Ctrl+Enter"}</span>
+          {picked.size === 0 ? "Add" : `Add ${plural(picked.size, "window")}`}
+          <Kbd>{mac ? "⌘↵" : "Ctrl+Enter"}</Kbd>
         </Button>
       </footer>
     </section>

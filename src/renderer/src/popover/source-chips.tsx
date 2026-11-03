@@ -16,6 +16,8 @@ export interface PendingView {
 const TILE_IMAGE =
   "border-foreground/10 bg-muted aspect-[16/10] w-full overflow-hidden rounded-md border";
 
+const TILE_TITLE = "text-muted-foreground truncate px-0.5 text-xs";
+
 const SourceChip = ({
   view,
   index,
@@ -43,7 +45,7 @@ const SourceChip = ({
         className={cn(
           TILE_IMAGE,
           "focus-visible:ring-ring/50 outline-none focus-visible:ring-3",
-          open && "ring-primary ring-2"
+          open && "ring-brand ring-2"
         )}
         onClick={onToggle}
         type="button"
@@ -54,23 +56,16 @@ const SourceChip = ({
           src={view.imageUrl}
         />
       </button>
-      <span className="flex min-w-0 flex-col px-0.5">
-        <span
-          className="truncate text-xs font-medium"
-          data-testid="source-chip-title"
-          title={title}
-        >
-          {title}
-        </span>
-        <span className="text-muted-foreground truncate text-xs">
-          {view.sameWindowAs === null
-            ? (view.appName ?? "Window")
-            : `Again, as window ${view.sameWindowAs}`}
-        </span>
+      <span
+        className={TILE_TITLE}
+        data-testid="source-chip-title"
+        title={view.appName === null ? title : `${title} · ${view.appName}`}
+      >
+        {title}
       </span>
       <button
         aria-label={`Remove window ${index + 1}, ${title}`}
-        className="bg-background/90 text-foreground hover:bg-background focus-visible:ring-ring/50 absolute top-1 right-1 grid size-6 place-items-center rounded-full opacity-0 shadow-sm outline-none group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:ring-3"
+        className="bg-background/90 text-foreground hover:bg-background focus-visible:ring-ring/50 border-foreground/10 absolute top-1 right-1 grid size-6 place-items-center rounded-full border opacity-0 outline-none group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:ring-3"
         onClick={onRemove}
         type="button"
       >
@@ -88,57 +83,61 @@ const PendingChip = ({ pending }: { pending: PendingView }) => (
     data-testid="pending-chip"
   >
     <span className={cn(TILE_IMAGE, "animate-pulse")} />
-    <span className="flex min-w-0 flex-col px-0.5">
-      <span className="truncate text-xs font-medium">
-        {viewTitle(pending.title)}
-      </span>
-      <span className="text-muted-foreground truncate text-xs">Capturing…</span>
-    </span>
+    <span className={TILE_TITLE}>{viewTitle(pending.title)}</span>
   </li>
 );
 
 /**
- * Where the next view lands: opens the window list to pick several at once. Before the first
- * view it fills the row, since it is the first thing to do.
+ * Where the next window lands: opens the window list to pick several at once. It also shows the
+ * other way in, the shortcut from any window, which verify-desktop reads by the hint test id.
+ * Before the first window it is a short bar across the row.
  */
-const AddTile = ({ first, onAdd }: { first: boolean; onAdd: () => void }) => (
+const AddTile = ({
+  first,
+  shortcut,
+  onAdd,
+}: {
+  first: boolean;
+  shortcut: ShortcutStatus;
+  onAdd: () => void;
+}) => (
   <li className={cn("flex min-w-0 flex-col", first && "col-span-3")}>
     <button
+      aria-label="Add windows"
       className={cn(
-        "border-foreground/15 text-muted-foreground hover:text-foreground hover:bg-foreground/5 focus-visible:ring-ring/50 flex w-full flex-col items-center justify-center gap-1 rounded-md border border-dashed text-xs outline-none focus-visible:ring-3",
-        first ? "h-28" : "aspect-[16/10]"
+        "border-foreground/15 text-muted-foreground hover:text-foreground hover:bg-foreground/5 focus-visible:ring-ring/50 flex w-full items-center justify-center rounded-md border border-dashed text-xs outline-none focus-visible:ring-3",
+        first ? "h-[4.75rem] gap-2" : "aspect-[16/10] flex-col gap-1.5"
       )}
       onClick={onAdd}
+      title={
+        shortcut.kind === "registered"
+          ? undefined
+          : `${shortcut.label} is taken by another app`
+      }
       type="button"
     >
-      <HugeiconsIcon icon={Add01Icon} size={16} />
-      <span className={cn(first && "text-foreground text-sm font-medium")}>
-        Add windows
+      <span
+        className={cn(
+          "flex items-center gap-1",
+          first && "text-foreground text-sm font-medium"
+        )}
+      >
+        <HugeiconsIcon icon={Add01Icon} size={first ? 16 : 18} />
+        {first && "Add windows"}
       </span>
-      {first && <span>Pick the windows this thought is about</span>}
+      {shortcut.kind === "registered" && (
+        <span className="flex items-center gap-1.5">
+          {first && "or"}
+          <Kbd data-testid="hint">{shortcut.label}</Kbd>
+        </span>
+      )}
     </button>
   </li>
 );
 
-/** Under the tiles: the other way in, from any window. */
-const ShortcutHint = ({ shortcut }: { shortcut: ShortcutStatus }) => (
-  <p
-    className="text-muted-foreground flex items-center gap-1.5 text-xs"
-    data-testid="hint"
-  >
-    {shortcut.kind === "registered" ? (
-      <>
-        Or press <Kbd>{shortcut.label}</Kbd> in any window to add it.
-      </>
-    ) : (
-      `${shortcut.label} is taken by another app, so pick windows with Add windows.`
-    )}
-  </p>
-);
-
 /**
- * The views as tiles, three to a row, with Add windows last. Past three rows the tiles scroll
- * inside themselves, keeping the newest in sight. A tile opens its whole capture below.
+ * The windows as tiles, three to a row, with Add windows last. Past three rows the tiles scroll
+ * inside themselves, keeping the newest in sight. A tile opens its whole image below.
  */
 export const SourceChips = ({
   views,
@@ -186,19 +185,18 @@ export const SourceChips = ({
           />
         ))}
         {pending === null ? null : <PendingChip pending={pending} />}
-        <AddTile first={count === 0} onAdd={onAdd} />
+        <AddTile first={count === 0} onAdd={onAdd} shortcut={shortcut} />
       </ul>
       {open !== null && (
         <img
           alt={`Capture of ${viewTitle(open.title)}`}
-          className="border-foreground/10 bg-muted max-h-64 w-full rounded-md border object-contain"
+          className="border-foreground/10 bg-muted max-h-64 w-full rounded-lg border object-contain"
           data-testid="source-preview"
           height={open.height}
           src={open.imageUrl}
           width={open.width}
         />
       )}
-      <ShortcutHint shortcut={shortcut} />
     </section>
   );
 };
