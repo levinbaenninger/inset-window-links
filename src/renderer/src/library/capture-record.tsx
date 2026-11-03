@@ -456,8 +456,20 @@ const CapturePane = ({
     saver.adopt(textOf(detail));
   }, [saver, detail]);
 
-  // Leaving the capture, for another one or by closing the window, saves what is left.
-  useEffect(() => () => saver.flush(), [saver]);
+  /*
+   * Leaving the capture for another one unmounts the pane, which saves what is left. Closing the
+   * window runs no cleanup and, with ⌘W from the menu, no blur either, so pagehide saves then.
+   */
+  useEffect(() => {
+    const flush = () => saver.flush();
+
+    window.addEventListener("pagehide", flush);
+
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      saver.flush();
+    };
+  }, [saver]);
 
   if (detail.views[viewIndex] !== undefined) {
     return <ImageViewer detail={detail} index={viewIndex} />;
