@@ -19,7 +19,7 @@ import {
   ViewIdSchema,
 } from "../../shared/ids";
 import { SettingsChangeSchema } from "../../shared/settings";
-import { CaptureStatusSchema } from "../../shared/status";
+import { StatusRequestSchema, statusFor } from "../../shared/status";
 import {
   DraftTextSchema,
   MAX_RELATIONSHIP,
@@ -28,7 +28,7 @@ import {
 import { openScreenSettings } from "../capture/capturer";
 import { reopenOrigin } from "../reopen";
 import type { SessionController } from "../session/controller";
-import { summarizeViews } from "../session/snapshot";
+import { originSummary, summarizeViews } from "../session/snapshot";
 import { formatNote } from "../store/note";
 import type { CaptureStore, StoreEntry } from "../store/store";
 import type { RendererPage } from "../windows/renderer-page";
@@ -178,6 +178,9 @@ const listItem = (entry: StoreEntry): CaptureListItem => {
     id: record.id,
     kind: "current",
     relationship: record.relationship,
+    reopenable: record.views
+      .filter((view) => originSummary(view) !== null)
+      .map((view) => view.id),
     status: record.status,
     todos: record.todos,
     views: record.views.map((view) => ({
@@ -283,8 +286,9 @@ export const registerLibraryChannels = (
       store.remove(captureId)
     ),
     setStatus: invoke(
-      z.tuple([DraftIdSchema, CaptureStatusSchema]),
-      (captureId, status) => store.setStatus(captureId, status)
+      z.tuple([DraftIdSchema, StatusRequestSchema]),
+      (captureId, request) =>
+        store.setStatus(captureId, statusFor(request, new Date()))
     ),
     // Only ids cross from the page; what opens is read from the record here.
     reopen: invoke(

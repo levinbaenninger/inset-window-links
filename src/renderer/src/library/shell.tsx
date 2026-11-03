@@ -1,4 +1,10 @@
-import { Add01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import {
+  Add01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  Settings01Icon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
   getRouteApi,
   Outlet,
@@ -12,10 +18,51 @@ import { IconButton } from "@/components/icon-button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { libraryApi } from "@/lib/bridge";
 
-import { RecentList, SearchField } from "./recent-list";
+import type { CaptureListItem } from "../../../shared/dto";
+import type { StatusKind } from "../../../shared/status";
+import { listOf, RecentList, SearchField } from "./recent-list";
 import { ResizeHandle, SidebarToggle, useSidebar } from "./sidebar";
 
 const root = getRouteApi("__root__");
+
+const SIDE_LISTS = [
+  { kind: "snoozed", label: "Snoozed" },
+  { kind: "done", label: "Done" },
+] as const satisfies readonly { kind: StatusKind; label: string }[];
+
+const ROW =
+  "hover:bg-foreground/5 focus-visible:ring-ring/50 flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm outline-none focus-visible:ring-3";
+
+/** The rows at the sidebar's foot that open the snoozed and done lists; an empty list has none. */
+const SideLists = ({
+  items,
+  onOpen,
+}: {
+  items: readonly CaptureListItem[];
+  onOpen: (list: StatusKind) => void;
+}) => (
+  <ul className="flex flex-col">
+    {SIDE_LISTS.map(({ kind, label }) => {
+      const count = items.filter((item) => listOf(item) === kind).length;
+
+      return count === 0 ? null : (
+        <li key={kind}>
+          <button className={ROW} onClick={() => onOpen(kind)} type="button">
+            <span className="flex-1 text-left">{label}</span>
+            <span className="text-muted-foreground text-xs tabular-nums">
+              {count}
+            </span>
+            <HugeiconsIcon
+              className="text-muted-foreground"
+              icon={ArrowRight01Icon}
+              size={14}
+            />
+          </button>
+        </li>
+      );
+    })}
+  </ul>
+);
 
 /**
  * A Mac app's two panes: captures in a sidebar on the window's translucent material, the open
@@ -29,6 +76,8 @@ export const Shell = () => {
   const { view } = useSearch({ strict: false });
   const { captureId } = useParams({ strict: false });
   const [query, setQuery] = useState("");
+  const [list, setList] = useState<StatusKind>("active");
+  const sideList = SIDE_LISTS.find(({ kind }) => kind === list);
   const sidebar = useSidebar();
   const search = useRef<HTMLInputElement>(null);
 
@@ -77,9 +126,25 @@ export const Shell = () => {
             <SearchField field={search} onQuery={setQuery} query={query} />
           </div>
           <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-            <RecentList activeId={captureId} items={items} query={query} />
+            {sideList !== undefined && (
+              <button
+                className={ROW}
+                onClick={() => setList("active")}
+                type="button"
+              >
+                <HugeiconsIcon icon={ArrowLeft01Icon} size={14} />
+                <span className="font-medium">{sideList.label}</span>
+              </button>
+            )}
+            <RecentList
+              activeId={captureId}
+              items={items}
+              list={list}
+              query={query}
+            />
           </nav>
-          <footer className="flex shrink-0 items-center px-2 pb-2">
+          <footer className="flex shrink-0 flex-col gap-1 px-2 pb-2">
+            {list === "active" && <SideLists items={items} onOpen={setList} />}
             <IconButton
               icon={Settings01Icon}
               keys={libraryApi().platform === "macos" ? "⌘," : "Ctrl+,"}

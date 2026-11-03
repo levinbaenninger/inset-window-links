@@ -1,6 +1,8 @@
 import {
+  CheckmarkCircle02Icon,
   Copy01Icon,
-  Delete02Icon,
+  MoreHorizontalIcon,
+  Undo02Icon,
   File01Icon,
   Globe02Icon,
   RepeatIcon,
@@ -8,12 +10,7 @@ import {
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import {
-  getRouteApi,
-  Link,
-  useNavigate,
-  useRouter,
-} from "@tanstack/react-router";
+import { getRouteApi, Link } from "@tanstack/react-router";
 import {
   useEffect,
   useMemo,
@@ -25,26 +22,14 @@ import type { KeyboardEvent } from "react";
 
 import { IconButton } from "@/components/icon-button";
 import { TodoEditor } from "@/components/todo-editor";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { libraryApi } from "@/lib/bridge";
 import {
-  formatDateTime,
-  formatDay,
-  formatClock,
-  plural,
-  viewTitle,
-} from "@/lib/format";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { libraryApi } from "@/lib/bridge";
+import { formatDateTime, formatWhen, viewTitle } from "@/lib/format";
 
 import type {
   CaptureDetail,
@@ -53,8 +38,14 @@ import type {
   ViewSummary,
 } from "../../../shared/dto";
 import type { CaptureId } from "../../../shared/ids";
+import type { CaptureStatus } from "../../../shared/status";
 import type { DraftText, Todo } from "../../../shared/text";
 import { MAX_DESCRIPTION, MAX_RELATIONSHIP } from "../../../shared/text";
+import {
+  MenuEntries,
+  reopenedMessage,
+  useCaptureCommands,
+} from "./capture-commands";
 import { ImageViewer } from "./image-viewer";
 import { InlineSaver } from "./inline-saver";
 import { PaneHeader } from "./pane-header";
@@ -201,80 +192,21 @@ const SourceCard = ({
   </li>
 );
 
-const RecordActions = ({ detail }: { detail: CaptureDetail }) => {
-  const navigate = useNavigate();
-  const router = useRouter();
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const copy = async () => {
-    await libraryApi().copyNote(detail.id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const remove = async () => {
-    const outcome = await libraryApi().remove(detail.id);
-
-    if (outcome.kind === "ok" || outcome.kind === "missing") {
-      // "/" opens the newest capture, so the list must no longer hold this one.
-      await router.invalidate({ sync: true });
-      await navigate({ to: "/" });
-    } else {
-      setError(
-        outcome.kind === "failed"
-          ? outcome.message
-          : "This capture is read-only."
-      );
+/** " · Snoozed until Tomorrow, 9:00" or " · Done", after the date. */
+const StatusNote = ({ status }: { status: CaptureStatus }) => {
+  switch (status.kind) {
+    case "snoozed": {
+      return <> · Snoozed until {formatWhen(status.until)}</>;
     }
-  };
 
-  return (
-    <>
-      {error !== null && (
-        <span className="text-destructive mr-2 text-xs">{error}</span>
-      )}
-      <IconButton
-        icon={copied ? Tick02Icon : Copy01Icon}
-        label={copied ? "Copied" : "Copy as text"}
-        onClick={copy}
-      />
-      <AlertDialog>
-        <AlertDialogTrigger asChild>
-          <IconButton
-            icon={Delete02Icon}
-            label="Delete"
-            variant="destructive-ghost"
-          />
-        </AlertDialogTrigger>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Its windows and text are removed from this computer.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={remove} variant="destructive">
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
-  );
-};
+    case "done": {
+      return <> · Done</>;
+    }
 
-/** "Opened 3 windows", or how many could not be. */
-const reopenedMessage = (asked: number, failed: number): string => {
-  if (failed === 0) {
-    return `Opened ${plural(asked, "window")}`;
+    default: {
+      return null;
+    }
   }
-
-  return failed === asked
-    ? "Nothing could be opened"
-    : `Opened ${asked - failed}, ${failed} could not be`;
 };
 
 const textOf = (detail: CaptureDetail): DraftText => ({
@@ -332,6 +264,15 @@ const Record = ({
   const [reopened, setReopened] = useState<string | null>(null);
   const reopenable = detail.views.filter((view) => view.origin !== null);
 
+  const commands = useCaptureCommands({
+    id: detail.id,
+    reopenable: reopenable.map((view) => view.id),
+    status: detail.status,
+  });
+
+  const shown = reopened ?? commands.feedback;
+  const isDone = detail.status.kind === "done";
+
   const reopen = async (views: readonly ViewSummary[]) => {
     const { failed } = await libraryApi().reopen(
       detail.id,
@@ -346,17 +287,33 @@ const Record = ({
     <>
       <PaneHeader>
         <p className="text-muted-foreground mr-auto truncate text-xs">
-          {formatDay(detail.createdAt)}, {formatClock(detail.createdAt)}
+          {formatWhen(detail.createdAt)}
           {detail.updatedAt === detail.createdAt
             ? ""
             : ` · edited ${formatDateTime(detail.updatedAt)}`}
+          <StatusNote status={detail.status} />
         </p>
-        {reopened !== null && (
+        {shown !== null && (
           <output className="text-muted-foreground mr-2 text-xs">
-            {reopened}
+            {shown}
           </output>
         )}
-        <RecordActions detail={detail} />
+        <IconButton
+          icon={isDone ? Undo02Icon : CheckmarkCircle02Icon}
+          label={isDone ? "Not done" : "Mark as done"}
+          onClick={() =>
+            isDone ? commands.backToList.run() : commands.done.run()
+          }
+        />
+        <DropdownMenu onOpenChange={(open) => open && commands.onMenuOpen()}>
+          <DropdownMenuTrigger asChild>
+            <IconButton icon={MoreHorizontalIcon} label="More" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-48">
+            <MenuEntries entries={commands.entries} kind="dropdown" />
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {commands.dialog}
         {reopenable.length > 0 && (
           <Button
             className="ml-1.5"

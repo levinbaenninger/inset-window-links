@@ -188,6 +188,7 @@ const CAPTURES = [
       "Chairs are CHF 280 over and delivery adds CHF 980 we never planned for. Rieder can only deliver from the 24th, three days after the team moves in.",
     id: uuid(1),
     relationship: "Rieder's quote breaks the furniture cap and comes too late",
+    status: { kind: "active" },
     todos: [
       todo(1, "Ask Rieder whether 21 November is possible", true),
       todo(2, "Get a second quote for the chairs"),
@@ -205,6 +206,7 @@ const CAPTURES = [
     description: "",
     id: uuid(2),
     relationship: "Movers need the lift on Monday, keys only come Thursday",
+    status: { kind: "active" },
     todos: [todo(4, "Call building management about early keys")],
     updatedAt: ago(0, 9, 5),
     views: [view(4, 3, ago(0, 9, 3)), view(5, 4, ago(0, 9, 4))],
@@ -215,6 +217,7 @@ const CAPTURES = [
     id: uuid(3),
     relationship:
       "The floor plan has room for 12 desks only without the shelving wall",
+    status: { kind: "active" },
     todos: [],
     updatedAt: ago(1, 16, 20),
     views: [view(6, 4, ago(1, 16, 18))],
@@ -224,12 +227,33 @@ const CAPTURES = [
     description: "",
     id: uuid(4),
     relationship: "Budget sheet and calendar disagree on the move date",
+    status: { at: ago(0, 8, 30), kind: "done" },
     todos: [
       todo(5, "Fix the date in the sheet", true),
       todo(6, "Send the plan to the team", true),
     ],
     updatedAt: ago(4, 11, 0),
     views: [view(7, 0, ago(4, 10, 58)), view(8, 3, ago(4, 10, 59))],
+  },
+  {
+    createdAt: ago(2, 14, 10),
+    description: "",
+    id: uuid(5),
+    relationship: "Check the lease clause on early access once Marco is back",
+    status: { kind: "snoozed", until: ago(-1, 9, 0) },
+    todos: [todo(7, "Read clause 4.2 with Marco")],
+    updatedAt: ago(2, 14, 10),
+    views: [view(9, 1, ago(2, 14, 8))],
+  },
+  {
+    createdAt: ago(6, 9, 30),
+    description: "",
+    id: uuid(6),
+    relationship: "Cleaning crew quote matches the budget line",
+    status: { at: ago(3, 17, 0), kind: "done" },
+    todos: [],
+    updatedAt: ago(6, 9, 30),
+    views: [view(10, 0, ago(6, 9, 28))],
   },
 ];
 
@@ -239,6 +263,8 @@ const listItem = (capture: Capture) => ({
   id: capture.id,
   kind: "current",
   relationship: capture.relationship,
+  reopenable: capture.views.map((item) => item.id),
+  status: capture.status,
   todos: capture.todos,
   views: capture.views.map(
     ({ appName, height, id, imageUrl, title, width }) => ({
@@ -456,6 +482,48 @@ const SCENES: readonly Scene[] = [
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}?view=${uuid(101)}`,
     name: "library-viewer",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      await page.getByTestId("recent-item").first().click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Snooze" }).hover();
+      await page.getByRole("menuitem", { name: /^Tomorrow/u }).waitFor();
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-context-menu",
+    page: "library",
+  },
+  {
+    act: async (page) => {
+      await page.getByRole("button", { name: /^Done/u }).click();
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(4)}`,
+    name: "library-done",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      await page.getByRole("button", { name: /^Snoozed/u }).click();
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(5)}`,
+    name: "library-snoozed",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      await page.getByRole("button", { name: "More" }).click();
+      await page.getByRole("menuitem", { name: "Copy as text" }).waitFor();
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-more-menu",
     page: "library",
     platforms: ["macos"],
   },
