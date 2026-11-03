@@ -59,7 +59,15 @@ const SourceChip = ({
       <span
         className={TILE_TITLE}
         data-testid="source-chip-title"
-        title={view.appName === null ? title : `${title} · ${view.appName}`}
+        title={[
+          title,
+          view.appName,
+          view.sameWindowAs === null
+            ? null
+            : `again, as window ${view.sameWindowAs}`,
+        ]
+          .filter((part) => part !== null)
+          .join(" · ")}
       >
         {title}
       </span>

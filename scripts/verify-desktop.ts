@@ -267,7 +267,7 @@ const press = (app: ElectronApplication) =>
 
 /** Discard asks first once the draft holds anything, so this answers the confirmation too. */
 const clickDiscard = async (page: Page) => {
-  await page.getByRole("button", { name: "Discard" }).click();
+  await page.getByRole("button", { exact: true, name: "Discard" }).click();
 
   const confirm = page.getByTestId("discard-confirm");
 
@@ -277,7 +277,7 @@ const clickDiscard = async (page: Page) => {
   );
 
   if (asked) {
-    await confirm.getByRole("button", { name: "Discard draft" }).click();
+    await confirm.getByRole("button", { exact: true, name: "Discard" }).click();
   }
 
   return asked;
@@ -444,14 +444,16 @@ const checkFocusAndCopy = async (app: ElectronApplication, page: Page) => {
   const active = await settledForeground();
   const { pid } = app.process();
   const focusedId = (await page.locator(":focus").getAttribute("id")) ?? "";
-  const label = await page.locator('label[for="relationship"]').textContent();
-  const hint = (await page.getByTestId("hint").textContent()) ?? "";
-  const { shortcut } = await snapshot(app);
+  const label = await page.locator("#relationship").getAttribute("aria-label");
 
-  const expectedHint =
-    shortcut.kind === "registered"
-      ? `Or press ${shortcut.label} in any window to add it.`
-      : `${shortcut.label} is taken by another app, so pick windows with Add windows.`;
+  // The Add tile shows the shortcut as its hint, and no hint while another app holds it.
+  const hint =
+    (await page.getByTestId("hint").count()) === 0
+      ? null
+      : await page.getByTestId("hint").textContent();
+
+  const { shortcut } = await snapshot(app);
+  const expectedHint = shortcut.kind === "registered" ? shortcut.label : null;
 
   record(
     "Inset is the OS-active app after the press",
@@ -465,7 +467,7 @@ const checkFocusAndCopy = async (app: ElectronApplication, page: Page) => {
   );
   record(
     "label and hint copy",
-    label === "What connects these views?" && hint === expectedHint,
+    label === "What connects these windows?" && hint === expectedHint,
     json({ hint, label })
   );
 };
@@ -592,7 +594,9 @@ const previewAndRemove = async (
 ) => {
   const [docA] = docs;
 
-  await page.getByRole("button", { name: /^Show preview of view 1/u }).click();
+  await page
+    .getByRole("button", { name: /^Show preview of window 1/u })
+    .click();
 
   const preview = await waitFor(
     async () =>
@@ -609,10 +613,12 @@ const previewAndRemove = async (
     /^[1-9]\d*x[1-9]\d*$/u.test(preview),
     preview
   );
-  await page.getByRole("button", { name: /^Hide preview of view 1/u }).click();
+  await page
+    .getByRole("button", { name: /^Hide preview of window 1/u })
+    .click();
   await bringToFront(docA);
   await pressAndWaitForViews(app, 3);
-  await page.getByRole("button", { name: /^Remove view 3/u }).click();
+  await page.getByRole("button", { name: /^Remove window 3/u }).click();
 
   const snap = await waitFor(
     () => snapshot(app),
@@ -699,7 +705,7 @@ const saveAndVerify = async (
   userData: string,
   docs: readonly string[]
 ) => {
-  await page.getByRole("button", { name: "Add a next step" }).click();
+  await page.getByRole("button", { exact: true, name: "Next step" }).click();
   await page
     .getByLabel("Next step 1", { exact: true })
     .pressSequentially(NEXT_STEP, { delay: 5 });
@@ -785,7 +791,7 @@ const openLibrary = async (app: ElectronApplication) => {
 };
 
 const checkImageViewer = async (library: Page) => {
-  await library.getByRole("link", { name: /^Open source 1/u }).click();
+  await library.getByRole("link", { name: /^Open window 1/u }).click();
 
   const natural = await waitFor(
     async () =>
@@ -802,30 +808,40 @@ const checkImageViewer = async (library: Page) => {
     /^[1-9]\d*x[1-9]\d*$/u.test(natural),
     natural
   );
-  await library.getByRole("link", { name: "Back to capture" }).click();
+  await library.getByRole("button", { exact: true, name: "Back" }).click();
   await library.getByTestId("record-relationship").waitFor();
 };
 
 const editAndDelete = async (library: Page, userData: string) => {
   const edited = "Edited: the deadline rules out option 2.";
 
-  await library.getByRole("button", { name: "Edit text" }).click();
-  await library.getByLabel("What connects these views?").fill(edited);
+  // The record is edited in place. Escape leaves the field, which saves at once.
+  await library.getByTestId("record-relationship").fill(edited);
   await library
     .getByLabel("Next step 1", { exact: true })
     .fill("Edited next step");
-  await library.getByRole("button", { name: "Save changes" }).click();
-  await library
-    .getByTestId("record-relationship")
-    .filter({ hasText: edited })
-    .waitFor();
+  await library.keyboard.press("Escape");
+
+  const savedNow = async () => {
+    const [dir] = await recordDirs(userData);
+    const { saved: current } = await readSaved(dir);
+
+    return current;
+  };
+
+  await waitFor(
+    savedNow,
+    (value) =>
+      value?.relationship === edited &&
+      value.todos[0]?.text === "Edited next step"
+  );
 
   const dirs = await recordDirs(userData);
   const { saved } = await readSaved(dirs[0]);
   const route = library.url().split("#")[1] ?? "";
 
   record(
-    "editing the text and the next step persists to disk",
+    "editing the title and a next step in place persists to disk",
     saved?.relationship === edited &&
       saved.todos[0]?.text === "Edited next step",
     json({ relationship: saved?.relationship, todos: saved?.todos })
@@ -873,7 +889,7 @@ const reopenAndRead = async (
 
   const relationship = await library
     .getByTestId("record-relationship")
-    .textContent();
+    .inputValue();
 
   const titles = await library
     .getByTestId("record-source-title")
@@ -884,7 +900,7 @@ const reopenAndRead = async (
   // Top edges of the thought, the next-steps list and the sources, and whether the list holds the step.
   const order = String(
     await library.evaluate(
-      `(() => { const top = (selector) => document.querySelector('main ' + selector)?.getBoundingClientRect().top ?? -1; const steps = document.querySelector('main section[aria-label="Next steps"]'); return [top('[data-testid=record-relationship]'), top('section[aria-label="Next steps"]'), top('section[aria-label="Sources"]'), steps?.textContent?.includes(${JSON.stringify(
+      `(() => { const top = (selector) => document.querySelector('main ' + selector)?.getBoundingClientRect().top ?? -1; const steps = [...document.querySelectorAll('main [aria-label="Next steps"] input')].map((field) => field.value); return [top('[data-testid=record-relationship]'), top('[aria-label="Next steps"]'), top('section[aria-label="Windows"]'), steps.includes(${JSON.stringify(
         NEXT_STEP
       )}) ? 1 : 0].join(','); })()`
     )
@@ -898,7 +914,7 @@ const reopenAndRead = async (
   ] = order.split(",").map(Number);
 
   record(
-    "the record shows the thought, then the next steps, then the sources",
+    "the record shows the title, then the next steps, then the windows",
     relationshipAt >= 0 &&
       relationshipAt < nextStepAt &&
       nextStepAt < sourcesAt &&
@@ -911,7 +927,7 @@ const reopenAndRead = async (
     relationship ?? "none"
   );
   record(
-    "after restart the record shows both source titles",
+    "after restart the record shows both window titles",
     json(titles) === json(docs),
     json(titles)
   );
@@ -921,7 +937,7 @@ const reopenAndRead = async (
     route
   );
   await checkImageViewer(library);
-  await library.getByRole("button", { name: "Copy note" }).click();
+  await library.getByRole("button", { name: "Copy as text" }).click();
 
   const clipboard = await waitFor(
     () => app.evaluate(({ clipboard: board }) => board.readText()),
@@ -929,7 +945,7 @@ const reopenAndRead = async (
   );
 
   record(
-    "Copy note puts the thought first on the clipboard",
+    "Copy as text puts the title first on the clipboard",
     clipboard.startsWith(RELATIONSHIP),
     clipboard.split("\n").join(" | ")
   );
@@ -1099,7 +1115,14 @@ const changedSameWindow = async (
 
   const { snap } = await pressAndWaitForViews(app, 2);
   const [first, second] = snap.views;
-  const labels = await page.getByTestId("source-chip").allTextContents();
+
+  // The repeat is named in the tile title's tooltip, not on the tile.
+  const labels = await page
+    .getByTestId("source-chip-title")
+    .evaluateAll((titles) =>
+      titles.map((title) => title.getAttribute("title"))
+    );
+
   const sizes = snap.views.map((view) => `${view.width}x${view.height}`);
 
   record(
@@ -1116,7 +1139,7 @@ const changedSameWindow = async (
   );
   record(
     "the repeat is labelled as the same window",
-    labels[1]?.includes("Again, as view 1") === true,
+    labels[1]?.includes("again, as window 1") === true,
     json(labels)
   );
   await clickDiscard(page);
@@ -1139,28 +1162,22 @@ const windowListFallback = async (
 
   const chooser = page.getByTestId("source-chooser");
 
-  // Opened from the menu it is a plain picker now, not labelled as a fallback.
-  const prompt = await chooser
-    .getByText("Pick the windows this thought is about.")
+  // Opened from the menu it is a plain picker, with no fallback reason above the tiles.
+  const reasonLines = await chooser
+    .getByText(/Pick it here|before it was added/u)
     .count();
 
   const reason =
     choosing.activity.kind === "choosing" ? choosing.activity.reason : null;
 
   record(
-    "the window list opened from the tray asks for windows, for the menu reason",
-    prompt === 1 && reason === "menu" && choosing.views.length === 0,
-    json({ prompt, reason, views: choosing.views.length })
+    "the window list opened from the tray shows no fallback reason, for the menu reason",
+    reasonLines === 0 && reason === "menu" && choosing.views.length === 0,
+    json({ reason, reasonLines, views: choosing.views.length })
   );
 
-  // Each window is a toggle named by its title, then its app.
-  const escaped = docA.replaceAll(/[$()*+.?[\\\]^{|}]/gu, "\\$&");
-
-  await chooser
-    .getByRole("button", {
-      name: new RegExp(`^${escaped}\\s*(?:TextEdit|Window)$`, "u"),
-    })
-    .click();
+  // Each window is a toggle named by its title alone; the app is in its tooltip.
+  await chooser.getByRole("button", { exact: true, name: docA }).click();
   await chooser.getByRole("button", { name: /^Add 1 window/u }).click();
 
   const snap = await waitFor(
