@@ -148,7 +148,7 @@ const foreground = async () => {
     screenRecordingPermission: true,
   });
 
-  // get-windows resolves null, not undefined, while no window is frontmost.
+  // get-windows resolves undefined while no window is frontmost.
   return win
     ? {
         app: win.owner.name,
