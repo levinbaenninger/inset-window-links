@@ -3,22 +3,23 @@ import {
   Delete02Icon,
   File01Icon,
   Globe02Icon,
-  PencilEdit02Icon,
   RepeatIcon,
   SquareArrowUpRight02Icon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import {
-  getRouteApi,
-  Link,
-  useNavigate,
-  useRouter,
-} from "@tanstack/react-router";
-import { cn } from "cn";
-import { useState } from "react";
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import type { KeyboardEvent } from "react";
 
 import { IconButton } from "@/components/icon-button";
+import { TodoEditor } from "@/components/todo-editor";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,7 +32,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { libraryApi } from "@/lib/bridge";
 import {
   formatDateTime,
@@ -43,15 +43,20 @@ import {
 
 import type {
   CaptureDetail,
+  MutationOutcome,
   OriginSummary,
   ViewSummary,
 } from "../../../shared/dto";
 import type { CaptureId } from "../../../shared/ids";
-import { EditText } from "./edit-text";
+import type { DraftText, Todo } from "../../../shared/text";
+import { MAX_DESCRIPTION, MAX_RELATIONSHIP } from "../../../shared/text";
 import { ImageViewer } from "./image-viewer";
+import { InlineSaver } from "./inline-saver";
 import { PaneHeader } from "./pane-header";
 
 const route = getRouteApi("/captures/$captureId");
+
+const TITLE_PLACEHOLDER = "What connects these windows?";
 
 const FEEDBACK_MS = 2500;
 
@@ -173,62 +178,7 @@ const SourceCard = ({
   </li>
 );
 
-/** The next steps, checked off right here; a check is saved at once. */
-const TodoChecklist = ({ detail }: { detail: CaptureDetail }) => {
-  const router = useRouter();
-
-  if (detail.todos.length === 0) {
-    return null;
-  }
-
-  const done = detail.todos.filter((todo) => todo.done).length;
-
-  return (
-    <section aria-label="Next steps" className="flex flex-col gap-2">
-      <h2 className="text-muted-foreground flex items-baseline gap-2 text-xs font-medium">
-        Next steps
-        <span className="tabular-nums">
-          {done} of {detail.todos.length} done
-        </span>
-      </h2>
-      <ul className="border-foreground/10 divide-foreground/10 flex flex-col divide-y rounded-lg border">
-        {detail.todos.map((todo) => (
-          <li key={todo.id}>
-            <label className="flex cursor-pointer items-center gap-3 px-3 py-2.5 text-sm">
-              <Checkbox
-                checked={todo.done}
-                onCheckedChange={async (checked) => {
-                  await libraryApi().setTodoDone(
-                    detail.id,
-                    todo.id,
-                    checked === true
-                  );
-                  await router.invalidate();
-                }}
-              />
-              <span
-                className={cn(
-                  "min-w-0 break-words",
-                  todo.done && "text-muted-foreground line-through"
-                )}
-              >
-                {todo.text}
-              </span>
-            </label>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-};
-
-const RecordActions = ({
-  detail,
-  onEdit,
-}: {
-  detail: CaptureDetail;
-  onEdit: () => void;
-}) => {
+const RecordActions = ({ detail }: { detail: CaptureDetail }) => {
   const navigate = useNavigate();
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -263,7 +213,6 @@ const RecordActions = ({
         label={copied ? "Copied" : "Copy as text"}
         onClick={copy}
       />
-      <IconButton icon={PencilEdit02Icon} label="Edit text" onClick={onEdit} />
       <AlertDialog>
         <AlertDialogTrigger asChild>
           <IconButton icon={Delete02Icon} label="Delete" />
@@ -298,9 +247,58 @@ const reopenedMessage = (asked: number, failed: number): string => {
     : `Opened ${asked - failed}, ${failed} could not be`;
 };
 
-const Record = ({ detail }: { detail: CaptureDetail }) => {
-  const router = useRouter();
-  const [editing, setEditing] = useState(false);
+const textOf = (detail: CaptureDetail): DraftText => ({
+  description: detail.description,
+  relationship: detail.relationship,
+  todos: [...detail.todos],
+});
+
+const problem = (outcome: MutationOutcome): string => {
+  switch (outcome.kind) {
+    case "ok": {
+      return "";
+    }
+
+    case "missing": {
+      return "This capture was deleted.";
+    }
+
+    case "readOnly": {
+      return "This capture can't be changed.";
+    }
+
+    default: {
+      return `Couldn't save. ${outcome.message}`;
+    }
+  }
+};
+
+/** Escape leaves a field, which saves it. */
+const fieldKeys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+    event.preventDefault();
+    event.currentTarget.blur();
+  }
+};
+
+const Record = ({
+  detail,
+  text,
+  error,
+  onText,
+  onToggle,
+  onTitleBlur,
+  onLeave,
+}: {
+  detail: CaptureDetail;
+  text: DraftText;
+  error: string | null;
+  onText: (text: DraftText) => void;
+  onToggle: (todo: Todo, done: boolean) => void;
+  onTitleBlur: () => void;
+  onLeave: () => void;
+}) => {
+  const details = useRef<HTMLTextAreaElement>(null);
   const [reopened, setReopened] = useState<string | null>(null);
   const reopenable = detail.views.filter((view) => view.origin !== null);
 
@@ -328,10 +326,8 @@ const Record = ({ detail }: { detail: CaptureDetail }) => {
             {reopened}
           </output>
         )}
-        {!editing && (
-          <RecordActions detail={detail} onEdit={() => setEditing(true)} />
-        )}
-        {!editing && reopenable.length > 0 && (
+        <RecordActions detail={detail} />
+        {reopenable.length > 0 && (
           <Button
             className="ml-1.5"
             onClick={() => reopen(reopenable)}
@@ -345,33 +341,74 @@ const Record = ({ detail }: { detail: CaptureDetail }) => {
         )}
       </PaneHeader>
       <main className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-3xl flex-col gap-7 px-8 pt-2 pb-10">
-          {editing ? (
-            <EditText
-              detail={detail}
-              onDone={async () => {
-                setEditing(false);
-                await router.invalidate();
-              }}
-            />
-          ) : (
-            <>
-              <div className="flex flex-col gap-1.5">
-                <h1
-                  className="text-xl leading-snug font-semibold text-pretty whitespace-pre-wrap"
-                  data-testid="record-relationship"
-                >
-                  {detail.relationship}
-                </h1>
-                {detail.description !== "" && (
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                    {detail.description}
-                  </p>
-                )}
-              </div>
-              <TodoChecklist detail={detail} />
-            </>
-          )}
+        <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 pt-2 pb-10">
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1">
+              {/* Leaving a field saves at once instead of after the pause. */}
+              <textarea
+                aria-label={TITLE_PLACEHOLDER}
+                className="placeholder:text-muted-foreground field-sizing-content resize-none bg-transparent text-xl leading-snug font-semibold text-pretty outline-none"
+                data-testid="record-relationship"
+                id="record-title"
+                maxLength={MAX_RELATIONSHIP}
+                onBlur={() => {
+                  onTitleBlur();
+                  onLeave();
+                }}
+                onChange={(event) =>
+                  onText({ ...text, relationship: event.target.value })
+                }
+                onKeyDown={(event) => {
+                  fieldKeys(event);
+
+                  const plain =
+                    !event.shiftKey &&
+                    !event.metaKey &&
+                    !event.ctrlKey &&
+                    !event.altKey;
+
+                  if (
+                    event.key === "Enter" &&
+                    plain &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    details.current?.focus();
+                  }
+                }}
+                placeholder={TITLE_PLACEHOLDER}
+                rows={1}
+                value={text.relationship}
+              />
+              {error !== null && (
+                <p className="text-destructive text-xs" role="alert">
+                  {error}
+                </p>
+              )}
+              <textarea
+                aria-label="Details"
+                className="placeholder:text-muted-foreground field-sizing-content resize-none bg-transparent text-sm leading-relaxed outline-none"
+                maxLength={MAX_DESCRIPTION}
+                onBlur={onLeave}
+                onChange={(event) =>
+                  onText({ ...text, description: event.target.value })
+                }
+                onKeyDown={fieldKeys}
+                placeholder="Add details"
+                ref={details}
+                rows={1}
+                value={text.description}
+              />
+            </div>
+            <div className="-mx-1.5">
+              <TodoEditor
+                onChange={(todos) => onText({ ...text, todos })}
+                onLeave={onLeave}
+                onToggle={onToggle}
+                todos={text.todos}
+              />
+            </div>
+          </div>
           <section aria-label="Windows" className="flex flex-col gap-2">
             <h2 className="text-muted-foreground text-xs font-medium">
               Windows
@@ -391,6 +428,51 @@ const Record = ({ detail }: { detail: CaptureDetail }) => {
         </div>
       </main>
     </>
+  );
+};
+
+/**
+ * One capture, edited in place. Keyed by the capture's id, so its text starts from the stored
+ * copy once and is not reset by every reload: each save makes main report a change, and the
+ * reload that follows would otherwise overwrite what is being typed. The image viewer is shown
+ * from here too, so opening an image keeps unsaved text instead of remounting from an older copy.
+ */
+const CapturePane = ({
+  detail,
+  viewIndex,
+}: {
+  detail: CaptureDetail;
+  viewIndex: number;
+}) => {
+  const saver = useMemo(
+    () => new InlineSaver(detail.id, libraryApi()),
+    [detail.id]
+  );
+
+  const { text, outcome } = useSyncExternalStore(saver.subscribe, saver.state);
+
+  // The first copy is taken once; later ones only when they cannot overwrite typing.
+  useEffect(() => {
+    saver.adopt(textOf(detail));
+  }, [saver, detail]);
+
+  // Leaving the capture, for another one or by closing the window, saves what is left.
+  useEffect(() => () => saver.flush(), [saver]);
+
+  if (detail.views[viewIndex] !== undefined) {
+    return <ImageViewer detail={detail} index={viewIndex} />;
+  }
+
+  return (
+    <Record
+      detail={detail}
+      error={outcome === null ? null : problem(outcome)}
+      onLeave={() => saver.flush()}
+      onText={(next) => saver.edit(next)}
+      onTitleBlur={() => saver.restoreBlankTitle()}
+      onToggle={(todo, done) => saver.toggle(todo.id, done)}
+      text={text ?? textOf(detail)}
+    />
   );
 };
 
@@ -417,11 +499,11 @@ export const CaptureRecord = () => {
     );
   }
 
-  const index = detail.views.findIndex((item) => item.id === view);
-
-  if (detail.views[index] !== undefined) {
-    return <ImageViewer detail={detail} index={index} />;
-  }
-
-  return <Record detail={detail} key={detail.id} />;
+  return (
+    <CapturePane
+      detail={detail}
+      key={detail.id}
+      viewIndex={detail.views.findIndex((item) => item.id === view)}
+    />
+  );
 };

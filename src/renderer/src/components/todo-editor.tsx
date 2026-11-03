@@ -24,11 +24,14 @@ export const TodoEditor = ({
   todos,
   onChange,
   onToggle,
+  onLeave,
   label = "Next steps",
 }: {
   todos: readonly Todo[];
   onChange: (todos: Todo[]) => void;
   onToggle?: (todo: Todo, done: boolean) => void;
+  /** Called when a step's field loses focus; Escape then leaves the field too. */
+  onLeave?: () => void;
   label?: string;
 }) => {
   const fields = useRef(new Map<string, HTMLInputElement>());
@@ -80,7 +83,10 @@ export const TodoEditor = ({
     const todo = todos[index];
     const plain = !event.metaKey && !event.ctrlKey && !event.altKey;
 
-    if (event.key === "Enter" && plain && !event.shiftKey) {
+    if (event.key === "Escape" && onLeave !== undefined) {
+      event.preventDefault();
+      event.currentTarget.blur();
+    } else if (event.key === "Enter" && plain && !event.shiftKey) {
       event.preventDefault();
       insertAfter(index);
     } else if (event.key === "Backspace" && plain && todo?.text === "") {
@@ -116,6 +122,7 @@ export const TodoEditor = ({
                   todo.done && "text-muted-foreground line-through"
                 )}
                 maxLength={MAX_TODO}
+                onBlur={onLeave}
                 onChange={(event) =>
                   onChange(
                     todos.map((item) =>

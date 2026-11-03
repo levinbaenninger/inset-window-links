@@ -418,11 +418,11 @@ const SCENES: readonly Scene[] = [
   },
   {
     act: async (page) => {
-      await page.getByRole("button", { name: /^edit/iu }).first().click();
+      await page.getByTestId("record-relationship").focus();
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
-    name: "library-edit",
+    name: "library-editing",
     page: "library",
     platforms: ["macos"],
   },
