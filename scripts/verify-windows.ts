@@ -996,12 +996,13 @@ const chromeFlow = async (
   );
 
   // Paste and undo, by real keys, in a window that has no Edit menu.
+  // The record's title is edited in place, so the field is there without an Edit mode.
   await page.getByTestId("recent-item").first().click();
-  await page.getByRole("button", { name: "Edit text" }).click();
 
-  const field = page.locator("#edit-relationship");
+  const field = page.locator("#record-title");
 
   await field.waitFor({ timeout: 3000 });
+  await field.focus();
 
   const original = await field.inputValue();
   const before = await app.evaluate(({ clipboard }) => clipboard.readText());
@@ -1037,7 +1038,8 @@ const chromeFlow = async (
     afterPaste === pasted && afterUndo === original,
     json({ afterPaste, afterUndo })
   );
-  await page.getByRole("button", { name: "Cancel" }).click();
+  // Escape leaves the field; the saved title is the original again after the undo.
+  await page.keyboard.press("Escape");
 
   // The caption ✕ is drawn by Windows over the page. It closes the window, not the app.
   const bounds = moved ?? start;
@@ -1273,7 +1275,10 @@ const quitFlow = async (
 
   // The app can exit before the click call returns, which Playwright reports as an error.
   await settles(
-    popover.getByRole("button", { name: "Discard and quit" }).click()
+    popover
+      .getByTestId("quit-prompt")
+      .getByRole("button", { exact: true, name: "Discard" })
+      .click()
   );
 
   const quit = await Promise.race([
@@ -1281,7 +1286,7 @@ const quitFlow = async (
     sleep(5000).then(() => false),
   ]);
 
-  record("Discard and quit ends the app", quit, String(quit));
+  record("Discard in the quit prompt ends the app", quit, String(quit));
 };
 
 const firstRunFlow = async () => {
