@@ -4,7 +4,7 @@ import { DraftIdSchema, ViewIdSchema } from "../../shared/ids";
 import { isBlank, TodoSchema } from "../../shared/text";
 import type { Todo } from "../../shared/text";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 const FallbackReasonSchema = z.enum([
   "probeUnavailable",
@@ -76,14 +76,19 @@ const V1RecordSchema = z.object({
   views: z.array(V1ViewSchema).min(1),
 });
 
-export const CaptureRecordSchema = z.object({
+const V2RecordSchema = z.object({
   createdAt: z.iso.datetime(),
   id: DraftIdSchema,
   relationship: z.string().trim().min(1),
-  schemaVersion: z.literal(CURRENT_SCHEMA_VERSION),
+  schemaVersion: z.literal(2),
   todos: z.array(TodoSchema),
   updatedAt: z.iso.datetime(),
   views: z.array(SavedViewSchema).min(1),
+});
+
+export const CaptureRecordSchema = V2RecordSchema.extend({
+  description: z.string(),
+  schemaVersion: z.literal(CURRENT_SCHEMA_VERSION),
 });
 
 export type CaptureRecord = z.infer<typeof CaptureRecordSchema>;
@@ -104,12 +109,20 @@ export const todosFromNextStep = (nextStep: string): Todo[] =>
 
 const upgradeV1 = (record: z.infer<typeof V1RecordSchema>): CaptureRecord => ({
   createdAt: record.createdAt,
+  description: "",
   id: record.id,
   relationship: record.relationship,
   schemaVersion: CURRENT_SCHEMA_VERSION,
   todos: todosFromNextStep(record.nextStep),
   updatedAt: record.updatedAt,
   views: record.views.map((view) => ({ ...view, origin: null })),
+});
+
+/** A version 2 record had no description. */
+const upgradeV2 = (record: z.infer<typeof V2RecordSchema>): CaptureRecord => ({
+  ...record,
+  description: "",
+  schemaVersion: CURRENT_SCHEMA_VERSION,
 });
 
 const VersionPeekSchema = z.object({ schemaVersion: z.number() });
@@ -129,7 +142,7 @@ const parseJson = (json: string) => {
 
 /**
  * Peeks at schemaVersion first, so a newer app's record is kept intact rather than called corrupt.
- * Version 1 is read as version 2; the file is rewritten only when the capture is edited.
+ * Versions 1 and 2 are read as version 3; the file is rewritten only when the capture is edited.
  */
 export const readVersioned = (json: string): VersionedRead => {
   const parsed = parseJson(json);
@@ -149,6 +162,14 @@ export const readVersioned = (json: string): VersionedRead => {
 
     return old.success
       ? { kind: "current", record: upgradeV1(old.data) }
+      : { detail: old.error.message, kind: "unreadable" };
+  }
+
+  if (peek.data.schemaVersion === 2) {
+    const old = V2RecordSchema.safeParse(parsed.value);
+
+    return old.success
+      ? { kind: "current", record: upgradeV2(old.data) }
       : { detail: old.error.message, kind: "unreadable" };
   }
 

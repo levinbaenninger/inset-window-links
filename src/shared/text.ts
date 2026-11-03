@@ -2,6 +2,7 @@ import { z } from "zod";
 
 /** Main rejects longer text, so the text fields stop at the same lengths. */
 export const MAX_RELATIONSHIP = 10_000;
+export const MAX_DESCRIPTION = 10_000;
 export const MAX_TODO = 500;
 export const MAX_TODOS = 30;
 
@@ -17,13 +18,19 @@ export const TodoSchema = z.object({
 export type Todo = z.infer<typeof TodoSchema>;
 
 export const DraftTextSchema = z.object({
+  /** Optional free text below the thought. Defaults so a sender that predates it still validates. */
+  description: z.string().max(MAX_DESCRIPTION).default(""),
   relationship: z.string().max(MAX_RELATIONSHIP),
   todos: z.array(TodoSchema).max(MAX_TODOS),
 });
 
 export type DraftText = z.infer<typeof DraftTextSchema>;
 
-export const blankText: DraftText = { relationship: "", todos: [] };
+export const blankText: DraftText = {
+  description: "",
+  relationship: "",
+  todos: [],
+};
 
 export const isBlank = (value: string): boolean => value.trim() === "";
 
@@ -33,8 +40,11 @@ export const keptTodos = (todos: readonly Todo[]): Todo[] =>
     isBlank(todo.text) ? [] : [{ ...todo, text: todo.text.trim() }]
   );
 
+/** Any typed text counts, the description too, though only the thought makes a draft saveable. */
 export const hasTyped = (text: DraftText): boolean =>
-  !isBlank(text.relationship) || keptTodos(text.todos).length > 0;
+  !isBlank(text.relationship) ||
+  !isBlank(text.description) ||
+  keptTodos(text.todos).length > 0;
 
 export type Saveability =
   | { kind: "ok" }

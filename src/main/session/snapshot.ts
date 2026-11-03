@@ -8,9 +8,12 @@ import type {
   ShortcutStatus,
   ViewSummary,
 } from "../../shared/dto";
+import { keptTodos } from "../../shared/text";
 import { imageUrl } from "../ipc/image-url";
 import type { SavedView } from "../store/schema";
-import type { CapturedView, SessionState } from "./state";
+import { CURRENT_SCHEMA_VERSION } from "../store/schema";
+import type { NewCapture } from "../store/store";
+import type { CapturedView, Draft, SessionState } from "./state";
 
 export const toSavedView = (view: CapturedView): SavedView => ({
   acquisition: view.acquisition,
@@ -22,6 +25,21 @@ export const toSavedView = (view: CapturedView): SavedView => ({
   sampledAt: view.sampledAt.toISOString(),
   title: view.title,
   width: view.width,
+});
+
+/** The record a saved draft becomes. Blank to-dos are dropped, and the description is trimmed. */
+export const toNewCapture = (draft: Draft, now: Date): NewCapture => ({
+  images: new Map(draft.views.map((view) => [view.id, view.png])),
+  record: {
+    createdAt: now.toISOString(),
+    description: draft.text.description.trim(),
+    id: draft.id,
+    relationship: draft.text.relationship,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    todos: keptTodos(draft.text.todos),
+    updatedAt: now.toISOString(),
+    views: draft.views.map(toSavedView),
+  },
 });
 
 const host = (url: string): string => {

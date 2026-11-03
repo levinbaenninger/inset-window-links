@@ -98,6 +98,7 @@ export type CaptureListItem =
       id: CaptureId;
       createdAt: string;
       relationship: string;
+      description: string;
       todos: readonly Todo[];
       views: readonly ListedView[];
     }
@@ -109,6 +110,7 @@ export interface CaptureDetail {
   createdAt: string;
   updatedAt: string;
   relationship: string;
+  description: string;
   todos: readonly Todo[];
   views: readonly ViewSummary[];
 }
