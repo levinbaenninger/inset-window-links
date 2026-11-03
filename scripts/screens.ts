@@ -392,9 +392,16 @@ const SCENES: readonly Scene[] = [
   },
   {
     data: { captures: CAPTURES },
-    hash: "/",
+    hash: "/welcome",
     name: "library-home",
     page: "library",
+  },
+  {
+    data: { captures: CAPTURES },
+    hash: "/",
+    name: "library-open",
+    page: "library",
+    platforms: ["macos"],
   },
   {
     data: { captures: CAPTURES },
@@ -520,6 +527,14 @@ const shoot = async (
   if (scene.act !== undefined) {
     await scene.act(page);
     await page.waitForTimeout(300);
+  }
+
+  // React Router's error boundary still makes a screenshot, so a crash would pass unnoticed.
+  const crashed = await page.getByText("Something went wrong").count();
+
+  if (crashed > 0) {
+    await context.close();
+    throw new Error("the page crashed");
   }
 
   const fitted = await page.evaluate<number | undefined>("globalThis.__fitted");

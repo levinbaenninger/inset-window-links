@@ -76,7 +76,7 @@ const OriginButton = ({
   onOpen: () => void;
 }) => (
   <button
-    className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex min-w-0 items-center gap-1 self-start rounded-sm text-left text-xs outline-none focus-visible:ring-3"
+    className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex min-w-0 items-center gap-1 self-start rounded-sm px-0.5 text-left text-xs outline-none focus-visible:ring-3"
     onClick={onOpen}
     title={`${ORIGIN_VERB[origin.kind]}: ${origin.detail}`}
     type="button"
@@ -106,14 +106,18 @@ const CopyImage = ({
   };
 
   return (
-    <IconButton
-      icon={copied ? Tick02Icon : Copy01Icon}
-      label={copied ? "Copied" : `Copy image of ${viewTitle(view.title)}`}
-      onClick={copy}
-    />
+    <span className="absolute top-2 right-2 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+      <IconButton
+        icon={copied ? Tick02Icon : Copy01Icon}
+        label={copied ? "Copied" : "Copy image"}
+        onClick={copy}
+        variant="outline"
+      />
+    </span>
   );
 };
 
+/** A window as a card: its image opens the viewer, its origin opens the window again. */
 const SourceCard = ({
   captureId,
   view,
@@ -125,56 +129,47 @@ const SourceCard = ({
   index: number;
   onReopen: (view: ViewSummary) => void;
 }) => (
-  <li className="flex min-w-0 flex-col gap-2" data-testid="record-source">
-    <Link
-      aria-label={`Open window ${index + 1}, ${viewTitle(view.title)}, at readable size`}
-      className="bg-muted border-foreground/10 focus-visible:ring-ring/50 hover:border-foreground/25 overflow-hidden rounded-lg border outline-none focus-visible:ring-3"
-      onDragStart={(event) => {
-        event.preventDefault();
-        libraryApi().dragImage(captureId, view.id);
-      }}
-      params={{ captureId }}
-      search={{ view: view.id }}
-      title="Open at readable size, or drag into another app"
-      to="/captures/$captureId"
-    >
-      <img
-        alt={`Window ${index + 1}, ${viewTitle(view.title)}`}
-        className="aspect-video w-full object-contain"
-        height={view.height}
-        src={view.imageUrl}
-        width={view.width}
-      />
-    </Link>
-    <div className="flex items-start justify-between gap-2">
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <p
-          className="truncate text-sm font-medium"
-          data-testid="record-source-title"
-          title={viewTitle(view.title)}
-        >
-          {viewTitle(view.title)}
-        </p>
-        <p className="text-muted-foreground truncate text-xs tabular-nums">
-          {[
-            view.appName,
-            formatClock(view.capturedAt),
-            view.source.kind === "fallback" && view.source.reason !== "menu"
-              ? "chosen from the window list"
-              : null,
-            view.sameWindowAs === null
-              ? null
-              : `same window as ${view.sameWindowAs}`,
-          ]
-            .filter((part) => part !== null)
-            .join(" · ")}
-        </p>
-        {view.origin !== null && (
-          <OriginButton onOpen={() => onReopen(view)} origin={view.origin} />
-        )}
-      </div>
+  <li
+    className="group flex min-w-0 flex-col gap-1.5"
+    data-testid="record-source"
+  >
+    <div className="relative">
+      <Link
+        aria-label={`Open window ${index + 1}, ${viewTitle(view.title)}, at readable size`}
+        className="bg-muted border-foreground/10 focus-visible:ring-ring/50 hover:border-foreground/25 block overflow-hidden rounded-lg border outline-none focus-visible:ring-3"
+        onDragStart={(event) => {
+          event.preventDefault();
+          libraryApi().dragImage(captureId, view.id);
+        }}
+        params={{ captureId }}
+        search={{ view: view.id }}
+        title="Open at readable size, or drag into another app"
+        to="/captures/$captureId"
+      >
+        <img
+          alt={`Window ${index + 1}, ${viewTitle(view.title)}`}
+          className="aspect-video w-full object-contain"
+          height={view.height}
+          src={view.imageUrl}
+          width={view.width}
+        />
+      </Link>
       <CopyImage captureId={captureId} view={view} />
     </div>
+    <p
+      className="truncate px-0.5 text-sm font-medium"
+      data-testid="record-source-title"
+      title={
+        view.appName === null
+          ? viewTitle(view.title)
+          : `${viewTitle(view.title)} · ${view.appName}`
+      }
+    >
+      {viewTitle(view.title)}
+    </p>
+    {view.origin !== null && (
+      <OriginButton onOpen={() => onReopen(view)} origin={view.origin} />
+    )}
   </li>
 );
 
@@ -277,9 +272,7 @@ const RecordActions = ({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the thought and its {detail.views.length} saved{" "}
-              {detail.views.length === 1 ? "image" : "images"} from this
-              computer.
+              Its windows and text are removed from this computer.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -340,10 +333,11 @@ const Record = ({ detail }: { detail: CaptureDetail }) => {
         )}
         {!editing && reopenable.length > 0 && (
           <Button
-            className="ml-1"
+            className="ml-1.5"
             onClick={() => reopen(reopenable)}
             size="sm"
             title="Opens the page, file or app each window showed"
+            variant="outline"
           >
             <HugeiconsIcon icon={RepeatIcon} />
             Reopen {reopenable.length === 1 ? "window" : "all"}
@@ -362,19 +356,25 @@ const Record = ({ detail }: { detail: CaptureDetail }) => {
             />
           ) : (
             <>
-              <h1
-                className="text-xl leading-snug font-semibold text-pretty whitespace-pre-wrap"
-                data-testid="record-relationship"
-              >
-                {detail.relationship}
-              </h1>
+              <div className="flex flex-col gap-1.5">
+                <h1
+                  className="text-xl leading-snug font-semibold text-pretty whitespace-pre-wrap"
+                  data-testid="record-relationship"
+                >
+                  {detail.relationship}
+                </h1>
+                {detail.description !== "" && (
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                    {detail.description}
+                  </p>
+                )}
+              </div>
               <TodoChecklist detail={detail} />
             </>
           )}
-          <section aria-label="Windows" className="flex flex-col gap-3">
-            <h2 className="text-muted-foreground flex items-baseline gap-2 text-xs font-medium">
+          <section aria-label="Windows" className="flex flex-col gap-2">
+            <h2 className="text-muted-foreground text-xs font-medium">
               Windows
-              <span className="tabular-nums">{detail.views.length}</span>
             </h2>
             <ul className="grid grid-cols-2 gap-x-4 gap-y-5">
               {detail.views.map((item, position) => (
@@ -387,10 +387,6 @@ const Record = ({ detail }: { detail: CaptureDetail }) => {
                 />
               ))}
             </ul>
-            <p className="text-muted-foreground text-xs">
-              Each image was taken when it was added, at the time shown, not all
-              at once.
-            </p>
           </section>
         </div>
       </main>
@@ -411,9 +407,9 @@ export const CaptureRecord = () => {
             className="text-muted-foreground text-sm"
             data-testid="record-missing"
           >
-            This capture does not exist or was deleted.
+            This capture was deleted.
           </p>
-          <Button asChild size="sm" variant="ghost">
+          <Button asChild size="sm" variant="outline">
             <Link to="/">Back</Link>
           </Button>
         </main>

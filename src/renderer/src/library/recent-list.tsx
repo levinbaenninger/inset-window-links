@@ -1,4 +1,8 @@
-import { Cancel01Icon, Search01Icon } from "@hugeicons/core-free-icons";
+import {
+  Cancel01Icon,
+  CheckmarkCircle02Icon,
+  Search01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
@@ -10,7 +14,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import { formatClock, formatDay, plural } from "@/lib/format";
+import { formatClock, formatDay } from "@/lib/format";
 
 import type { CaptureListItem, ListedView } from "../../../shared/dto";
 
@@ -43,17 +47,23 @@ const Thumbnail = ({ views }: { views: readonly ListedView[] }) => {
   );
 };
 
-/** "2 of 3 done", or nothing when the capture has no next steps. */
-const progress = (item: CurrentItem): string | null => {
+/** "1/3" with a check, or nothing when the capture has no next steps. */
+const Progress = ({ item }: { item: CurrentItem }) => {
   if (item.todos.length === 0) {
     return null;
   }
 
   const done = item.todos.filter((todo) => todo.done).length;
 
-  return done === item.todos.length
-    ? "All done"
-    : `${done} of ${item.todos.length} done`;
+  return (
+    <span
+      aria-label={`${done} of ${item.todos.length} next steps done`}
+      className="flex items-center gap-1"
+    >
+      <HugeiconsIcon icon={CheckmarkCircle02Icon} size={12} />
+      {done}/{item.todos.length}
+    </span>
+  );
 };
 
 const CurrentRow = ({
@@ -67,7 +77,7 @@ const CurrentRow = ({
     <Link
       aria-current={active ? "page" : undefined}
       className={cn(
-        "focus-visible:ring-ring/50 flex items-start gap-2.5 rounded-lg px-2 py-2 outline-none focus-visible:ring-3",
+        "focus-visible:ring-ring/50 flex items-start gap-2.5 rounded-md px-2 py-2 outline-none focus-visible:ring-3",
         active ? "bg-foreground/10" : "hover:bg-foreground/5"
       )}
       data-testid="recent-item"
@@ -79,14 +89,9 @@ const CurrentRow = ({
         <span className="line-clamp-2 text-sm leading-snug font-medium">
           {item.relationship}
         </span>
-        <span className="text-muted-foreground truncate text-xs tabular-nums">
-          {[
-            formatClock(item.createdAt),
-            plural(item.views.length, "view"),
-            progress(item),
-          ]
-            .filter((part) => part !== null)
-            .join(" · ")}
+        <span className="text-muted-foreground flex items-center gap-2.5 text-xs tabular-nums">
+          {formatClock(item.createdAt)}
+          <Progress item={item} />
         </span>
       </span>
     </Link>
@@ -102,19 +107,11 @@ const KeptRow = ({ children }: { children: string }) => (
 const Row = ({ item, active }: { item: CaptureListItem; active: boolean }) => {
   switch (item.kind) {
     case "unsupported": {
-      return (
-        <KeptRow>
-          {`Saved by a newer version of Inset Window Links (format ${item.version}). It is kept unchanged.`}
-        </KeptRow>
-      );
+      return <KeptRow>Saved by a newer version</KeptRow>;
     }
 
     case "unreadable": {
-      return (
-        <KeptRow>
-          This capture could not be read. Its files are kept unchanged.
-        </KeptRow>
-      );
+      return <KeptRow>Can&apos;t be read</KeptRow>;
     }
 
     default: {
@@ -130,6 +127,7 @@ export const matches = (item: CaptureListItem, query: string): boolean => {
 
   const haystack = [
     item.relationship,
+    item.description,
     ...item.todos.map((todo) => todo.text),
     ...item.views.flatMap((view) => [view.title ?? "", view.appName ?? ""]),
   ]
@@ -231,7 +229,7 @@ export const RecentList = ({
         className="text-muted-foreground px-2 py-6 text-center text-xs"
         data-testid="recent-no-match"
       >
-        No captures match “{query.trim()}”
+        No matches
       </p>
     );
   }

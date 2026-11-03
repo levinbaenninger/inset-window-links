@@ -39,9 +39,11 @@ export const Shell = () => {
 
   if (view !== undefined) {
     return (
-      <div className="bg-background h-screen">
-        <Outlet />
-      </div>
+      <TooltipProvider delayDuration={500}>
+        <div className="bg-background h-screen">
+          <Outlet />
+        </div>
+      </TooltipProvider>
     );
   }
 
@@ -52,7 +54,7 @@ export const Shell = () => {
           aria-label="Recent captures"
           className="win:bg-muted/50 flex w-80 shrink-0 flex-col"
         >
-          <header className="drag-region mac:pl-20 flex h-13 shrink-0 items-center justify-end gap-0.5 px-2">
+          <header className="drag-region mac:pl-20 flex h-11 shrink-0 items-center justify-end gap-0.5 px-2">
             <h1 className="sr-only">Recent captures</h1>
             <IconButton
               icon={Settings01Icon}
