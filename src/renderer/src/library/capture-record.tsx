@@ -16,9 +16,9 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { cn } from "cn";
-import type { ComponentProps } from "react";
 import { useState } from "react";
 
+import { IconButton } from "@/components/icon-button";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,11 +32,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { libraryApi } from "@/lib/bridge";
 import {
   formatDateTime,
@@ -59,23 +54,6 @@ import { PaneHeader } from "./pane-header";
 const route = getRouteApi("/captures/$captureId");
 
 const FEEDBACK_MS = 2500;
-
-const IconAction = ({
-  label,
-  icon,
-  ...props
-}: { label: string; icon: typeof Copy01Icon } & ComponentProps<
-  typeof Button
->) => (
-  <Tooltip>
-    <TooltipTrigger asChild>
-      <Button aria-label={label} size="icon-sm" variant="ghost" {...props}>
-        <HugeiconsIcon icon={icon} />
-      </Button>
-    </TooltipTrigger>
-    <TooltipContent side="bottom">{label}</TooltipContent>
-  </Tooltip>
-);
 
 const ORIGIN_ICON = {
   app: SquareArrowUpRight02Icon,
@@ -128,7 +106,7 @@ const CopyImage = ({
   };
 
   return (
-    <IconAction
+    <IconButton
       icon={copied ? Tick02Icon : Copy01Icon}
       label={copied ? "Copied" : `Copy image of ${viewTitle(view.title)}`}
       onClick={copy}
@@ -149,7 +127,7 @@ const SourceCard = ({
 }) => (
   <li className="flex min-w-0 flex-col gap-2" data-testid="record-source">
     <Link
-      aria-label={`Open source ${index + 1}, ${viewTitle(view.title)}, at readable size`}
+      aria-label={`Open window ${index + 1}, ${viewTitle(view.title)}, at readable size`}
       className="bg-muted border-foreground/10 focus-visible:ring-ring/50 hover:border-foreground/25 overflow-hidden rounded-lg border outline-none focus-visible:ring-3"
       onDragStart={(event) => {
         event.preventDefault();
@@ -161,7 +139,7 @@ const SourceCard = ({
       to="/captures/$captureId"
     >
       <img
-        alt={`Source ${index + 1}, ${viewTitle(view.title)}`}
+        alt={`Window ${index + 1}, ${viewTitle(view.title)}`}
         className="aspect-video w-full object-contain"
         height={view.height}
         src={view.imageUrl}
@@ -186,7 +164,7 @@ const SourceCard = ({
               : null,
             view.sameWindowAs === null
               ? null
-              : `same window as source ${view.sameWindowAs}`,
+              : `same window as ${view.sameWindowAs}`,
           ]
             .filter((part) => part !== null)
             .join(" · ")}
@@ -285,23 +263,16 @@ const RecordActions = ({
       {error !== null && (
         <span className="text-destructive mr-2 text-xs">{error}</span>
       )}
-      <IconAction
+      <IconButton
         icon={copied ? Tick02Icon : Copy01Icon}
-        label={copied ? "Copied" : "Copy note"}
+        label={copied ? "Copied" : "Copy as text"}
         onClick={copy}
       />
-      <IconAction icon={PencilEdit02Icon} label="Edit text" onClick={onEdit} />
+      <IconButton icon={PencilEdit02Icon} label="Edit text" onClick={onEdit} />
       <AlertDialog>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <AlertDialogTrigger asChild>
-              <Button aria-label="Delete" size="icon-sm" variant="ghost">
-                <HugeiconsIcon icon={Delete02Icon} />
-              </Button>
-            </AlertDialogTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Delete</TooltipContent>
-        </Tooltip>
+        <AlertDialogTrigger asChild>
+          <IconButton icon={Delete02Icon} label="Delete" />
+        </AlertDialogTrigger>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
@@ -372,7 +343,7 @@ const Record = ({ detail }: { detail: CaptureDetail }) => {
             className="ml-1"
             onClick={() => reopen(reopenable)}
             size="sm"
-            title="Opens each page, file or app these views came from"
+            title="Opens the page, file or app each window showed"
           >
             <HugeiconsIcon icon={RepeatIcon} />
             Reopen {reopenable.length === 1 ? "window" : "all"}
@@ -400,9 +371,9 @@ const Record = ({ detail }: { detail: CaptureDetail }) => {
               <TodoChecklist detail={detail} />
             </>
           )}
-          <section aria-label="Sources" className="flex flex-col gap-3">
+          <section aria-label="Windows" className="flex flex-col gap-3">
             <h2 className="text-muted-foreground flex items-baseline gap-2 text-xs font-medium">
-              Views
+              Windows
               <span className="tabular-nums">{detail.views.length}</span>
             </h2>
             <ul className="grid grid-cols-2 gap-x-4 gap-y-5">

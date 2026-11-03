@@ -3,21 +3,15 @@ import {
   MinusSignIcon,
   Settings01Icon,
 } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ComponentProps } from "react";
 
+import { IconButton } from "@/components/icon-button";
 import { TodoEditor } from "@/components/todo-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { popoverApi } from "@/lib/bridge";
 import { plural } from "@/lib/format";
 
@@ -39,7 +33,7 @@ const discard = async () => {
 };
 
 const discardQuestion = (viewCount: number, text: DraftText): string => {
-  const views = plural(viewCount, "view");
+  const views = plural(viewCount, "window");
 
   if (viewCount === 0) {
     return "Discard your text?";
@@ -67,23 +61,6 @@ const chooseQuit = async (choice: "save" | "discard" | "cancel") => {
   await popoverApi().chooseQuit(choice);
 };
 
-const HeaderButton = ({
-  label,
-  icon,
-  ...props
-}: { label: string; icon: typeof Clock01Icon } & ComponentProps<
-  typeof Button
->) => (
-  <Tooltip>
-    <TooltipTrigger asChild>
-      <Button aria-label={label} size="icon-sm" variant="ghost" {...props}>
-        <HugeiconsIcon icon={icon} />
-      </Button>
-    </TooltipTrigger>
-    <TooltipContent side="bottom">{label}</TooltipContent>
-  </Tooltip>
-);
-
 /** The title strip: it moves the panel, and holds the ways out of it. */
 const PanelHeader = ({ title, detail }: { title: string; detail: string }) => (
   <header className="drag-region flex h-11 shrink-0 items-center gap-1 pr-2 pl-3.5">
@@ -92,17 +69,17 @@ const PanelHeader = ({ title, detail }: { title: string; detail: string }) => (
       {detail}
     </span>
     <span className="flex-1" />
-    <HeaderButton
+    <IconButton
       icon={Clock01Icon}
       label="Recent captures"
       onClick={() => popoverApi().openRecent()}
     />
-    <HeaderButton
+    <IconButton
       icon={Settings01Icon}
       label="Settings"
       onClick={() => popoverApi().openSettings()}
     />
-    <HeaderButton
+    <IconButton
       icon={MinusSignIcon}
       label="Hide panel"
       onClick={() => popoverApi().dismiss()}
@@ -121,7 +98,7 @@ const QuitPrompt = ({ check }: { check: Saveability }) => (
       <p className="font-medium">Save this capture before quitting?</p>
       <p className="text-muted-foreground text-xs">
         {check.kind === "ok"
-          ? "Discarding loses these views and your text."
+          ? "Discarding loses these windows and your text."
           : `${blockedReasons[check.reason]} Or discard it to quit now.`}
       </p>
     </div>
@@ -283,7 +260,7 @@ const DraftForm = ({
   return (
     <>
       <PanelHeader
-        detail={viewCount === 0 ? "" : plural(viewCount, "view")}
+        detail={viewCount === 0 ? "" : plural(viewCount, "window")}
         title="New capture"
       />
       <div className="flex flex-col gap-4 px-3.5 pb-3.5">
@@ -298,7 +275,7 @@ const DraftForm = ({
           views={snapshot.views}
         />
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="relationship">What connects these views?</Label>
+          <Label htmlFor="relationship">What connects these windows?</Label>
           <Textarea
             autoFocus
             className="max-h-48 min-h-20 resize-none"

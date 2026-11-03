@@ -79,7 +79,7 @@ describe(appMenuTemplate, () => {
       float?.checked,
       items(menu).some((item) => item.label === "Add a Window: ⌥⌘W"),
       items(taken).some(
-        (item) => item.label === "Capture shortcut is taken by another app"
+        (item) => item.label === "Capture Shortcut Is Taken by Another App"
       ),
     ]).toStrictEqual([true, true, true]);
   });

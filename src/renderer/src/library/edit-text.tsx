@@ -70,7 +70,7 @@ export const EditText = ({
   return (
     <section aria-label="Edit your thought" className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="edit-relationship">What connects these views?</Label>
+        <Label htmlFor="edit-relationship">What connects these windows?</Label>
         <Textarea
           autoFocus
           className="min-h-24"

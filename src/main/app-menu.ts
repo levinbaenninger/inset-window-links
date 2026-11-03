@@ -191,7 +191,7 @@ export const appMenuTemplate = (
         enabled: false,
         label:
           state.shortcut === null
-            ? "Capture shortcut is taken by another app"
+            ? "Capture Shortcut Is Taken by Another App"
             : `Add a Window: ${state.shortcut}`,
       },
       SEPARATOR,
