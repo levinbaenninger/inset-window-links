@@ -70,6 +70,8 @@ export class InlineSaver {
   #timer: ReturnType<typeof setTimeout> | undefined;
   #chain: Promise<MutationOutcome | null> = Promise.resolve(null);
   #inFlight = 0;
+  /** Bumped when the page goes away: calls queued before then are dropped, not sent late. */
+  #generation = 0;
 
   constructor(id: CaptureId, store: TextStore) {
     this.#id = id;
@@ -101,8 +103,9 @@ export class InlineSaver {
 
   /**
    * Nothing is saved while the title is blank; the capture keeps its last title. When the page
-   * is going away, the save goes straight to main: a call queued behind one still in flight would
-   * never be sent.
+   * is going away, a call queued behind one still in flight would never be sent, so the whole
+   * latest text goes straight to main whenever anything is unconfirmed, and the queued calls,
+   * all older than it, are dropped.
    */
   flush({ leaving = false }: { leaving?: boolean } = {}): void {
     clearTimeout(this.#timer);
@@ -110,21 +113,28 @@ export class InlineSaver {
 
     const text = this.#latest;
 
-    if (
-      this.#state.text === null ||
-      isBlank(text.relationship) ||
-      sameText(text, this.#saved)
-    ) {
+    if (this.#state.text === null || isBlank(text.relationship)) {
       return;
     }
 
     const sent = stored(text);
 
-    this.#saved = sent;
-
     if (leaving) {
-      void this.#store.updateText(this.#id, sent);
-    } else {
+      const unconfirmed =
+        this.#inFlight > 0 || !sameText(text, this.#confirmed);
+
+      this.#generation += 1;
+
+      if (unconfirmed) {
+        this.#saved = sent;
+        void settle(() => this.#store.updateText(this.#id, sent));
+      }
+
+      return;
+    }
+
+    if (!sameText(text, this.#saved)) {
+      this.#saved = sent;
       this.#enqueue(sent, () => this.#store.updateText(this.#id, sent));
     }
   }
@@ -191,8 +201,16 @@ export class InlineSaver {
   }
 
   #enqueue(sent: DraftText, call: () => Promise<MutationOutcome>): void {
+    const generation = this.#generation;
+
     this.#inFlight += 1;
     this.#chain = this.#chain.then(async () => {
+      if (generation !== this.#generation) {
+        this.#inFlight -= 1;
+
+        return null;
+      }
+
       const outcome = await settle(call);
 
       this.#inFlight -= 1;

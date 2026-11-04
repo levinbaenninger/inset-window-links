@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CaptureId } from "../shared/ids";
 import { DraftIdSchema, ViewIdSchema } from "../shared/ids";
-import { startSnoozeClock } from "./snooze-clock";
+import { RETRY_MS, startSnoozeClock } from "./snooze-clock";
 import type { Timers } from "./snooze-clock";
 import { nodeStoreFs } from "./store/fs";
 import type { CaptureRecord } from "./store/schema";
@@ -152,5 +152,58 @@ describe(startSnoozeClock, () => {
 
     expect(far).toStrictEqual([2 ** 31 - 1]);
     expect(near.map(({ ms }) => ms)).toStrictEqual([60 * 60 * 1000]);
+  });
+
+  it("waits a minute after a wake that could not be written, then tries again", async () => {
+    await store.setStatus(DUE, {
+      kind: "snoozed",
+      until: "2026-11-03T08:00:00.000Z",
+    });
+    await store.setStatus(LATER, {
+      kind: "snoozed",
+      until: "2026-11-03T09:00:30.000Z",
+    });
+
+    const failing = { left: 2 };
+
+    const { pending, timers } = manualTimers();
+    const announced: string[][] = [];
+    let now = new Date("2026-11-03T09:00:00.000Z");
+
+    const clock = startSnoozeClock({
+      notify: (woken) =>
+        announced.push(woken.map((record) => record.relationship)),
+      now: () => now,
+      store: {
+        list: () => store.list(),
+        onChange: (listener) => store.onChange(listener),
+        wake: (id, until) => {
+          if (id === DUE && failing.left > 0) {
+            failing.left -= 1;
+
+            return Promise.resolve({ kind: "failed", message: "disk full" });
+          }
+
+          return store.wake(id, until);
+        },
+      },
+      timers,
+    });
+
+    const delays: number[] = [];
+
+    await clock.sweep();
+    delays.push(...[...pending.values()].map(({ ms }) => ms));
+
+    now = new Date("2026-11-03T09:01:00.000Z");
+    await clock.sweep();
+    delays.push(...[...pending.values()].map(({ ms }) => ms));
+
+    now = new Date("2026-11-03T09:02:00.000Z");
+    await clock.sweep();
+    clock.stop();
+
+    expect(delays).toStrictEqual([30_000, RETRY_MS]);
+    expect(announced).toStrictEqual([["Later"], ["Due"]]);
   });
 });

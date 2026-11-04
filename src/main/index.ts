@@ -212,7 +212,7 @@ const start = async () => {
       startDrag: (file, icon) =>
         library.window()?.webContents.startDrag({ file, icon }),
     },
-    trustedSender(() => library.window()?.webContents ?? null, library.page)
+    trustedSender(() => library.contents(), library.page)
   );
   await popover.load();
 

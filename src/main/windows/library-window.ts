@@ -44,6 +44,11 @@ export class LibraryWindow {
   /** An open request that arrived while the previous window was still being torn down. */
   #reopen: { route: string | undefined } | null = null;
   #closing = false;
+  /**
+   * The page of the latest window, kept while it closes: its last save is sent from pagehide,
+   * after close has begun. A closed page sends nothing more, so it is trusted until replaced.
+   */
+  #contents: Electron.WebContents | null = null;
 
   constructor(page: RendererPage) {
     this.#page = page;
@@ -134,6 +139,7 @@ export class LibraryWindow {
       }
     });
     this.#win = win;
+    this.#contents = win.webContents;
     void this.#page.load(win, route);
   }
 
@@ -141,6 +147,11 @@ export class LibraryWindow {
     return this.#closing || this.#win?.isDestroyed() !== false
       ? null
       : this.#win;
+  }
+
+  /** The page IPC is accepted from, including while its window closes. */
+  contents(): Electron.WebContents | null {
+    return this.#contents;
   }
 
   isFocused(): boolean {

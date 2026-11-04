@@ -49,6 +49,8 @@ const load = (): SidebarState => {
 interface SidebarControl {
   state: SidebarState;
   toggle: () => void;
+  /** Brings a hidden sidebar back at its kept width. */
+  show: () => void;
   /** `kept` is the width the sidebar comes back at if this width folds it away. */
   resize: (width: number, kept?: number) => void;
 }
@@ -89,6 +91,10 @@ export const SidebarProvider = ({ children }: { children: ReactNode }) => {
     setState((current) => ({ ...current, collapsed: !current.collapsed }));
   }, []);
 
+  const show = useCallback(() => {
+    setState((current) => ({ ...current, collapsed: false }));
+  }, []);
+
   const resize = useCallback((width: number, kept?: number) => {
     setState((current) =>
       width < COLLAPSE_BELOW
@@ -111,8 +117,8 @@ export const SidebarProvider = ({ children }: { children: ReactNode }) => {
   }, [toggle]);
 
   const control = useMemo(
-    () => ({ resize, state, toggle }),
-    [resize, state, toggle]
+    () => ({ resize, show, state, toggle }),
+    [resize, show, state, toggle]
   );
 
   return (
