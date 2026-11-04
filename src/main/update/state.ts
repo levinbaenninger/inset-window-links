@@ -19,22 +19,16 @@ export type UpdateEvent =
   | { type: "failed"; message: string };
 
 /**
- * Off never changes. A downloaded update stays ready until the app quits, because it installs then
- * whatever a later check says. Returns the same object when nothing changed, so menus rebuild only
- * on a real change.
+ * Off and ready never change. A downloaded update installs when the app quits, and a newer build
+ * waits for the next launch. Returns the same object when nothing changed, so menus rebuild only on
+ * a real change.
  */
 export const reduceUpdate = (
   state: UpdateState,
   event: UpdateEvent
 ): UpdateState => {
-  if (state.kind === "off") {
+  if (state.kind === "off" || state.kind === "ready") {
     return state;
-  }
-
-  if (state.kind === "ready") {
-    return event.type === "downloaded" && event.version !== state.version
-      ? { kind: "ready", version: event.version }
-      : state;
   }
 
   switch (event.type) {

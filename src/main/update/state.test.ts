@@ -58,14 +58,6 @@ describe(reduceUpdate, () => {
     ).toStrictEqual({ kind: "ready", version: "0.1.901" });
   });
 
-  it("moves ready to a newer download", () => {
-    expect(
-      run({ kind: "ready", version: "0.1.901" }, [
-        { type: "downloaded", version: "0.1.902" },
-      ])
-    ).toStrictEqual({ kind: "ready", version: "0.1.902" });
-  });
-
   it("stays off whatever the updater reports", () => {
     expect(
       run({ kind: "off" }, [
