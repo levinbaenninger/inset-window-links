@@ -10,7 +10,10 @@ files:
 asarUnpack:
   - node_modules/get-windows/**
 npmRebuild: false
-publish: null
+afterPack: ./scripts/sign-mac.mjs
+publish:
+  provider: generic
+  url: https://github.com/levinbaenninger/inset-window-links/releases/download/preview
 mac:
   category: public.app-category.productivity
   target:
@@ -18,7 +21,7 @@ mac:
       arch: [arm64, x64]
     - target: zip
       arch: [arm64, x64]
-  identity: "-"
+  identity: null
   hardenedRuntime: false
   extendInfo:
     NSAccessibilityUsageDescription: Inset Window Links reads which web page or file a window shows, so Reopen can bring it back.
