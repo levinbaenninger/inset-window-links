@@ -41,7 +41,25 @@ jobs:
         shell: bash
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - run: pnpm check
-      - run: pnpm ${{ matrix.command }} --publish never
+      # Tags ship package.json's version. Main gets x.y.<run number>, which only grows, so installed
+      # previews always see the next build as newer.
+      - name: Stamp the build version
+        shell: bash
+        run: |
+          base=$(node -p 'require("./package.json").version')
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="$base"
+          else
+            version="${base%.*}.$GITHUB_RUN_NUMBER"
+          fi
+          echo "INSET_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Import the signing certificate
+        if: runner.os == 'macOS'
+        run: scripts/import-signing-key.sh
+        env:
+          MAC_SIGNING_P12_BASE64: ${{ secrets.MAC_SIGNING_P12_BASE64 }}
+          MAC_SIGNING_P12_PASSWORD: ${{ secrets.MAC_SIGNING_P12_PASSWORD }}
+      - run: pnpm ${{ matrix.command }} --publish never -c.extraMetadata.version=${{ env.INSET_VERSION }}
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.name }}
@@ -49,6 +67,8 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.exe
+            release/latest*.yml
+            release/*.blockmap
           if-no-files-found: error
 
   publish:
@@ -73,15 +93,27 @@ jobs:
             --notes-file .github/release-notes.md \
             --generate-notes \
             --verify-tag
+      # Installed apps poll latest-mac.yml and latest.yml on this release, so it is updated in place:
+      # new files first, the feed files next, and the old builds' files only once nothing points at them.
       - name: Publish rolling preview from main
         if: github.ref == 'refs/heads/main'
         run: |
+          title="Preview build (main, ${GITHUB_SHA::7})"
           preview_exists=$(gh release list --limit 1000 --json tagName --jq 'any(.[]; .tagName == "preview")')
-          if [ "$preview_exists" = true ]; then
-            gh release delete preview --cleanup-tag --yes
+          if [ "$preview_exists" != true ]; then
+            gh release create preview dist/* \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes-file .github/release-notes.md \
+              --prerelease
+            exit 0
           fi
-          gh release create preview dist/* \
-            --target "$GITHUB_SHA" \
-            --title "Preview build (main, ${GITHUB_SHA::7})" \
-            --notes-file .github/release-notes.md \
-            --prerelease
+          find dist -type f ! -name 'latest*.yml' -print0 | xargs -0 gh release upload preview --clobber
+          gh release upload preview dist/latest*.yml --clobber
+          gh release view preview --json assets --jq '.assets[].name' | while read -r name; do
+            if [ ! -e "dist/$name" ]; then
+              gh release delete-asset preview "$name" --yes
+            fi
+          done
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/preview" -f sha="$GITHUB_SHA" -F force=true
+          gh release edit preview --title "$title" --notes-file .github/release-notes.md --prerelease
