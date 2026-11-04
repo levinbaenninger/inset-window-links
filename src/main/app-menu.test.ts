@@ -6,6 +6,7 @@ import { appMenuTemplate, keyAction } from "./app-menu";
 
 const actions = (): AppMenuActions => ({
   addWindows: vi.fn<() => void>(),
+  checkForUpdates: vi.fn<() => void>(),
   closeWindow: vi.fn<() => void>(),
   find: vi.fn<() => void>(),
   newCapture: vi.fn<() => void>(),
@@ -13,6 +14,7 @@ const actions = (): AppMenuActions => ({
   openRecent: vi.fn<() => void>(),
   openScreenSettings: vi.fn<() => void>(),
   openSettings: vi.fn<() => void>(),
+  restartToUpdate: vi.fn<() => void>(),
   saveCapture: vi.fn<() => void>(),
   setFloatOnTop: vi.fn<(on: boolean) => void>(),
 });
@@ -22,7 +24,7 @@ const items = (menu: MenuItemConstructorOptions[]) =>
 
 describe(appMenuTemplate, () => {
   const menu = appMenuTemplate(
-    { floatOnTop: true, shortcut: "⌥⌘W" },
+    { floatOnTop: true, shortcut: "⌥⌘W", update: { kind: "upToDate" } },
     actions()
   );
 
@@ -71,7 +73,7 @@ describe(appMenuTemplate, () => {
     );
 
     const taken = appMenuTemplate(
-      { floatOnTop: false, shortcut: null },
+      { floatOnTop: false, shortcut: null, update: { kind: "off" } },
       actions()
     );
 
@@ -82,6 +84,30 @@ describe(appMenuTemplate, () => {
         (item) => item.label === "Capture Shortcut Is Taken by Another App"
       ),
     ]).toStrictEqual([true, true, true]);
+  });
+});
+
+describe("the app menu's update items", () => {
+  it("sit under About, with the restart once an update is ready", () => {
+    const [appItems] = appMenuTemplate(
+      {
+        floatOnTop: true,
+        shortcut: null,
+        update: { kind: "ready", version: "0.1.901" },
+      },
+      actions()
+    );
+
+    expect(
+      (Array.isArray(appItems?.submenu) ? appItems.submenu : [])
+        .slice(0, 4)
+        .map((item) => item.label ?? item.type)
+    ).toStrictEqual([
+      "About Inset Window Links",
+      "Restart to Update to v0.1.901",
+      "Check for Updates…",
+      "separator",
+    ]);
   });
 });
 
@@ -105,7 +131,10 @@ describe(keyAction, () => {
     const all = actions();
 
     const answered = items(
-      appMenuTemplate({ floatOnTop: true, shortcut: null }, all)
+      appMenuTemplate(
+        { floatOnTop: true, shortcut: null, update: { kind: "off" } },
+        all
+      )
     )
       .flatMap((item) =>
         item.accelerator === undefined

@@ -1,11 +1,15 @@
 import type { MenuItemConstructorOptions } from "electron";
 
+import type { UpdateState } from "./update/state";
+import { updateMenuItems } from "./update/state";
+
 export const APP_NAME = "Inset Window Links";
 
 export interface AppMenuState {
   floatOnTop: boolean;
   /** The capture shortcut's label, or null when another app holds it. */
   shortcut: string | null;
+  update: UpdateState;
 }
 
 export interface AppMenuActions {
@@ -19,6 +23,8 @@ export interface AppMenuActions {
   openHelp: () => void;
   openScreenSettings: () => void;
   setFloatOnTop: (on: boolean) => void;
+  checkForUpdates: () => void;
+  restartToUpdate: () => void;
 }
 
 const SEPARATOR: MenuItemConstructorOptions = { type: "separator" };
@@ -26,7 +32,11 @@ const SEPARATOR: MenuItemConstructorOptions = { type: "separator" };
 /** The menu items that have a key of their own. */
 export type KeyAction = keyof Omit<
   AppMenuActions,
-  "openHelp" | "openScreenSettings" | "setFloatOnTop"
+  | "openHelp"
+  | "openScreenSettings"
+  | "setFloatOnTop"
+  | "checkForUpdates"
+  | "restartToUpdate"
 >;
 
 /** The parts of a key press that pick a menu key, as Electron's before-input-event reports them. */
@@ -87,6 +97,10 @@ export const appMenuTemplate = (
     label: APP_NAME,
     submenu: [
       { label: `About ${APP_NAME}`, role: "about" },
+      ...updateMenuItems(state.update, {
+        check: actions.checkForUpdates,
+        restart: actions.restartToUpdate,
+      }),
       SEPARATOR,
       {
         accelerator: "CommandOrControl+,",

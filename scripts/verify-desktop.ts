@@ -77,7 +77,8 @@ const PACKAGED_EXE = path.join(
   "release/mac-arm64/Inset Window Links.app/Contents/MacOS/Inset Window Links"
 );
 
-const TRAY_MENU = [
+/** Harness runs set no update feed, so the updater is off and its check item disabled. */
+const trayMenu = (version: string) => [
   "Capture Panel",
   "Add Windows…",
   "Recent Captures…",
@@ -87,6 +88,10 @@ const TRAY_MENU = [
   "---",
   "How It Works",
   "Settings…",
+  "---",
+  `Version ${version}`,
+  "Check for Updates…",
+  "---",
   "Quit Inset Window Links",
 ];
 
@@ -1408,7 +1413,12 @@ const checkLaunch = async (app: ElectronApplication) => {
   observations.set("trayBounds", json(trayBounds));
   record(
     "tray menu has the expected entries",
-    json(menu) === json(TRAY_MENU),
+    json(menu) ===
+      json(
+        trayMenu(
+          await app.evaluate(({ app: electronApp }) => electronApp.getVersion())
+        )
+      ),
     json(menu)
   );
   observations.set(

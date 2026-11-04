@@ -106,7 +106,8 @@ const APP = PACKAGED
       ),
     };
 
-const TRAY_MENU = [
+/** Harness runs set no update feed, so the updater is off and its check item disabled. */
+const trayMenu = (version: string) => [
   "Capture Panel",
   "Add Windows…",
   "Recent Captures…",
@@ -115,6 +116,10 @@ const TRAY_MENU = [
   "---",
   "How It Works",
   "Settings…",
+  "---",
+  `Version ${version}`,
+  "Check for Updates…",
+  "---",
   "Quit Inset Window Links",
 ];
 
@@ -1402,7 +1407,12 @@ const mainFlow = async (
 
   record(
     "the tray menu has the expected entries",
-    json(menu) === json(TRAY_MENU),
+    json(menu) ===
+      json(
+        trayMenu(
+          await app.evaluate(({ app: electronApp }) => electronApp.getVersion())
+        )
+      ),
     json(menu)
   );
 
