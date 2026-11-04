@@ -8,7 +8,7 @@ import type { CaptureId, ViewId } from "../../shared/ids";
 import { DraftIdSchema, ViewIdSchema } from "../../shared/ids";
 import { toNewCapture } from "../session/snapshot";
 import type { StoreFs } from "./fs";
-import { failingWrites, nodeStoreFs } from "./fs";
+import { failingWrites, nodeStoreFs, slowWrites } from "./fs";
 import type { CaptureRecord } from "./schema";
 import type { NewCapture } from "./store";
 import { CaptureStore } from "./store";
@@ -400,6 +400,33 @@ describe(CaptureStore, () => {
     expect(entry?.kind === "current" && entry.record.status).toStrictEqual({
       kind: "active",
     });
+  });
+
+  it("reports a write on its way as busy until it is on disk, for quitting to wait on", async () => {
+    const store = await CaptureStore.open(root, slowWrites(nodeStoreFs, 50));
+
+    await store.publish(newCapture());
+
+    const saving = store.updateText(
+      CAPTURE_ID,
+      { description: "", relationship: "Written before quit", todos: [] },
+      new Date("2026-10-22T08:00:00.000Z")
+    );
+
+    const busyWhileSaving = store.busy;
+
+    await store.idle();
+
+    const written: unknown = JSON.parse(
+      await readFile(path.join(root, CAPTURE_ID, "record.json"), "utf-8")
+    );
+
+    expect([busyWhileSaving, store.busy, await saving]).toStrictEqual([
+      true,
+      false,
+      { kind: "ok" },
+    ]);
+    expect(written).toMatchObject({ relationship: "Written before quit" });
   });
 
   it("deletes by moving into the trash, and the record stays gone after a restart", async () => {
