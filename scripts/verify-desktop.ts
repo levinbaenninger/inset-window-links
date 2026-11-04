@@ -16,6 +16,7 @@ import { activeWindow } from "get-windows";
 import type { ElectronApplication, Page } from "playwright";
 import { _electron } from "playwright";
 
+import type { UpdateState } from "../src/main/update/state.ts";
 import type { DraftSnapshot } from "../src/shared/dto.ts";
 import type { SettingsChange } from "../src/shared/settings.ts";
 import type { Todo } from "../src/shared/text.ts";
@@ -37,6 +38,8 @@ interface InsetE2E {
   } | null;
   trayPopUp: () => void;
   snapshot: () => DraftSnapshot;
+  updateState: () => UpdateState;
+  restartToUpdate: () => void;
   diagnostics: () => {
     screenAccess: string;
     probe: string;

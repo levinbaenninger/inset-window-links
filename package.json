@@ -24,6 +24,7 @@
     "verify:desktop": "pnpm build && node scripts/verify-desktop.ts",
     "verify:packaged": "pnpm package:dir && node scripts/verify-desktop.ts --packaged",
     "verify:packaged:current": "node scripts/verify-desktop.ts --packaged",
+    "verify:update": "node scripts/verify-update.ts",
     "verify:windows": "pnpm build && node scripts/verify-windows.ts",
     "verify:windows:packaged": "pnpm package:dir && node scripts/verify-windows.ts --packaged",
     "icon": "electron scripts/render-icon.mjs",
