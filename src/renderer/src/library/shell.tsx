@@ -13,6 +13,7 @@ import {
 } from "@tanstack/react-router";
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { IconButton } from "@/components/icon-button";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -81,13 +82,17 @@ export const Shell = () => {
   const sidebar = useSidebar();
   const search = useRef<HTMLInputElement>(null);
 
+  const { show } = sidebar;
+
+  // Find shows a hidden sidebar first: a field under display: none cannot take focus.
   useEffect(
     () =>
       libraryApi().onFind(() => {
+        flushSync(show);
         search.current?.focus();
         search.current?.select();
       }),
-    []
+    [show]
   );
 
   if (view !== undefined) {

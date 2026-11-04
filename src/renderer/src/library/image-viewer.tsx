@@ -31,7 +31,7 @@ const Filmstrip = ({
 }) => (
   <nav
     aria-label="Windows in this capture"
-    className="flex shrink-0 justify-center gap-2 overflow-x-auto px-4 pt-1 pb-4"
+    className="flex shrink-0 justify-center-safe gap-2 overflow-x-auto px-4 pt-1 pb-4"
   >
     {views.map((item, position) => (
       <button

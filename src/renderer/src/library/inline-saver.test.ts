@@ -15,8 +15,13 @@ const initial: DraftText = {
   todos: [{ done: false, id: "t1", text: "Call" }],
 };
 
-const setup = (outcomes: MutationOutcome[] = []) => {
+const setup = (
+  outcomes: MutationOutcome[] = [],
+  { holdFirst = false }: { holdFirst?: boolean } = {}
+) => {
   const calls: string[] = [];
+  let resolveHeld: ((outcome: MutationOutcome) => void) | null = null;
+  let held = holdFirst;
 
   const store = {
     setTodoDone: vi.fn<TextStore["setTodoDone"]>((_id, todoId, done) => {
@@ -29,6 +34,16 @@ const setup = (outcomes: MutationOutcome[] = []) => {
         `text ${text.relationship} ${text.todos.map((todo) => `${todo.text}:${String(todo.done)}`).join(",")}`
       );
 
+      if (held) {
+        held = false;
+
+        const { promise, resolve } = Promise.withResolvers<MutationOutcome>();
+
+        resolveHeld = resolve;
+
+        return promise;
+      }
+
       return Promise.resolve<MutationOutcome>(
         outcomes.shift() ?? { kind: "ok" }
       );
@@ -39,7 +54,7 @@ const setup = (outcomes: MutationOutcome[] = []) => {
 
   saver.adopt(initial);
 
-  return { calls, saver };
+  return { calls, release: () => resolveHeld?.({ kind: "ok" }), saver };
 };
 
 describe(InlineSaver, () => {
@@ -96,6 +111,7 @@ describe(InlineSaver, () => {
 
     saver.edit({ ...initial, relationship: "A limits C" });
     saver.flush();
+    await vi.advanceTimersByTimeAsync(0);
     saver.toggle("t1", true);
     await vi.runAllTimersAsync();
 
@@ -199,5 +215,46 @@ describe(InlineSaver, () => {
       "text A limits C Call:false",
     ]);
     expect(saver.state().outcome).toBeNull();
+  });
+
+  it("sends the latest text at once when the page goes away behind a save still in flight", async () => {
+    const { calls, release, saver } = setup([], { holdFirst: true });
+
+    saver.edit({ ...initial, relationship: "A limits C" });
+    saver.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    saver.edit({ ...initial, relationship: "A limits D" });
+    saver.flush();
+    saver.flush({ leaving: true });
+    const atLeaving = [...calls];
+
+    release();
+    await vi.runAllTimersAsync();
+
+    expect(atLeaving).toStrictEqual([
+      "text A limits C Call:false",
+      "text A limits D Call:false",
+    ]);
+    expect(calls).toStrictEqual(atLeaving);
+  });
+
+  it("carries a queued check in that last text", async () => {
+    const { calls, release, saver } = setup([], { holdFirst: true });
+
+    saver.edit({ ...initial, relationship: "A limits C" });
+    saver.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    saver.toggle("t1", true);
+    saver.flush({ leaving: true });
+    const atLeaving = [...calls];
+
+    release();
+    await vi.runAllTimersAsync();
+
+    expect(atLeaving).toStrictEqual([
+      "text A limits C Call:false",
+      "text A limits C Call:true",
+    ]);
+    expect(calls).toStrictEqual(atLeaving);
   });
 });

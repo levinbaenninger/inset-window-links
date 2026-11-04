@@ -4,6 +4,9 @@ import type { CaptureStore } from "./store/store";
 /** setTimeout fires at once past this many milliseconds, so a longer wait is taken in steps. */
 const MAX_DELAY = 2 ** 31 - 1;
 
+/** How long a capture that could not be written waits before the next try. */
+export const RETRY_MS = 60_000;
+
 export interface Timers<Handle> {
   set: (run: () => void, ms: number) => Handle;
   clear: (handle: Handle) => void;
@@ -30,6 +33,8 @@ export const startSnoozeClock = <Handle>({
   timers,
 }: SnoozeClockDeps<Handle>) => {
   let timer: Handle | null = null;
+  /** Captures whose wake could not be written, and when to try again. */
+  const retryAt = new Map<string, number>();
 
   const snoozed = () =>
     store
@@ -40,6 +45,9 @@ export const startSnoozeClock = <Handle>({
           : []
       );
 
+  const dueAt = ({ record, until }: { record: CaptureRecord; until: string }) =>
+    Math.max(Date.parse(until), retryAt.get(record.id) ?? 0);
+
   /** Waits for the nearest snooze; `onDue` runs when it comes. */
   const arm = (onDue: () => void) => {
     if (timer !== null) {
@@ -47,7 +55,7 @@ export const startSnoozeClock = <Handle>({
       timer = null;
     }
 
-    const next = Math.min(...snoozed().map(({ until }) => Date.parse(until)));
+    const next = Math.min(...snoozed().map(dueAt));
 
     if (Number.isFinite(next)) {
       const delay = Math.min(MAX_DELAY, Math.max(0, next - now().getTime()));
@@ -60,13 +68,22 @@ export const startSnoozeClock = <Handle>({
   };
 
   const sweep = async () => {
-    const due = snoozed().filter(
-      ({ until }) => Date.parse(until) <= now().getTime()
-    );
+    const due = snoozed().filter((entry) => dueAt(entry) <= now().getTime());
 
     const outcomes = await Promise.all(
       due.map(({ record, until }) => store.wake(record.id, until))
     );
+
+    for (const [index, { record }] of due.entries()) {
+      const kind = outcomes[index]?.kind;
+
+      // "missing" means it was snoozed again or moved meanwhile: nothing to retry.
+      if (kind === "failed" || kind === "readOnly") {
+        retryAt.set(record.id, now().getTime() + RETRY_MS);
+      } else {
+        retryAt.delete(record.id);
+      }
+    }
 
     const woken = due
       .filter((_, index) => outcomes[index]?.kind === "ok")
