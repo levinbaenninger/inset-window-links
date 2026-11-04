@@ -10,7 +10,6 @@ export type UpdateState =
   | { kind: "upToDate" }
   | { kind: "error"; message: string };
 
-/** What electron-updater reports, one event per autoUpdater event. */
 export type UpdateEvent =
   | { type: "checking" }
   | { type: "available"; version: string }
@@ -77,7 +76,6 @@ export const reduceUpdate = (
   }
 };
 
-/** A check is worth starting only when none is running and nothing is waiting to install. */
 export const canCheck = (state: UpdateState): boolean =>
   state.kind === "idle" || state.kind === "upToDate" || state.kind === "error";
 
@@ -114,7 +112,6 @@ export interface UpdateActions {
   restart: () => void;
 }
 
-/** The update items both the menu-bar icon's menu and the app menu show. */
 export const updateMenuItems = (
   state: UpdateState,
   actions: UpdateActions

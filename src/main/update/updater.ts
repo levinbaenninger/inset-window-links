@@ -11,7 +11,6 @@ const CHECK_EVERY_MS = 4 * 60 * 60 * 1000;
 export interface Updater {
   state: () => UpdateState;
   check: () => void;
-  /** Quits and starts the downloaded version. Call only while the state is ready. */
   install: () => void;
 }
 
@@ -53,7 +52,6 @@ export const updatesOff: Updater = {
   state: () => ({ kind: "off" }),
 };
 
-/** Checks the feed now and every few hours, downloads in the background, and installs on quit. */
 export const startUpdater = (options: UpdaterOptions): Updater => {
   const { autoUpdater } = electronUpdater;
   let state: UpdateState = { kind: "idle" };
