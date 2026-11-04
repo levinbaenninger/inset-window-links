@@ -48,6 +48,7 @@ export class CaptureStore {
   readonly #index = new Map<string, StoreEntry>();
   readonly #listeners = new Set<() => void>();
   #queue: Promise<unknown> = Promise.resolve();
+  #pending = 0;
 
   private constructor(root: string, fs: StoreFs) {
     this.#root = root;
@@ -94,10 +95,16 @@ export class CaptureStore {
   #serial<T>(run: () => Promise<T>): Promise<T> {
     const previous = this.#queue;
 
-    const result = (async () => {
-      await previous;
+    this.#pending += 1;
 
-      return run();
+    const result = (async () => {
+      try {
+        await previous;
+
+        return await run();
+      } finally {
+        this.#pending -= 1;
+      }
     })();
 
     this.#queue = Promise.allSettled([result]);
@@ -316,6 +323,16 @@ export class CaptureStore {
     }
 
     return path.join(this.#root, id, VIEWS_DIR, `${viewId}.png`);
+  }
+
+  /** Whether a write is queued or on its way, so quitting now would cut it off. */
+  get busy(): boolean {
+    return this.#pending > 0;
+  }
+
+  /** Settles once every write queued so far has. */
+  async idle(): Promise<void> {
+    await this.#queue;
   }
 
   onChange(listener: () => void): () => void {

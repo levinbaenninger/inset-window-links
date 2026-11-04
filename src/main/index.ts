@@ -33,7 +33,7 @@ import {
 import { SessionController } from "./session/controller";
 import { openSettingsStore } from "./settings-store";
 import { startSnoozeClock } from "./snooze-clock";
-import { failingWrites, nodeStoreFs } from "./store/fs";
+import { failingWrites, nodeStoreFs, slowWrites } from "./store/fs";
 import type { CaptureRecord } from "./store/schema";
 import { CaptureStore } from "./store/store";
 import { LibraryWindow } from "./windows/library-window";
@@ -141,10 +141,15 @@ const start = async () => {
     nodeStoreFs
   );
 
+  const slowWriteMs = Number(process.env["INSET_E2E_SLOW_WRITE_MS"] ?? 0);
+
+  const writes =
+    e2e && slowWriteMs > 0 ? slowWrites(nodeStoreFs, slowWriteMs) : nodeStoreFs;
+
   const storeFs =
     e2e && process.env["INSET_E2E_FAIL_WRITE"] === "1"
-      ? failingWrites(nodeStoreFs, () => true)
-      : nodeStoreFs;
+      ? failingWrites(writes, () => true)
+      : writes;
 
   const store = await CaptureStore.open(
     path.join(app.getPath("userData"), "captures"),
@@ -407,7 +412,15 @@ const start = async () => {
   // Opening the app again, from the Start menu or a shortcut, is how a lost tray icon gets found.
   app.on("second-instance", actions.openHome);
   app.on("before-quit", (event) => session.interceptQuit(event));
-  app.on("will-quit", () => {
+  app.on("will-quit", (event) => {
+    // The library's last save arrives as its window closes; quitting waits for it to be written.
+    if (store.busy) {
+      event.preventDefault();
+      void store.idle().then(() => app.quit());
+
+      return;
+    }
+
     globalShortcut.unregisterAll();
     appTray?.tray.destroy();
   });
