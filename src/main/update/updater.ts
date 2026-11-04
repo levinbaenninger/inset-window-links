@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
+import { autoUpdater as squirrel } from "electron";
 import electronUpdater from "electron-updater";
 
 import type { UpdateEvent, UpdateState } from "./state";
@@ -52,18 +53,43 @@ export const updatesOff: Updater = {
   state: () => ({ kind: "off" }),
 };
 
-export const startUpdater = (options: UpdaterOptions): Updater => {
-  const { autoUpdater } = electronUpdater;
+/** An update source, such as electron-updater, seen as the lifecycle events it reports. */
+export interface UpdateFeed {
+  subscribe: (apply: (event: UpdateEvent) => void) => void;
+  /** Starts a check. A failure arrives as a failed event. */
+  check: () => void;
+  install: () => void;
+}
+
+export const connectUpdater = (
+  feed: UpdateFeed,
+  onChange: UpdaterOptions["onChange"]
+): Updater => {
   let state: UpdateState = { kind: "idle" };
 
-  const apply = (event: UpdateEvent) => {
+  feed.subscribe((event) => {
     const before = state;
     state = reduceUpdate(state, event);
 
     if (state !== before) {
-      options.onChange(state, before);
+      onChange(state, before);
+    }
+  });
+
+  const check = () => {
+    if (canCheck(state)) {
+      feed.check();
     }
   };
+
+  check();
+  setInterval(check, CHECK_EVERY_MS).unref();
+
+  return { check, install: feed.install, state: () => state };
+};
+
+export const startUpdater = (options: UpdaterOptions): Updater => {
+  const { autoUpdater } = electronUpdater;
 
   autoUpdater.logger = fileLogger(options.logDir);
   autoUpdater.autoDownload = true;
@@ -73,34 +99,36 @@ export const startUpdater = (options: UpdaterOptions): Updater => {
     autoUpdater.setFeedURL({ provider: "generic", url: options.feedUrl });
   }
 
-  autoUpdater.on("checking-for-update", () => apply({ type: "checking" }));
-  autoUpdater.on("update-available", (info) =>
-    apply({ type: "available", version: info.version })
-  );
-  autoUpdater.on("update-not-available", () => apply({ type: "notAvailable" }));
-  autoUpdater.on("download-progress", (progress) =>
-    apply({ percent: progress.percent, type: "progress" })
-  );
-  autoUpdater.on("update-downloaded", (info) =>
-    apply({ type: "downloaded", version: info.version })
-  );
-  autoUpdater.on("error", (error) =>
-    apply({ message: error.message, type: "failed" })
-  );
+  return connectUpdater(
+    {
+      check: () => {
+        autoUpdater.checkForUpdates().catch((): null => null);
+      },
+      install: () => autoUpdater.quitAndInstall(),
+      subscribe: (apply) => {
+        autoUpdater.on("checking-for-update", () =>
+          apply({ type: "checking" })
+        );
+        autoUpdater.on("update-available", (info) =>
+          apply({ type: "available", version: info.version })
+        );
+        autoUpdater.on("update-not-available", () =>
+          apply({ type: "notAvailable" })
+        );
+        autoUpdater.on("download-progress", (progress) =>
+          apply({ percent: progress.percent, type: "progress" })
+        );
+        autoUpdater.on("error", (error) =>
+          apply({ message: error.message, type: "failed" })
+        );
 
-  const check = () => {
-    if (canCheck(state)) {
-      // The error event already carries a failure into the state.
-      autoUpdater.checkForUpdates().catch((): null => null);
-    }
-  };
+        // On macOS electron-updater reports the download before Squirrel stages and validates it,
+        // and quitAndInstall can only install what Squirrel staged.
+        const staged = process.platform === "darwin" ? squirrel : autoUpdater;
 
-  check();
-  setInterval(check, CHECK_EVERY_MS).unref();
-
-  return {
-    check,
-    install: () => autoUpdater.quitAndInstall(),
-    state: () => state,
-  };
+        staged.on("update-downloaded", () => apply({ type: "downloaded" }));
+      },
+    },
+    options.onChange
+  );
 };

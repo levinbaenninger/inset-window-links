@@ -23,7 +23,7 @@ describe(reduceUpdate, () => {
         { type: "available", version: "0.1.901" },
         { percent: 41.7, type: "progress" },
         { percent: 100, type: "progress" },
-        { type: "downloaded", version: "0.1.901" },
+        { type: "downloaded" },
       ])
     ).toStrictEqual({ kind: "ready", version: "0.1.901" });
   });
@@ -48,22 +48,30 @@ describe(reduceUpdate, () => {
     ]);
   });
 
-  it("keeps a downloaded update ready through later checks and failures", () => {
+  it("keeps a downloaded update ready through later checks", () => {
     expect(
       run({ kind: "ready", version: "0.1.901" }, [
         { type: "checking" },
         { type: "notAvailable" },
-        { message: "offline", type: "failed" },
       ])
     ).toStrictEqual({ kind: "ready", version: "0.1.901" });
   });
 
+  it("turns a ready update that fails to install into an error, so the user can check again", () => {
+    expect(
+      run({ kind: "ready", version: "0.1.901" }, [
+        { message: "Code signature did not match", type: "failed" },
+      ])
+    ).toStrictEqual({ kind: "error", message: "Code signature did not match" });
+  });
+
+  it("ignores a finished download it never saw start", () => {
+    expect(run(idle, [{ type: "downloaded" }])).toStrictEqual(idle);
+  });
+
   it("stays off whatever the updater reports", () => {
     expect(
-      run({ kind: "off" }, [
-        { type: "checking" },
-        { type: "downloaded", version: "0.1.901" },
-      ])
+      run({ kind: "off" }, [{ type: "checking" }, { type: "downloaded" }])
     ).toStrictEqual({ kind: "off" });
   });
 
