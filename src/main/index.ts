@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -11,7 +12,6 @@ import {
   shell,
   systemPreferences,
 } from "electron";
-import type { Tray } from "electron";
 
 import type { IconPlace, SettingsView } from "../shared/settings";
 import type { AppMenuActions } from "./app-menu";
@@ -36,19 +36,24 @@ import { startSnoozeClock } from "./snooze-clock";
 import { failingWrites, nodeStoreFs, slowWrites } from "./store/fs";
 import type { CaptureRecord } from "./store/schema";
 import { CaptureStore } from "./store/store";
+import type { UpdateState } from "./update/state";
+import type { Updater } from "./update/updater";
+import { startUpdater, updatesOff } from "./update/updater";
 import { LibraryWindow } from "./windows/library-window";
 import { PopoverWindow } from "./windows/popover-window";
 import { rendererPage } from "./windows/renderer-page";
 import { SettingsWindow } from "./windows/settings-window";
 import { registerCaptureShortcut } from "./windows/shortcut";
+import type { AppTray } from "./windows/tray";
 import { createTray, savedConfirmer } from "./windows/tray";
 
 const e2e = process.env["INSET_E2E"] === "1";
 const e2eUserData = e2e ? process.env["INSET_E2E_USER_DATA"] : undefined;
 
+// Named after the app, so a test build with its own productName keeps its own data.
 app.setPath(
   "userData",
-  e2eUserData ?? path.join(app.getPath("appData"), "Inset Window Links")
+  e2eUserData ?? path.join(app.getPath("appData"), app.getName())
 );
 
 // Matches the installer's shortcut, so Windows names notifications after the app, not Electron.
@@ -56,9 +61,28 @@ if (process.platform === "win32") {
   app.setAppUserModelId("ch.inset.prototype.windowlinks");
 }
 
-/** Every harness launch has a fresh profile, so the first-run window opens there only when asked for. */
 /** Shown notifications, held so they are not collected while on screen, which drops the click. */
 const shownNotifications = new Set<Notification>();
+
+const notify = (
+  content: { title: string; body: string },
+  onClick: () => void
+) => {
+  if (!Notification.isSupported()) {
+    return;
+  }
+
+  const notification = new Notification(content);
+  const release = () => shownNotifications.delete(notification);
+
+  notification.on("click", () => {
+    release();
+    onClick();
+  });
+  notification.on("close", release);
+  shownNotifications.add(notification);
+  notification.show();
+};
 
 /** One notification for everything one sweep woke; clicking it opens the first of them. */
 const announceWoken = (
@@ -67,31 +91,41 @@ const announceWoken = (
 ) => {
   const [first] = woken;
 
-  if (first === undefined || !Notification.isSupported()) {
+  if (first === undefined) {
     return;
   }
 
-  const notification = new Notification({
-    body:
-      woken.length === 1
-        ? "Back from snooze"
-        : woken.map((record) => record.relationship).join("\n"),
-    title:
-      woken.length === 1
-        ? first.relationship
-        : `${woken.length} captures are back from snooze`,
-  });
-
-  const release = () => shownNotifications.delete(notification);
-
-  notification.on("click", () => {
-    release();
-    open(`/captures/${first.id}`);
-  });
-  notification.on("close", release);
-  shownNotifications.add(notification);
-  notification.show();
+  notify(
+    {
+      body:
+        woken.length === 1
+          ? "Back from snooze"
+          : woken.map((record) => record.relationship).join("\n"),
+      title:
+        woken.length === 1
+          ? first.relationship
+          : `${woken.length} captures are back from snooze`,
+    },
+    () => open(`/captures/${first.id}`)
+  );
 };
+
+const updateFeedUrl = process.env["INSET_UPDATE_FEED_URL"];
+
+/**
+ * Only a packaged app updates, and on Windows only one the installer put there: a portable copy
+ * would get the installer's copy instead. Harness runs reach the feed only when given their own.
+ */
+const updatable =
+  app.isPackaged &&
+  (!e2e || updateFeedUrl !== undefined) &&
+  (process.platform !== "win32" ||
+    existsSync(
+      path.join(
+        path.dirname(process.execPath),
+        `Uninstall ${app.getName()}.exe`
+      )
+    ));
 
 const welcomeAllowed = !e2e || process.env["INSET_E2E_WELCOME"] === "1";
 
@@ -221,8 +255,20 @@ const start = async () => {
   );
   await popover.load();
 
+  /** Replaced by the running updater once the menus that show its state exist. */
+  let updater: Updater = updatesOff;
+
+  /** Set by Restart to Update, so the quit that follows installs and reopens the app. */
+  let installOnQuit = false;
+
+  const restartToUpdate = () => {
+    installOnQuit = true;
+    app.quit();
+  };
+
   const actions = {
     addFromWindowList: addWindows,
+    checkForUpdates: () => updater.check(),
     openHome: () => {
       if (session.hasMeaningfulDraft()) {
         showDraft();
@@ -241,16 +287,15 @@ const start = async () => {
         : null,
     pressShortcut: () => session.pressShortcut(),
     quit: () => app.quit(),
+    restartToUpdate,
     showDraft,
   };
 
   const shortcut = registerCaptureShortcut(actions.pressShortcut);
 
-  let appTray: {
-    tray: Tray;
-    menu: Electron.Menu;
-    confirmSaved: (captureId: string) => void;
-  } | null = null;
+  let appTray:
+    | (AppTray & { confirmSaved: (captureId: string) => void })
+    | null = null;
 
   const confirmSaved = (captureId: string) => {
     if (appTray === null) {
@@ -271,7 +316,7 @@ const start = async () => {
     const wantsTray = !mac || place !== "dock";
 
     if (wantsTray && appTray === null) {
-      const created = createTray(actions, shortcut);
+      const created = createTray(actions, shortcut, updater.state());
 
       appTray = {
         ...created,
@@ -291,6 +336,7 @@ const start = async () => {
 
   const menuActions: AppMenuActions = {
     addWindows,
+    checkForUpdates: actions.checkForUpdates,
     closeWindow: () => {
       if (popover.isFocused()) {
         popover.hide();
@@ -306,6 +352,7 @@ const start = async () => {
       void openScreenSettings();
     },
     openSettings,
+    restartToUpdate,
     saveCapture: () => session.saveDraft(),
     setFloatOnTop: (on) => {
       void settings.update({ floatOnTop: on });
@@ -332,6 +379,7 @@ const start = async () => {
           {
             floatOnTop: settings.current().floatOnTop,
             shortcut: shortcut.kind === "registered" ? shortcut.label : null,
+            update: updater.state(),
           },
           menuActions
         )
@@ -400,6 +448,29 @@ const start = async () => {
   refreshAppMenu();
   session.onSaved(confirmSaved);
 
+  const showUpdate = (state: UpdateState, before: UpdateState) => {
+    appTray?.showUpdate(state);
+    refreshAppMenu();
+
+    if (state.kind === "ready" && before.kind !== "ready") {
+      notify(
+        {
+          body: "Click to restart now. Otherwise it installs when you quit.",
+          title: `Inset Window Links ${state.version} is ready`,
+        },
+        restartToUpdate
+      );
+    }
+  };
+
+  if (updatable) {
+    updater = startUpdater({
+      feedUrl: updateFeedUrl,
+      logDir: app.getPath("logs"),
+      onChange: showUpdate,
+    });
+  }
+
   // A click on the Dock icon opens the draft, or Recent Captures when there is none.
   app.on("activate", (_event, hasVisibleWindows) => {
     if (!hasVisibleWindows) {
@@ -417,6 +488,15 @@ const start = async () => {
     if (store.busy) {
       event.preventDefault();
       void store.idle().then(() => app.quit());
+
+      return;
+    }
+
+    // Squirrel relaunches only when asked to install, so Restart to Update hands this quit over.
+    if (installOnQuit && updater.state().kind === "ready") {
+      installOnQuit = false;
+      event.preventDefault();
+      updater.install();
 
       return;
     }
@@ -439,12 +519,15 @@ const start = async () => {
         ...actions,
         diagnostics: () => capturer.diagnostics,
         snapshot: () => session.snapshot(),
+        updateState: () => updater.state(),
         trayBounds: () => appTray?.tray.getBounds() ?? null,
         trayPopUp: () => appTray?.tray.popUpContextMenu(),
         trayMenu: () =>
-          appTray?.menu.items.map((item) =>
-            item.type === "separator" ? "---" : item.label
-          ) ?? [],
+          appTray
+            ?.menu()
+            .items.map((item) =>
+              item.type === "separator" ? "---" : item.label
+            ) ?? [],
       },
     });
   }

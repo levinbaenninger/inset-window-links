@@ -1,0 +1,139 @@
+import type { MenuItemConstructorOptions } from "electron";
+
+export type UpdateState =
+  | { kind: "off" }
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "available"; version: string }
+  | { kind: "downloading"; version: string; percent: number }
+  | { kind: "ready"; version: string }
+  | { kind: "upToDate" }
+  | { kind: "error"; message: string };
+
+export type UpdateEvent =
+  | { type: "checking" }
+  | { type: "available"; version: string }
+  | { type: "notAvailable" }
+  | { type: "progress"; percent: number }
+  | { type: "downloaded" }
+  | { type: "failed"; message: string };
+
+/**
+ * Off never changes. Ready leaves only on a failure, because no check runs while an update waits to
+ * install and a newer build waits for the next launch. Returns the same object when nothing
+ * changed, so menus rebuild only on a real change.
+ */
+export const reduceUpdate = (
+  state: UpdateState,
+  event: UpdateEvent
+): UpdateState => {
+  if (state.kind === "off") {
+    return state;
+  }
+
+  if (state.kind === "ready") {
+    return event.type === "failed"
+      ? { kind: "error", message: event.message }
+      : state;
+  }
+
+  switch (event.type) {
+    case "checking": {
+      return state.kind === "checking" ? state : { kind: "checking" };
+    }
+
+    case "available": {
+      return { kind: "available", version: event.version };
+    }
+
+    case "notAvailable": {
+      return { kind: "upToDate" };
+    }
+
+    case "progress": {
+      if (state.kind !== "available" && state.kind !== "downloading") {
+        return state;
+      }
+
+      const percent = Math.floor(event.percent);
+
+      return state.kind === "downloading" && state.percent === percent
+        ? state
+        : { kind: "downloading", percent, version: state.version };
+    }
+
+    case "downloaded": {
+      return state.kind === "available" || state.kind === "downloading"
+        ? { kind: "ready", version: state.version }
+        : state;
+    }
+
+    case "failed": {
+      return { kind: "error", message: event.message };
+    }
+
+    default: {
+      return state;
+    }
+  }
+};
+
+export const canCheck = (state: UpdateState): boolean =>
+  state.kind === "idle" || state.kind === "upToDate" || state.kind === "error";
+
+const statusLabel = (state: UpdateState): string | null => {
+  switch (state.kind) {
+    case "checking": {
+      return "Checking for Updates…";
+    }
+
+    case "available": {
+      return `Downloading v${state.version}…`;
+    }
+
+    case "downloading": {
+      return `Downloading v${state.version}… ${state.percent}%`;
+    }
+
+    case "upToDate": {
+      return "Up to Date";
+    }
+
+    case "error": {
+      return "Update Failed";
+    }
+
+    default: {
+      return null;
+    }
+  }
+};
+
+export interface UpdateActions {
+  check: () => void;
+  restart: () => void;
+}
+
+export const updateMenuItems = (
+  state: UpdateState,
+  actions: UpdateActions
+): MenuItemConstructorOptions[] => {
+  const status = statusLabel(state);
+
+  return [
+    ...(state.kind === "ready"
+      ? [
+          {
+            click: actions.restart,
+            label: `Restart to Update to v${state.version}`,
+          },
+        ]
+      : []),
+    ...(status === null ? [] : [{ enabled: false, label: status }]),
+    {
+      click: actions.check,
+      enabled: canCheck(state),
+      label: "Check for Updates…",
+    },
+  ];
+};

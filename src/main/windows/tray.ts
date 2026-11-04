@@ -1,7 +1,9 @@
 import type { MenuItemConstructorOptions } from "electron";
-import { Menu, nativeImage, Tray } from "electron";
+import { app, Menu, nativeImage, Tray } from "electron";
 
 import type { ShortcutStatus } from "../../shared/dto";
+import type { UpdateState } from "../update/state";
+import { updateMenuItems } from "../update/state";
 import { trayTile } from "./icon";
 
 /** Two overlapping window outlines, drawn as BGRA so no image asset has to ship. */
@@ -70,12 +72,15 @@ export interface TrayActions {
   /** A left click on Windows: the draft when it holds something, else Recent Captures. */
   openHome: () => void;
   openScreenSettings: (() => void) | null;
+  checkForUpdates: () => void;
+  restartToUpdate: () => void;
   quit: () => void;
 }
 
 const menuFor = (
   actions: TrayActions,
-  shortcut: ShortcutStatus
+  shortcut: ShortcutStatus,
+  update: UpdateState
 ): MenuItemConstructorOptions[] => [
   { click: actions.showDraft, label: "Capture Panel" },
   { click: actions.addFromWindowList, label: "Add Windows…" },
@@ -99,20 +104,29 @@ const menuFor = (
   { type: "separator" },
   { click: actions.openWelcome, label: "How It Works" },
   { click: actions.openSettings, label: "Settings…" },
+  { type: "separator" },
+  { enabled: false, label: `Version ${app.getVersion()}` },
+  ...updateMenuItems(update, {
+    check: actions.checkForUpdates,
+    restart: actions.restartToUpdate,
+  }),
+  { type: "separator" },
   { click: actions.quit, label: "Quit Inset Window Links" },
 ];
 
 export interface AppTray {
   tray: Tray;
-  menu: Menu;
+  menu: () => Menu;
+  showUpdate: (update: UpdateState) => void;
 }
 
 export const createTray = (
   actions: TrayActions,
-  shortcut: ShortcutStatus
+  shortcut: ShortcutStatus,
+  update: UpdateState
 ): AppTray => {
   const tray = new Tray(trayIcon());
-  const menu = Menu.buildFromTemplate(menuFor(actions, shortcut));
+  let menu = Menu.buildFromTemplate(menuFor(actions, shortcut, update));
 
   tray.setToolTip(
     shortcut.kind === "registered"
@@ -126,7 +140,14 @@ export const createTray = (
     tray.on("click", actions.openHome);
   }
 
-  return { menu, tray };
+  return {
+    menu: () => menu,
+    showUpdate: (next) => {
+      menu = Menu.buildFromTemplate(menuFor(actions, shortcut, next));
+      tray.setContextMenu(menu);
+    },
+    tray,
+  };
 };
 
 const SAVED_FOR_MS = 2500;
