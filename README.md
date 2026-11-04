@@ -51,10 +51,12 @@ On Windows, the repository's `.gitattributes` keeps line endings LF, which `pnpm
 ## Package
 
 ```sh
-pnpm package:mac  # dmg and zip for arm64 and x64, ad-hoc signed
+pnpm package:mac  # dmg and zip for arm64 and x64, signed with the shared prototype certificate
 pnpm package:win  # NSIS installer and zip for x64, unsigned
 pnpm package:dir  # unpacked app for the current platform, in release/
 ```
+
+`scripts/sign-mac.mjs` signs every macOS build with the self-signed "Inset Prototype Signing" certificate. Locally it uses `~/Library/Keychains/inset-signing.keychain-db`. In the release workflow, `scripts/import-signing-key.sh` imports the `MAC_SIGNING_P12_BASE64` secret into a temporary keychain. Without either, the build is signed ad hoc and cannot update an installed copy.
 
 ## Verify on the desktop (macOS)
 
@@ -78,7 +80,10 @@ The test windows belong to a separate fixture process. The harness refuses any c
 
 ## Download
 
-- Download macOS and Windows builds from the [Releases page](https://github.com/levinbaenninger/inset-window-links/releases). The **Preview build** prerelease is replaced after each successful release workflow on `main`. These downloads need no login.
+- Download macOS and Windows builds from the [Releases page](https://github.com/levinbaenninger/inset-window-links/releases). The **Preview build** prerelease gets each successful release workflow on `main`. These downloads need no login.
+- Install once, then the app updates itself. It checks the Preview build at launch and every four hours, downloads a newer build in the background, and installs it when you quit. When a build is ready, a notification and the menu-bar menu offer Restart to Update. The menu-bar menu also shows the running version and Check for Updates.
+- Installs of version 0.1.0 cannot update themselves. They are signed ad hoc, and macOS only accepts an update signed like the running app. Replace them once by hand with the current Preview build, as in macOS first run below. Builds after that update on their own.
+- On Windows, only the NSIS installer (`.exe`) updates itself. The portable zip does not, so download a new zip to update it.
 - Every push to `main` and every pull request also builds installers as GitHub Actions artifacts: `inset-window-links-mac-arm64` (Apple silicon), `inset-window-links-mac-x64` (Intel), and `inset-window-links-win-x64`. Downloading artifacts needs a GitHub login. They are kept for 14 days.
 
 ### Publish a versioned release
@@ -91,11 +96,15 @@ The test windows belong to a separate fixture process. The harness refuses any c
    git push origin v0.2.0
    ```
 
-The release workflow checks that the tag matches `version` in `package.json`, then publishes the dmg, zip, and exe files as a versioned release. A mismatch fails before packaging. To rebuild the preview manually, run the Release workflow from GitHub Actions with `main` selected.
+The release workflow checks that the tag matches `version` in `package.json`, then publishes the dmg, zip, exe and update files as a versioned release. A mismatch fails before packaging. To rebuild the preview manually, run the Release workflow from GitHub Actions with `main` selected.
+
+Preview builds from `main` take the major and minor version from `package.json` and the workflow's run number as the patch, for example `0.1.57`. The run number only grows, so every installed preview sees the next one as newer. Installed apps follow the Preview build, also those installed from a versioned release. After a tag such as `v0.2.0`, previews continue at `0.2.<run number>`.
+
+`pnpm verify:update` proves the update loop on a Mac. It builds 0.1.900 and 0.1.901 for arm64, installs 0.1.900 under `~/Library/Caches/inset-update-test/inset-window-links`, serves 0.1.901 on `http://127.0.0.1:8703`, and drives the app through Restart to Update. It checks the new version is installed and relaunched with the same designated requirement, then removes what it created. `INSET_UPDATE_FEED_URL` points any packaged build at another feed.
 
 ### macOS first run
 
-The app is ad-hoc signed and not notarized, so Gatekeeper blocks the first launch.
+The app is signed with a self-signed certificate and not notarized, so Gatekeeper blocks the first launch.
 
 1. Move `Inset Window Links.app` to `/Applications`.
 2. Remove the quarantine flag:
@@ -111,7 +120,9 @@ The app is ad-hoc signed and not notarized, so Gatekeeper blocks the first launc
 5. Choose Reopen app in the panel, or quit from the menu bar and open the app again.
 6. Optional: in Settings, Remember pages and files > Turn on… asks for Accessibility, so Reopen can bring back web pages and files. Browsers such as Safari and Chrome also ask once whether Inset Window Links may read their address.
 
-macOS ties the Screen Recording grant to the exact build of an ad-hoc signed app. After you install a new build, or run `pnpm package:dir` again, the switch can still show as on while macOS refuses capture. Select Inset Window Links in that list, remove it with −, add the new app with +, and reopen it. `tccutil reset ScreenCapture ch.inset.prototype.windowlinks` clears the stale entry from the command line.
+Remove the quarantine flag rather than only using Open. macOS can run a quarantined app from a hidden read-only copy, and that copy cannot replace itself with an update.
+
+Builds signed with the shared certificate keep their Screen Recording and Accessibility grants across updates. A 0.1.0 install was signed ad hoc, and macOS ties its grants to that exact build. After you replace it, or run `pnpm package:dir` again, the switch can still show as on while macOS refuses capture. Select Inset Window Links in that list, remove it with −, add the new app with +, and reopen it. `tccutil reset ScreenCapture ch.inset.prototype.windowlinks` clears the stale entry from the command line.
 
 ### Windows first run
 
