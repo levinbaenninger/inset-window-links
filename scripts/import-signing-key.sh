@@ -19,5 +19,8 @@ security set-keychain-settings -lut 21600 "$keychain"
 security unlock-keychain -p "$password" "$keychain"
 security import "$p12" -k "$keychain" -P "$MAC_SIGNING_P12_PASSWORD" -T /usr/bin/codesign
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+# codesign finds identities only in keychains on the search list, even when given --keychain.
+# shellcheck disable=SC2046
+security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
 
 echo "INSET_SIGNING_KEYCHAIN=$keychain" >>"${GITHUB_ENV:-/dev/stdout}"
