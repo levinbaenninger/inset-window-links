@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { IconButton } from "@/components/icon-button";
 import { libraryApi } from "@/lib/bridge";
-import { formatDateTime, viewTitle } from "@/lib/format";
+import { formatWhen, viewTitle } from "@/lib/format";
 
 import type { CaptureDetail, ViewSummary } from "../../../shared/dto";
 
@@ -170,7 +170,7 @@ export const ImageViewer = ({
             )}
           </p>
           <p className="text-muted-foreground truncate text-xs">
-            {[view.appName, formatDateTime(view.capturedAt)]
+            {[view.appName, formatWhen(view.capturedAt)]
               .filter((part) => part !== null)
               .join(" · ")}
           </p>

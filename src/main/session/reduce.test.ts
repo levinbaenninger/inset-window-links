@@ -102,7 +102,7 @@ const foreignPress: SessionEvent = {
 };
 
 describe("session lifecycle", () => {
-  it("opens Add Windows during a slow capture and ignores that capture's late result", () => {
+  it("opens Add Windows during a slow capture, and that capture still lands in the draft", () => {
     const source = ids();
 
     const capturing = run(source, [
@@ -128,16 +128,178 @@ describe("session lifecycle", () => {
       reason: "menu",
       token: "t3",
     });
-    expect(choosing.state.draft).toStrictEqual(capturing.state.draft);
 
-    const late = run(
+    const landed = run(
       source,
       [captured("t2", view(2, "windows:1180"))],
       choosing.state
     );
 
-    expect(late.state).toBe(choosing.state);
-    expect(late.effects).toStrictEqual([]);
+    expect({
+      activity: landed.state.activity,
+      effects: landed.effects,
+      landing: landed.state.background,
+      text: landed.state.draft.text,
+      titles: landed.state.draft.views.map((v) => v.title),
+    }).toStrictEqual({
+      activity: choosing.state.activity,
+      effects: [{ anchor: { kind: "keep" }, type: "previewPopover" }],
+      landing: [],
+      text: text("Keep my draft"),
+      titles: ["Untitled 1", "Untitled 2"],
+    });
+  });
+
+  it("keeps the overtaken capture through the windows picked from the list", () => {
+    const source = ids();
+
+    const picked = run(source, [
+      foreignPress,
+      { type: "chooserRequested" },
+      {
+        candidates: [
+          {
+            appName: "Mail",
+            id: CANDIDATE,
+            sourceId: "window:2:0",
+            thumb: new Uint8Array([1]),
+            title: "Quote",
+          },
+        ],
+        token: "t2",
+        type: "candidatesReady",
+      },
+      { candidateIds: [CANDIDATE], type: "sourcesChosen" },
+    ]);
+
+    const both = run(
+      source,
+      [
+        {
+          outcome: {
+            kind: "capturedMany",
+            missing: 0,
+            views: [view(3, "w:3")],
+          },
+          token: "t3",
+          type: "captureFinished",
+        },
+        captured("t1", view(1, "w:1")),
+      ],
+      picked.state
+    );
+
+    expect({
+      activity: both.state.activity,
+      landing: both.state.background,
+      titles: both.state.draft.views.map((v) => v.title),
+    }).toStrictEqual({
+      activity: { kind: "idle" },
+      landing: [],
+      titles: ["Untitled 3", "Untitled 1"],
+    });
+  });
+
+  it("lands the overtaken capture after the list is cancelled, and shows what it was capturing", () => {
+    const source = ids();
+
+    const cancelled = run(source, [
+      foreignPress,
+      {
+        near: { height: 10, width: 10, x: 0, y: 0 },
+        source: { appName: "Excel", title: "Budget" },
+        token: "t1",
+        type: "captureIdentified",
+      },
+      { type: "chooserRequested" },
+      { type: "choiceCancelled" },
+    ]);
+
+    expect(cancelled.state.background).toStrictEqual([
+      {
+        pending: { appName: "Excel", title: "Budget" },
+        token: "t1",
+        via: "direct",
+      },
+    ]);
+
+    const landed = run(
+      source,
+      [captured("t1", view(1, "w:1"))],
+      cancelled.state
+    );
+
+    expect(landed.state.draft.views.map((v) => v.title)).toStrictEqual([
+      "Untitled 1",
+    ]);
+  });
+
+  it("waits to save until the overtaken capture has landed, so its window is not lost", () => {
+    const source = ids();
+
+    const waiting = run(source, [
+      foreignPress,
+      { type: "chooserRequested" },
+      { type: "choiceCancelled" },
+      { text: text("A limits B"), type: "saveRequested" },
+    ]);
+
+    expect([waiting.state.activity, waiting.effects]).toStrictEqual([
+      { kind: "idle" },
+      [],
+    ]);
+
+    const saving = run(
+      source,
+      [
+        captured("t1", view(1, "w:1")),
+        { text: text("A limits B"), type: "saveRequested" },
+      ],
+      waiting.state
+    );
+
+    expect(saving.state.activity).toStrictEqual({
+      after: "stay",
+      kind: "saving",
+    });
+  });
+
+  it("drops an overtaken capture with the draft when it is discarded", () => {
+    const source = ids();
+
+    const discarded = run(source, [
+      foreignPress,
+      { type: "chooserRequested" },
+      { type: "discardRequested" },
+    ]);
+
+    const late = run(source, [captured("t1", view(1, "w:1"))], discarded.state);
+
+    expect([late.state, late.effects]).toStrictEqual([discarded.state, []]);
+  });
+
+  it("adds nothing when the overtaken capture finds no window, as the list is already open", () => {
+    const source = ids();
+
+    const choosing = run(source, [foreignPress, { type: "chooserRequested" }]);
+
+    const missed = run(
+      source,
+      [
+        {
+          outcome: { kind: "needsChoice", near: null, reason: "noMatch" },
+          token: "t1",
+          type: "captureFinished",
+        },
+      ],
+      choosing.state
+    );
+
+    expect([
+      missed.state.activity,
+      missed.state.background,
+      missed.effects,
+    ]).toStrictEqual([choosing.state.activity, [], []]);
   });
 
   it("adds a view on a foreign press and shows the popover beside it", () => {

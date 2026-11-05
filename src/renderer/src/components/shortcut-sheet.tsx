@@ -6,6 +6,12 @@ import type { KeyPlatform } from "../../../shared/shortcuts";
 import { SHEET, sheetKeyLabels } from "../../../shared/shortcuts";
 
 /**
+ * The sheet button's icon on both platforms: the ⌘ glyph. Hugeicons' keyboard reads as a face at
+ * any size the header has room for, and the three Inset apps agreed on ⌘ for that case.
+ */
+export { CommandIcon as SHORTCUTS_ICON } from "@hugeicons/core-free-icons";
+
+/**
  * Every key the app answers, grouped by where it works, for the platform it runs on. The keys
  * come from the same table as the menus, so the sheet can't list a key the app doesn't have.
  */

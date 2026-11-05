@@ -135,6 +135,18 @@ if (page === "library") {
 
         return Promise.resolve({ kind: "ok" });
       },
+      setStatus: (captureId, status) => {
+        for (const listed of [...captures, ...items]) {
+          if (listed.id === captureId) {
+            listed.status = status;
+          }
+        }
+
+        record("setStatus", captureId, status);
+        emit("changed");
+
+        return Promise.resolve({ kind: "ok" });
+      },
       setTodoDone: (captureId, todoId, done) => {
         const found = captures
           .find((capture) => capture.id === captureId)

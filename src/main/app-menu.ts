@@ -9,6 +9,11 @@ export const APP_NAME = "Inset Window Links";
 
 export interface AppMenuState {
   floatOnTop: boolean;
+  /**
+   * Whether Recent Captures shows a capture that the Capture menu's Mark as Done, Copy as Text
+   * and Reopen Windows act on. Without one they are greyed out instead of doing nothing.
+   */
+  captureOpen: boolean;
   /** The capture shortcut's label, or null when another app holds it. */
   shortcut: string | null;
   update: UpdateState;
@@ -55,13 +60,18 @@ export interface KeyPress {
   isAutoRepeat: boolean;
 }
 
+const combo = (key: string, alt: boolean, shift: boolean): string =>
+  `ctrl+${alt ? "alt+" : ""}${shift ? "shift+" : ""}${key}`;
+
 /** "Shift+CommandOrControl+N" as "ctrl+shift+n", the form a key press is looked up by. */
 const comboOf = (accelerator: string): string => {
   const parts = accelerator.split("+");
-  const key = (parts.at(-1) ?? "").toLowerCase();
-  const shift = parts.includes("Shift") ? "shift+" : "";
 
-  return `ctrl+${shift}${key}`;
+  return combo(
+    (parts.at(-1) ?? "").toLowerCase(),
+    parts.includes("Alt"),
+    parts.includes("Shift")
+  );
 };
 
 /** The menu's keys on Windows, where Ctrl stands for ⌘. */
@@ -84,20 +94,21 @@ const keyFromCode = (code: string | undefined): string | null => {
 };
 
 /**
- * Windows has no menu bar, so Inset's windows answer the menu's keys themselves. Alt is never
- * part of them: Ctrl+Alt is AltGr on many layouts, and Ctrl+Alt+W is the capture shortcut.
+ * Windows has no menu bar, so Inset's windows answer the menu's keys themselves.
  *
  * The typed character decides first, so a Dvorak or AZERTY user presses the letter the menu
  * names. When it is no plain letter or digit (Cyrillic, Greek, or AZERTY's "&" on the 1 key),
  * the physical key decides. A punctuation key such as "/" matches with or without Shift,
  * because some layouts need Shift to type it (Shift+7 on German keyboards).
+ *
+ * Ctrl+Alt is AltGr on many layouts, so a key with Alt matches only when it types the very letter
+ * the menu names: AltGr+C typing "ć" on a Polish keyboard is left to the page.
  */
 export const keyAction = (press: KeyPress): KeyAction | null => {
   if (
     press.type !== "keyDown" ||
     press.isAutoRepeat ||
     !press.control ||
-    press.alt ||
     press.meta
   ) {
     return null;
@@ -105,10 +116,10 @@ export const keyAction = (press: KeyPress): KeyAction | null => {
 
   const shift = press.shift ? "shift+" : "";
   const key = press.key.toLowerCase();
-  const typed = KEY_ACTIONS.get(`ctrl+${shift}${key}`);
+  const typed = KEY_ACTIONS.get(combo(key, press.alt, press.shift));
 
-  if (typed !== undefined) {
-    return typed;
+  if (typed !== undefined || press.alt) {
+    return typed ?? null;
   }
 
   if (key.length === 1 && !PLAIN_KEY.test(key)) {
@@ -131,10 +142,12 @@ export const keyAction = (press: KeyPress): KeyAction | null => {
 const item = (
   id: MenuKeyId,
   label: string,
-  click: () => void
+  click: () => void,
+  enabled = true
 ): MenuItemConstructorOptions => ({
   accelerator: MENU_KEYS[id].accelerator,
   click,
+  enabled,
   label,
 });
 
@@ -198,12 +211,18 @@ export const appMenuTemplate = (
     label: "Capture",
     submenu: [
       item("focusDescription", "Description", actions.focusDescription),
-      item("setDue", "Due Date…", actions.setDue),
+      item("setDue", "Due…", actions.setDue),
       item("focusSteps", "Next Steps", actions.focusSteps),
       SEPARATOR,
-      item("toggleDone", "Mark as Done", actions.toggleDone),
-      item("copyNote", "Copy as Text", actions.copyNote),
-      item("reopen", "Reopen Windows", actions.reopen),
+      // Space marks a row done in the list; a plain key can't be a Mac menu key without
+      // taking it from every text field, so this item has none.
+      {
+        click: actions.toggleDone,
+        enabled: state.captureOpen,
+        label: "Mark as Done",
+      },
+      item("copyNote", "Copy as Text", actions.copyNote, state.captureOpen),
+      item("reopen", "Reopen Windows", actions.reopen, state.captureOpen),
     ],
   },
   {

@@ -1,6 +1,7 @@
 import {
   AlarmClockIcon,
   Calendar03Icon,
+  CalendarRemove01Icon,
   CheckmarkCircle02Icon,
   Copy01Icon,
   Delete02Icon,
@@ -46,7 +47,7 @@ import {
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import { libraryApi } from "@/lib/bridge";
-import { formatClock, plural } from "@/lib/format";
+import { formatClock, formatPickHint, plural } from "@/lib/format";
 
 import type { MutationOutcome } from "../../../shared/dto";
 import type { DueDate } from "../../../shared/due";
@@ -60,6 +61,7 @@ import type {
   StatusRequest,
 } from "../../../shared/status";
 import { ACTIVE, snoozePresets } from "../../../shared/status";
+import { savePending } from "./inline-saver";
 
 const FEEDBACK_MS = 2000;
 
@@ -71,15 +73,25 @@ interface MenuItem {
   /** Left out inside a submenu, whose trigger carries the icon. */
   icon?: Icon;
   /** Shown at the right of the item, such as when a snooze ends. */
-  hint?: string;
+  hint?: string | undefined;
   destructive?: boolean;
   run: () => Promise<void> | void;
 }
 
+interface Separator {
+  kind: "separator";
+  id: string;
+}
+
 export type MenuEntry =
   | MenuItem
-  | { kind: "submenu"; label: string; icon: Icon; items: readonly MenuItem[] }
-  | { kind: "separator"; id: string };
+  | {
+      kind: "submenu";
+      label: string;
+      icon: Icon;
+      items: readonly (MenuItem | Separator)[];
+    }
+  | Separator;
 
 export interface CaptureTarget {
   id: CaptureId;
@@ -87,6 +99,12 @@ export interface CaptureTarget {
   due: DueDate | null;
   /** The windows Reopen can bring back. */
   reopenable: readonly ViewId[];
+  /**
+   * Where the menu opens: on a row of the list, or on the open capture's own page. The menu keys
+   * act on the open capture only, and Space on the row in focus, so a hint shows only where its
+   * key does what the item does.
+   */
+  from: "row" | "openRow" | "page";
 }
 
 /** "Opened 3 windows", or how many could not be. */
@@ -125,20 +143,12 @@ const presetHint = (preset: SnoozePreset): string => {
   const clock = formatClock(preset.until.toISOString());
 
   return preset.id === "nextWeek"
-    ? `${preset.until.toLocaleDateString([], { weekday: "short" })} ${clock}`
+    ? `${preset.until.toLocaleDateString(undefined, { weekday: "short" })} ${clock}`
     : clock;
 };
 
 /** The menu key that does the same to the open capture. */
 const keys = (id: MenuKeyId) => menuKeyLabel(id, libraryApi().platform);
-
-/** "Fri 7 Nov", beside a due preset. */
-const dueHint = (due: DueDate) =>
-  dueDay(due).toLocaleDateString([], {
-    day: "numeric",
-    month: "short",
-    weekday: "short",
-  });
 
 /**
  * Everything that can be done to one capture, once: the right-click menu in the sidebar and the
@@ -188,16 +198,24 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     say(outcomeMessage(await libraryApi().setDue(target.id, due)));
   };
 
+  /** The page's keys act on the open capture, so its menu, and its row's, show them. */
+  const onOpen = target.from !== "row";
+
+  const hint = (id: MenuKeyId) => (onOpen ? keys(id) : undefined);
+
+  // The same layout as the Due picker: quick days with their dates, then Pick a date… and Clear.
   const dueMenu: MenuEntry = {
     icon: Calendar03Icon,
     items: [
       ...duePresets(now).map((preset) => ({
-        hint: dueHint(preset.due),
+        hint: formatPickHint(dueDay(preset.due), now),
         kind: "item" as const,
         label: preset.label,
         run: () => setDue(preset.due),
       })),
+      { id: "pick", kind: "separator" },
       {
+        icon: Calendar03Icon,
         kind: "item",
         label: "Pick a date…",
         run: () => setPickingDue(true),
@@ -207,14 +225,15 @@ export const useCaptureCommands = (target: CaptureTarget) => {
         : [
             {
               destructive: true,
+              icon: CalendarRemove01Icon,
               kind: "item" as const,
-              label: "Clear due date",
+              label: "Clear",
               run: () => setDue(null),
             },
           ]),
     ],
     kind: "submenu",
-    label: target.due === null ? "Due" : "Change due date",
+    label: "Due",
   };
 
   const snooze: MenuEntry = {
@@ -230,8 +249,11 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     label: status.kind === "snoozed" ? "Snooze again" : "Snooze",
   };
 
+  // Space on a row marks it done, or takes a done one back; a snoozed one it marks done.
+  const space = target.from === "page" ? undefined : "Space";
+
   const done: MenuItem = {
-    hint: keys("toggleDone"),
+    hint: status.kind === "done" ? undefined : space,
     icon: CheckmarkCircle02Icon,
     kind: "item",
     label: "Mark as done",
@@ -239,16 +261,12 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   };
 
   const backToList: MenuItem = {
+    hint: status.kind === "done" ? space : undefined,
     icon: Undo02Icon,
     kind: "item",
     label: status.kind === "done" ? "Not done" : "Unsnooze",
     run: () => setStatus(ACTIVE),
   };
-
-  // ⌘K takes a done capture back; a snoozed one it marks done.
-  if (status.kind === "done") {
-    backToList.hint = keys("toggleDone");
-  }
 
   const byStatus: Record<CaptureStatus["kind"], readonly MenuEntry[]> = {
     active: [snooze, done],
@@ -257,11 +275,13 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   };
 
   const copy: MenuItem = {
-    hint: keys("copyNote"),
+    hint: hint("copyNote"),
     icon: Copy01Icon,
     kind: "item",
     label: "Copy as text",
     run: async () => {
+      // What is still being typed goes first, so the copy matches the screen.
+      await savePending(target.id);
       await libraryApi().copyNote(target.id);
       say("Copied");
     },
@@ -271,7 +291,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     ...(target.reopenable.length > 0
       ? [
           {
-            hint: keys("reopen"),
+            hint: hint("reopen"),
             icon: RepeatIcon,
             kind: "item" as const,
             label:
@@ -305,15 +325,14 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     <>
       <Dialog open={pickingDue} onOpenChange={setPickingDue}>
         <DialogContent className="w-72">
-          <div className="p-2">
-            <header className="px-2 pt-2 pb-3">
-              <DialogTitle>Due date</DialogTitle>
-              <DialogDescription>
-                When should this capture be done by?
-              </DialogDescription>
-            </header>
+          <div className="p-1.5">
+            <DialogTitle className="sr-only">Due</DialogTitle>
+            <DialogDescription className="sr-only">
+              When should this capture be done by?
+            </DialogDescription>
             <DueOptions
               due={target.due}
+              keys={keys("setDue")}
               now={now}
               onClose={() => setPickingDue(false)}
               onPick={(due) => {
@@ -415,7 +434,13 @@ export const MenuEntries = ({
               {entry.label}
             </SubTrigger>
             <SubContent>
-              {entry.items.map((item) => renderItem(parts, item))}
+              {entry.items.map((item) =>
+                item.kind === "separator" ? (
+                  <Separator key={item.id} />
+                ) : (
+                  renderItem(parts, item)
+                )
+              )}
             </SubContent>
           </Sub>
         );

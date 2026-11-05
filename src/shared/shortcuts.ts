@@ -23,7 +23,6 @@ export const MENU_ACTIONS = [
   "saveCapture",
   "setDue",
   "showShortcuts",
-  "toggleDone",
   "toggleSidebar",
 ] as const;
 
@@ -42,7 +41,7 @@ export const MENU_KEYS = {
   addWindows: { accelerator: "Shift+CommandOrControl+N", action: "addWindows" },
   capturePanel: { accelerator: "CommandOrControl+1", action: "newCapture" },
   closeWindow: { accelerator: "CommandOrControl+W", action: "closeWindow" },
-  copyNote: { accelerator: "Shift+CommandOrControl+C", action: "copyNote" },
+  copyNote: { accelerator: "Alt+CommandOrControl+C", action: "copyNote" },
   find: { accelerator: "CommandOrControl+F", action: "find" },
   focusDescription: {
     accelerator: "CommandOrControl+D",
@@ -56,7 +55,6 @@ export const MENU_KEYS = {
   saveCapture: { accelerator: "CommandOrControl+S", action: "saveCapture" },
   setDue: { accelerator: "Shift+CommandOrControl+D", action: "setDue" },
   showShortcuts: { accelerator: "CommandOrControl+/", action: "showShortcuts" },
-  toggleDone: { accelerator: "CommandOrControl+K", action: "toggleDone" },
   toggleSidebar: {
     accelerator: "Control+Command+S",
     action: "toggleSidebar",
@@ -182,30 +180,60 @@ const page = (macos: string, windows: string = macos): SheetKeys => ({
   windows,
 });
 
-/** Every key, grouped by where it works. A test checks that every menu key is here. */
+/**
+ * Every key, grouped by what it is for, in the section order all three Inset apps use: Capture,
+ * Navigate, Edit, Fields, then Window. Window Links has no pins. A test checks that every menu
+ * key is here.
+ */
 export const SHEET: readonly SheetGroup[] = [
   {
-    rows: [{ keys: [{ kind: "global" }], label: "Add the window in front" }],
-    title: "From any app",
-    where: "Works while another app is in front",
-  },
-  {
     rows: [
+      {
+        keys: [{ kind: "global" }],
+        label: "Add the window in front, from any app",
+      },
       {
         keys: [menu("newCapture"), menu("capturePanel")],
         label: "Show the capture panel",
       },
       { keys: [menu("addWindows")], label: "Pick windows from a list" },
+      { keys: [page("⌘A", "Ctrl+A")], label: "Pick every window in the list" },
+      { keys: [page("⌘↵", "Ctrl+Enter")], label: "Add the picked windows" },
       { keys: [page("⌘↵", "Ctrl+Enter"), menu("saveCapture")], label: "Save" },
       { keys: [page("Esc")], label: "Hide the panel, keeping the draft" },
     ],
-    title: "Capture panel",
-    where: "While an Inset window is in front",
+    title: "Capture",
+    where: "The panel and the window list",
+  },
+  {
+    rows: [
+      { keys: [menu("openRecent")], label: "Recent Captures" },
+      { keys: [menu("find")], label: "Search, or due:today" },
+      { keys: [menu("toggleSidebar")], label: "Show or hide the sidebar" },
+      { keys: [page("←"), page("→")], label: "Previous or next image" },
+      { keys: [page("Z")], label: "Image at actual size or to fit" },
+      { keys: [page("Esc")], label: "Back from the image" },
+    ],
+    title: "Navigate",
+    where: "In Recent Captures",
+  },
+  {
+    rows: [
+      {
+        keys: [page("Space")],
+        label: "Mark the row done, or not done",
+      },
+      { keys: [page("⌘C", "Ctrl+C")], label: "Copy the title and description" },
+      { keys: [menu("copyNote")], label: "Copy as text, with every detail" },
+      { keys: [menu("reopen")], label: "Reopen the windows" },
+    ],
+    title: "Edit",
+    where: "On the open capture or the row in focus",
   },
   {
     rows: [
       { keys: [menu("focusDescription")], label: "Description" },
-      { keys: [menu("setDue")], label: "Due date" },
+      { keys: [menu("setDue")], label: "Due" },
       { keys: [menu("focusSteps")], label: "Next steps" },
       {
         keys: [page("↵", "Enter")],
@@ -221,40 +249,14 @@ export const SHEET: readonly SheetGroup[] = [
   },
   {
     rows: [
-      { keys: [menu("openRecent")], label: "Recent Captures" },
-      { keys: [menu("find")], label: "Search" },
-      { keys: [menu("toggleSidebar")], label: "Show or hide the sidebar" },
-      {
-        keys: [menu("toggleDone")],
-        label: "Mark as done, or back to the list",
-      },
-      { keys: [menu("copyNote")], label: "Copy as text" },
-      { keys: [menu("reopen")], label: "Reopen the windows" },
-    ],
-    title: "Recent Captures",
-    where: "On the open capture",
-  },
-  {
-    rows: [
-      { keys: [page("⌘A", "Ctrl+A")], label: "Pick every window" },
-      { keys: [page("⌘↵", "Ctrl+Enter")], label: "Add the picked windows" },
-      { keys: [page("←"), page("→")], label: "Previous or next image" },
-      { keys: [page("Z")], label: "Actual size or fit" },
-      { keys: [page("Esc")], label: "Back" },
-    ],
-    title: "Window list and image view",
-    where: "While they are open",
-  },
-  {
-    rows: [
-      { keys: [menu("showShortcuts")], label: "Keyboard shortcuts" },
+      { keys: [menu("showShortcuts")], label: "Keyboard Shortcuts" },
       { keys: [menu("openSettings")], label: "Settings" },
       {
         keys: [menu("closeWindow")],
         label: "Close the window or hide the panel",
       },
     ],
-    title: "App",
+    title: "Window",
     where: "In any Inset window",
   },
 ];

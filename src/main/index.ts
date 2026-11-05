@@ -407,6 +407,7 @@ const start = async () => {
       Menu.buildFromTemplate(
         appMenuTemplate(
           {
+            captureOpen: library.showsCapture() && !popover.isFocused(),
             floatOnTop: settings.current().floatOnTop,
             shortcut: shortcut.kind === "registered" ? shortcut.label : null,
             update: updater.state(),
@@ -509,6 +510,10 @@ const start = async () => {
   });
   // Accessibility can be turned on in System Settings while the window is open.
   app.on("browser-window-focus", pushSettings);
+  // The Capture menu's items for an open capture follow Recent Captures' page and the panel's focus.
+  library.onRouteChange(refreshAppMenu);
+  app.on("browser-window-focus", refreshAppMenu);
+  app.on("browser-window-blur", refreshAppMenu);
 
   // Opening the app again, from the Start menu or a shortcut, is how a lost tray icon gets found.
   app.on("second-instance", actions.openHome);

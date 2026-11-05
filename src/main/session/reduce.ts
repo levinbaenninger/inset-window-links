@@ -10,6 +10,9 @@ import {
 } from "../../shared/text";
 import type {
   Activity,
+  BackgroundCapture,
+  CapturedView,
+  CaptureOutcome,
   CaptureToken,
   Draft,
   Exit,
@@ -34,6 +37,7 @@ const freshDraft = (id: DraftId): Draft => ({ id, text: blankText, views: [] });
 
 export const initialSession = (id: DraftId): SessionState => ({
   activity: { kind: "idle" },
+  background: [],
   draft: freshDraft(id),
   notice: null,
 });
@@ -74,11 +78,79 @@ const restart = (ids: IdSource, effect: SessionEffect): Transition => [
   [effect],
 ];
 
+const withViews = (
+  state: SessionState,
+  views: readonly CapturedView[]
+): SessionState => ({
+  ...state,
+  draft: { ...state.draft, views: [...state.draft.views, ...views] },
+});
+
+/**
+ * A capture that Add Windows overtook lands in the draft as it would have, but quietly: the
+ * chooser or the text being typed keeps focus. A hidden panel shows without taking focus, so the
+ * window is seen to arrive. One that could not find its window adds nothing, since the user is
+ * already picking from the list.
+ */
+const onBackgroundFinished = (
+  state: SessionState,
+  entry: BackgroundCapture,
+  outcome: CaptureOutcome
+): Transition => {
+  const rest: SessionState = {
+    ...state,
+    background: state.background.filter((item) => item !== entry),
+  };
+
+  const shown: readonly SessionEffect[] = [
+    { anchor: { kind: "keep" }, type: "previewPopover" },
+  ];
+
+  switch (outcome.kind) {
+    case "captured": {
+      return [withViews(rest, [outcome.view]), shown];
+    }
+
+    case "capturedMany": {
+      const added = withViews(rest, outcome.views);
+
+      return [
+        outcome.missing > 0
+          ? { ...added, notice: { kind: "sourceVanished" } }
+          : added,
+        outcome.views.length > 0 ? shown : [],
+      ];
+    }
+
+    case "permissionDenied": {
+      return [
+        { ...rest, notice: { kind: "permissionDenied", stillDenied: false } },
+        shown,
+      ];
+    }
+
+    case "needsChoice": {
+      return entry.via === "chosen"
+        ? [{ ...rest, notice: { kind: "sourceVanished" } }, shown]
+        : unchanged(rest);
+    }
+
+    default: {
+      return unchanged(rest);
+    }
+  }
+};
+
 const onCaptureFinished = (
   state: SessionState,
   event: EventOf<"captureFinished">
 ): Transition => {
   const { activity } = state;
+  const behind = state.background.find((item) => item.token === event.token);
+
+  if (behind !== undefined) {
+    return onBackgroundFinished(state, behind, event.outcome);
+  }
 
   if (activity.kind !== "capturing" || activity.token !== event.token) {
     return unchanged(state);
@@ -299,6 +371,18 @@ const onCaptureIdentified = (
 ): Transition => {
   const { activity } = state;
 
+  if (state.background.some((item) => item.token === event.token)) {
+    return [
+      {
+        ...state,
+        background: state.background.map((item) =>
+          item.token === event.token ? { ...item, pending: event.source } : item
+        ),
+      },
+      [],
+    ];
+  }
+
   if (activity.kind !== "capturing" || activity.token !== event.token) {
     return unchanged(state);
   }
@@ -336,8 +420,14 @@ const onShowDraft = (state: SessionState): Transition =>
       ]
     : unchanged(state);
 
+/**
+ * Add Windows opens at once, also while a window is still being captured: that capture carries on
+ * behind the list and lands in the draft when it is done, so neither key press is lost.
+ */
 const onChooserRequested = (state: SessionState, ids: IdSource): Transition => {
-  if (!canEditDraft(state.activity) && state.activity.kind !== "capturing") {
+  const { activity } = state;
+
+  if (!canEditDraft(activity) && activity.kind !== "capturing") {
     return unchanged(state);
   }
 
@@ -346,6 +436,17 @@ const onChooserRequested = (state: SessionState, ids: IdSource): Transition => {
   return [
     {
       ...state,
+      background:
+        activity.kind === "capturing"
+          ? [
+              ...state.background,
+              {
+                pending: activity.pending,
+                token: activity.token,
+                via: activity.via,
+              },
+            ]
+          : state.background,
       activity: {
         candidates: "loading",
         kind: "choosing",
@@ -441,11 +542,12 @@ const onTextChanged = (
     : [next, []];
 };
 
+/** A window still landing would be lost to a save, so Save waits for it; the panel says so. */
 const onSaveRequested = (
   state: SessionState,
   event: EventOf<"saveRequested">
 ): Transition => {
-  if (!isResumable(state.activity)) {
+  if (!isResumable(state.activity) || state.background.length > 0) {
     return unchanged(state);
   }
 

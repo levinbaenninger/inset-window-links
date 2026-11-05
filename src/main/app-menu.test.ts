@@ -39,7 +39,12 @@ const items = (menu: MenuItemConstructorOptions[]) =>
 
 describe(appMenuTemplate, () => {
   const menu = appMenuTemplate(
-    { floatOnTop: true, shortcut: "⌥⌘W", update: { kind: "upToDate" } },
+    {
+      captureOpen: true,
+      floatOnTop: true,
+      shortcut: "⌥⌘W",
+      update: { kind: "upToDate" },
+    },
     actions()
   );
 
@@ -89,7 +94,12 @@ describe(appMenuTemplate, () => {
     );
 
     const taken = appMenuTemplate(
-      { floatOnTop: false, shortcut: null, update: { kind: "off" } },
+      {
+        captureOpen: true,
+        floatOnTop: false,
+        shortcut: null,
+        update: { kind: "off" },
+      },
       actions()
     );
 
@@ -103,10 +113,48 @@ describe(appMenuTemplate, () => {
   });
 });
 
+/** Each Capture menu item's label and whether it is enabled. */
+const captureItems = (captureOpen: boolean) => {
+  const capture = appMenuTemplate(
+    { captureOpen, floatOnTop: true, shortcut: null, update: { kind: "off" } },
+    actions()
+  ).find((top) => top.label === "Capture");
+
+  return Object.fromEntries(
+    (Array.isArray(capture?.submenu) ? capture.submenu : [])
+      .filter((item) => item.label !== undefined)
+      .map((item) => [item.label, item.enabled])
+  );
+};
+
+describe("the Capture menu", () => {
+  it("greys out what acts on an open capture while Recent Captures shows none", () => {
+    expect([captureItems(false), captureItems(true)]).toStrictEqual([
+      {
+        "Copy as Text": false,
+        Description: true,
+        "Due…": true,
+        "Mark as Done": false,
+        "Next Steps": true,
+        "Reopen Windows": false,
+      },
+      {
+        "Copy as Text": true,
+        Description: true,
+        "Due…": true,
+        "Mark as Done": true,
+        "Next Steps": true,
+        "Reopen Windows": true,
+      },
+    ]);
+  });
+});
+
 describe("the app menu's update items", () => {
   it("sit under About, with the restart once an update is ready", () => {
     const [appItems] = appMenuTemplate(
       {
+        captureOpen: true,
         floatOnTop: true,
         shortcut: null,
         update: { kind: "ready", version: "0.1.901" },
@@ -158,7 +206,12 @@ describe(keyAction, () => {
 
     const answered = items(
       appMenuTemplate(
-        { floatOnTop: true, shortcut: null, update: { kind: "off" } },
+        {
+          captureOpen: true,
+          floatOnTop: true,
+          shortcut: null,
+          update: { kind: "off" },
+        },
         all
       )
     )
@@ -186,7 +239,12 @@ describe(keyAction, () => {
 
   it("puts every key of the table in a menu", () => {
     const menu = appMenuTemplate(
-      { floatOnTop: true, shortcut: null, update: { kind: "off" } },
+      {
+        captureOpen: true,
+        floatOnTop: true,
+        shortcut: null,
+        update: { kind: "off" },
+      },
       actions()
     );
 
@@ -267,19 +325,32 @@ describe(keyAction, () => {
     ]);
   });
 
-  it("leaves editing keys, AltGr, repeats and key-ups to the page", () => {
+  it("reads Ctrl+Alt+C as Copy as Text only when the key types C, so AltGr letters still type", () => {
+    expect([
+      keyAction(pressFor("Alt+CommandOrControl+C")),
+      keyAction({ ...pressFor("Alt+CommandOrControl+C"), key: "C" }),
+      // Polish: AltGr+C types ć.
+      keyAction({ ...pressFor("Alt+CommandOrControl+C"), key: "ć" }),
+      // Czech: AltGr+C types &.
+      keyAction({ ...pressFor("Alt+CommandOrControl+C"), key: "&" }),
+      keyAction({ ...pressFor("Alt+CommandOrControl+N"), key: "n" }),
+    ]).toStrictEqual(["copyNote", "copyNote", null, null, null]);
+  });
+
+  it("leaves editing keys, the capture shortcut, repeats and key-ups to the page", () => {
     expect([
       keyAction(pressFor("CommandOrControl+A")),
       keyAction(pressFor("CommandOrControl+C")),
       keyAction(pressFor("CommandOrControl+V")),
       keyAction(pressFor("CommandOrControl+Z")),
+      keyAction(pressFor("CommandOrControl+K")),
       keyAction(pressFor("CommandOrControl+Enter")),
       keyAction(pressFor("Alt+CommandOrControl+W")),
       keyAction({ ...pressFor("CommandOrControl+N"), isAutoRepeat: true }),
       keyAction({ ...pressFor("CommandOrControl+N"), type: "keyUp" }),
       keyAction({ ...pressFor("CommandOrControl+N"), control: false }),
       keyAction({ ...pressFor("CommandOrControl+N"), meta: true }),
-    ]).toStrictEqual(Array.from({ length: 10 }, () => null));
+    ]).toStrictEqual(Array.from({ length: 11 }, () => null));
   });
 });
 
@@ -313,6 +384,16 @@ describe("the key table", () => {
     ).toStrictEqual([]);
   });
 
+  it("lists the sections in the order every Inset app uses", () => {
+    expect(SHEET.map((group) => group.title)).toStrictEqual([
+      "Capture",
+      "Navigate",
+      "Edit",
+      "Fields",
+      "Window",
+    ]);
+  });
+
   it("lists every menu key in the Keyboard Shortcuts sheet", () => {
     const listed = new Set(
       SHEET.flatMap((group) =>
@@ -333,6 +414,17 @@ describe("the key table", () => {
       keyLabel("Control+B", "windows"),
       keyLabel("CommandOrControl+/", "windows"),
       keyLabel("CommandOrControl+Enter", "macos"),
-    ]).toStrictEqual(["⇧⌘N", "Ctrl+Shift+N", "⌃⌘S", "Ctrl+B", "Ctrl+/", "⌘↵"]);
+      keyLabel("Alt+CommandOrControl+C", "macos"),
+      keyLabel("Alt+CommandOrControl+C", "windows"),
+    ]).toStrictEqual([
+      "⇧⌘N",
+      "Ctrl+Shift+N",
+      "⌃⌘S",
+      "Ctrl+B",
+      "Ctrl+/",
+      "⌘↵",
+      "⌥⌘C",
+      "Ctrl+Alt+C",
+    ]);
   });
 });

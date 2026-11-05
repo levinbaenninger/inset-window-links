@@ -4,6 +4,7 @@ import { pushChannels } from "../../shared/channels";
 import type { PageCommand } from "../../shared/shortcuts";
 import { cursorWorkArea } from "./cursor-display";
 import { windowIcon } from "./icon";
+import { routeShowsCapture } from "./library-route";
 import { centerIn } from "./placement";
 import type { RendererPage } from "./renderer-page";
 import { securePreferences } from "./renderer-page";
@@ -45,6 +46,7 @@ export class LibraryWindow {
   /** An open request that arrived while the previous window was still being torn down. */
   #reopen: { route: string | undefined } | null = null;
   #closing = false;
+  readonly #routeListeners = new Set<() => void>();
   /**
    * The page of the latest window, kept while it closes: its last save is sent from pagehide,
    * after close has begun. A closed page sends nothing more, so it is trusted until replaced.
@@ -122,6 +124,8 @@ export class LibraryWindow {
     }
 
     win.once("ready-to-show", () => win.show());
+    win.webContents.on("did-navigate-in-page", () => this.#routeChanged());
+    win.webContents.on("did-finish-load", () => this.#routeChanged());
     win.on("close", () => {
       this.#closing = true;
     });
@@ -129,6 +133,7 @@ export class LibraryWindow {
       if (this.#win === win) {
         this.#win = null;
         this.#closing = false;
+        this.#routeChanged();
       }
 
       const pending = this.#reopen;
@@ -157,6 +162,24 @@ export class LibraryWindow {
 
   isFocused(): boolean {
     return this.window()?.isFocused() ?? false;
+  }
+
+  /** Whether the window shows a capture's page, which the Capture menu's capture items act on. */
+  showsCapture(): boolean {
+    const win = this.window();
+
+    return win !== null && routeShowsCapture(win.webContents.getURL());
+  }
+
+  /** Runs when the window opens, closes, or moves to another page. */
+  onRouteChange(listener: () => void): void {
+    this.#routeListeners.add(listener);
+  }
+
+  #routeChanged() {
+    for (const listener of this.#routeListeners) {
+      listener();
+    }
   }
 
   notifyChanged(): void {

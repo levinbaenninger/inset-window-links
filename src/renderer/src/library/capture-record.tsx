@@ -2,7 +2,6 @@ import {
   CheckmarkCircle02Icon,
   Copy01Icon,
   MoreHorizontalIcon,
-  NoteEditIcon,
   Undo02Icon,
   File01Icon,
   Globe02Icon,
@@ -12,6 +11,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { getRouteApi, Link } from "@tanstack/react-router";
+import { cn } from "cn";
 import {
   useEffect,
   useMemo,
@@ -23,6 +23,10 @@ import type { KeyboardEvent } from "react";
 
 import { AddChips } from "@/components/add-chips";
 import type { AddField } from "@/components/add-chips";
+import {
+  DescribeButton,
+  WINDOW_DESCRIPTION_PLACEHOLDER,
+} from "@/components/describe-button";
 import { DueChip, DueOptions, useToday } from "@/components/due";
 import { IconButton } from "@/components/icon-button";
 import { TodoEditor } from "@/components/todo-editor";
@@ -41,7 +45,7 @@ import {
 } from "@/components/ui/popover";
 import { libraryApi } from "@/lib/bridge";
 import { useCommands } from "@/lib/commands";
-import { formatDateTime, formatWhen, viewTitle } from "@/lib/format";
+import { formatWhen, viewTitle } from "@/lib/format";
 
 import type {
   CaptureDetail,
@@ -64,8 +68,9 @@ import {
   reopenedMessage,
   useCaptureCommands,
 } from "./capture-commands";
+import { entryText } from "./copy-keys";
 import { ImageViewer } from "./image-viewer";
-import { InlineSaver } from "./inline-saver";
+import { InlineSaver, trackSaver } from "./inline-saver";
 import { PaneHeader } from "./pane-header";
 
 const route = getRouteApi("/captures/$captureId");
@@ -148,6 +153,10 @@ const CopyImage = ({
   );
 };
 
+/** A field being edited gets a quiet tint, so the keyboard's place shows without a frame. */
+const FIELD =
+  "focus:bg-foreground/4 -mx-1.5 rounded-md px-1.5 transition-colors";
+
 /** Escape leaves a field, which saves it. */
 const fieldKeys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
   if (event.key === "Escape" && !event.nativeEvent.isComposing) {
@@ -158,8 +167,8 @@ const fieldKeys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
 
 /**
  * A window as a card: its image opens the viewer, its origin opens the window again. Its
- * description sits under the title once there is one; until then a button on the title row
- * adds it, so an undescribed window takes no extra room.
+ * description sits under the title; until there is one, a quiet "+ Description" under the title
+ * adds it.
  */
 const SourceCard = ({
   captureId,
@@ -181,6 +190,7 @@ const SourceCard = ({
   const field = useRef<HTMLTextAreaElement>(null);
   const [adding, setAdding] = useState(false);
   const shown = adding || description !== "";
+  const name = `window ${index + 1}, ${viewTitle(view.title)}`;
 
   return (
     <li
@@ -189,7 +199,7 @@ const SourceCard = ({
     >
       <div className="relative">
         <Link
-          aria-label={`Open window ${index + 1}, ${viewTitle(view.title)}, at readable size`}
+          aria-label={`Open ${name}, at readable size`}
           className="bg-muted border-foreground/10 focus-visible:ring-ring/50 hover:border-foreground/25 block overflow-hidden rounded-lg border outline-none focus-visible:ring-3"
           onDragStart={(event) => {
             event.preventDefault();
@@ -229,26 +239,14 @@ const SourceCard = ({
             title={viewTitle(view.title)}
           />
         )}
-        {!shown && (
-          <button
-            aria-label={`Add a description of window ${index + 1}, ${viewTitle(view.title)}`}
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 grid size-6 shrink-0 place-items-center rounded-sm opacity-0 outline-none group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:ring-3"
-            data-testid="describe-window"
-            onClick={() => {
-              setAdding(true);
-              requestAnimationFrame(() => field.current?.focus());
-            }}
-            title="Describe this window"
-            type="button"
-          >
-            <HugeiconsIcon icon={NoteEditIcon} size={14} />
-          </button>
-        )}
       </div>
-      {shown && (
+      {shown ? (
         <textarea
-          aria-label={`Description of window ${index + 1}, ${viewTitle(view.title)}`}
-          className="placeholder:text-muted-foreground text-muted-foreground focus:text-foreground -mt-1 field-sizing-content resize-none bg-transparent px-0.5 text-sm leading-relaxed outline-none"
+          aria-label={`Description of ${name}`}
+          className={cn(
+            FIELD,
+            "placeholder:text-muted-foreground text-muted-foreground focus:text-foreground -mt-1 field-sizing-content resize-none bg-transparent text-sm leading-relaxed outline-none"
+          )}
           data-testid="window-description"
           maxLength={MAX_VIEW_DESCRIPTION}
           onBlur={() => {
@@ -257,10 +255,20 @@ const SourceCard = ({
           }}
           onChange={(event) => onDescribe(event.target.value)}
           onKeyDown={fieldKeys}
-          placeholder="What matters in this window?"
+          placeholder={WINDOW_DESCRIPTION_PLACEHOLDER}
           ref={field}
           rows={1}
           value={description}
+        />
+      ) : (
+        <DescribeButton
+          className="-mt-1.5"
+          description={description}
+          label={name}
+          onClick={() => {
+            setAdding(true);
+            requestAnimationFrame(() => field.current?.focus());
+          }}
         />
       )}
     </li>
@@ -368,6 +376,7 @@ const Record = ({
 
   const commands = useCaptureCommands({
     due,
+    from: "page",
     id: detail.id,
     reopenable: reopenable.map((view) => view.id),
     status: detail.status,
@@ -507,7 +516,7 @@ const Record = ({
           {formatWhen(detail.createdAt)}
           {detail.updatedAt === detail.createdAt
             ? ""
-            : ` · edited ${formatDateTime(detail.updatedAt)}`}
+            : ` · edited ${formatWhen(detail.updatedAt)}`}
           <StatusNote status={detail.status} />
         </p>
         {shown !== null && (
@@ -517,7 +526,6 @@ const Record = ({
         )}
         <IconButton
           icon={isDone ? Undo02Icon : CheckmarkCircle02Icon}
-          keys={menuKeyLabel("toggleDone", platform)}
           label={isDone ? "Not done" : "Mark as done"}
           onClick={() =>
             isDone ? commands.backToList.run() : commands.done.run()
@@ -546,14 +554,20 @@ const Record = ({
           </Button>
         )}
       </PaneHeader>
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      <main
+        className="min-h-0 flex-1 overflow-y-auto"
+        data-copy={entryText(text.relationship, text.description)}
+      >
         <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 pt-2 pb-10">
           <div className="flex flex-col gap-2">
             <div className="flex flex-col gap-1">
               {/* Leaving a field saves at once instead of after the pause. */}
               <textarea
                 aria-label={TITLE_PLACEHOLDER}
-                className="placeholder:text-muted-foreground field-sizing-content resize-none bg-transparent text-xl leading-snug font-semibold text-pretty outline-none"
+                className={cn(
+                  FIELD,
+                  "placeholder:text-muted-foreground field-sizing-content resize-none bg-transparent text-xl leading-snug font-semibold text-pretty outline-none"
+                )}
                 data-testid="record-relationship"
                 id="record-title"
                 maxLength={MAX_RELATIONSHIP}
@@ -601,7 +615,10 @@ const Record = ({
               {showDescription && (
                 <textarea
                   aria-label="Description"
-                  className="placeholder:text-muted-foreground field-sizing-content resize-none bg-transparent text-sm leading-relaxed outline-none"
+                  className={cn(
+                    FIELD,
+                    "placeholder:text-muted-foreground field-sizing-content resize-none bg-transparent text-sm leading-relaxed outline-none"
+                  )}
                   data-testid="description"
                   maxLength={MAX_DESCRIPTION}
                   onBlur={() => {
@@ -666,6 +683,7 @@ const Record = ({
               >
                 <DueOptions
                   due={due}
+                  keys={menuKeyLabel("setDue", platform)}
                   now={now}
                   onClose={() => setDueOpen(false)}
                   onPick={(next) => {
@@ -737,6 +755,9 @@ const CapturePane = ({
   useEffect(() => {
     saver.adopt(textOf(detail));
   }, [saver, detail]);
+
+  // A copy from the sidebar or a menu key waits for what is typed here.
+  useEffect(() => trackSaver(detail.id, saver), [detail.id, saver]);
 
   /*
    * Leaving the capture for another one unmounts the pane, which saves what is left. Closing the

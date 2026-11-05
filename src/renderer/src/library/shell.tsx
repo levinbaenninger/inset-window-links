@@ -2,7 +2,6 @@ import {
   Add01Icon,
   ArrowLeft01Icon,
   ArrowRight01Icon,
-  KeyboardIcon,
   Settings01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -18,7 +17,7 @@ import { useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { IconButton } from "@/components/icon-button";
-import { ShortcutList } from "@/components/shortcut-sheet";
+import { SHORTCUTS_ICON, ShortcutList } from "@/components/shortcut-sheet";
 import {
   Dialog,
   DialogContent,
@@ -32,7 +31,7 @@ import { useCommands } from "@/lib/commands";
 import type { CaptureListItem } from "../../../shared/dto";
 import { menuKeyLabel } from "../../../shared/shortcuts";
 import type { StatusKind } from "../../../shared/status";
-import { listOf, RecentList, SearchField } from "./recent-list";
+import { DueSuggestions, listOf, RecentList, SearchField } from "./recent-list";
 import { ResizeHandle, SidebarToggle, useSidebar } from "./sidebar";
 
 const root = getRouteApi("__root__");
@@ -91,7 +90,7 @@ const ShortcutSheet = ({
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent className="w-[44rem]" data-testid="shortcut-sheet">
         <header className="flex flex-col gap-0.5 px-5 pt-4 pb-3">
-          <DialogTitle>Keyboard shortcuts</DialogTitle>
+          <DialogTitle>Keyboard Shortcuts</DialogTitle>
           <DialogDescription>
             {platform === "macos"
               ? "Also in the menus."
@@ -99,7 +98,7 @@ const ShortcutSheet = ({
             Open this list with {menuKeyLabel("showShortcuts", platform)}.
           </DialogDescription>
         </header>
-        <div className="min-h-0 overflow-y-auto px-5 pb-5">
+        <div className="min-h-0 overflow-y-auto [mask-image:linear-gradient(to_bottom,black_calc(100%-2.5rem),transparent)] px-5 pb-10">
           <ShortcutList
             globalLabel={shortcut.kind === "registered" ? shortcut.label : null}
             platform={platform}
@@ -209,6 +208,11 @@ export const Shell = () => {
               onQuery={setQuery}
               query={query}
             />
+            <DueSuggestions
+              onPicked={() => search.current?.focus()}
+              onQuery={setQuery}
+              query={query}
+            />
           </div>
           <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
             {sideList !== undefined && (
@@ -244,9 +248,9 @@ export const Shell = () => {
               />
               <IconButton
                 data-testid="open-shortcuts"
-                icon={KeyboardIcon}
+                icon={SHORTCUTS_ICON}
                 keys={menuKeyLabel("showShortcuts", platform)}
-                label="Keyboard shortcuts"
+                label="Keyboard Shortcuts"
                 onClick={() => setSheet(true)}
                 side="top"
               />

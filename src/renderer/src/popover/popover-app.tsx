@@ -1,4 +1,4 @@
-import { KeyboardIcon, MinusSignIcon } from "@hugeicons/core-free-icons";
+import { MinusSignIcon } from "@hugeicons/core-free-icons";
 import { cn } from "cn";
 import {
   useCallback,
@@ -13,7 +13,7 @@ import { AddChips } from "@/components/add-chips";
 import type { AddField } from "@/components/add-chips";
 import { DueChip, DueOptions, useToday } from "@/components/due";
 import { IconButton } from "@/components/icon-button";
-import { ShortcutList } from "@/components/shortcut-sheet";
+import { SHORTCUTS_ICON, ShortcutList } from "@/components/shortcut-sheet";
 import { TodoEditor } from "@/components/todo-editor";
 import type { TodoEditorHandle } from "@/components/todo-editor";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,7 @@ import { popoverApi } from "@/lib/bridge";
 import { useCommands } from "@/lib/commands";
 import { useWindowFocus } from "@/lib/use-window-focus";
 
-import type { DraftSnapshot } from "../../../shared/dto";
+import type { DraftSnapshot, PendingSummary } from "../../../shared/dto";
 import type { KeyPlatform } from "../../../shared/shortcuts";
 import { menuKeyLabel } from "../../../shared/shortcuts";
 import type { DraftText, Saveability } from "../../../shared/text";
@@ -69,7 +69,14 @@ const reportPanelHeight = (element: HTMLElement) => {
   );
 };
 
-const PanelScroll = ({ children }: { children: ReactNode }) => {
+const PanelScroll = ({
+  children,
+  fade = false,
+}: {
+  children: ReactNode;
+  /** Fades the foot of a long list, so it reads as one that scrolls. */
+  fade?: boolean;
+}) => {
   const content = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -88,24 +95,38 @@ const PanelScroll = ({ children }: { children: ReactNode }) => {
   }, []);
 
   return (
-    <div className="min-h-0 overflow-y-auto" data-panel-scroll>
-      <div ref={content}>{children}</div>
+    <div
+      className={cn(
+        "min-h-0 overflow-y-auto",
+        fade &&
+          "[mask-image:linear-gradient(to_bottom,black_calc(100%-2rem),transparent)]"
+      )}
+      data-panel-scroll
+    >
+      <div className={cn(fade && "pb-6")} ref={content}>
+        {children}
+      </div>
     </div>
   );
 };
 
 /**
  * The title strip: it moves the panel, opens the shortcut sheet, and hides the panel. The title
- * dims while another app has the keyboard, so a key pressed then is not expected to reach it.
+ * dims while another app has the keyboard. The panel can float in front without it, as when
+ * Windows keeps another app in front after a capture; its keys, such as Add Windows, then go to
+ * that app, so the strip says to click the panel first.
  */
 const PanelHeader = ({
   title,
   platform,
   onShortcuts,
+  keyHint = false,
 }: {
   title: string;
   platform: KeyPlatform;
   onShortcuts?: () => void;
+  /** Says to click the panel while it lacks the keyboard. */
+  keyHint?: boolean;
 }) => {
   const focused = useWindowFocus();
 
@@ -116,17 +137,27 @@ const PanelHeader = ({
     >
       <h1
         className={cn(
-          "mr-auto text-sm font-semibold transition-colors",
+          "text-sm font-semibold transition-colors",
           !focused && "text-muted-foreground"
         )}
       >
         {title}
       </h1>
+      <span className="mr-auto min-w-0 truncate pl-2">
+        {!focused && keyHint && (
+          <span
+            className="text-muted-foreground text-xs"
+            data-testid="unfocused-hint"
+          >
+            Click the panel to use {menuKeyLabel("addWindows", platform)}
+          </span>
+        )}
+      </span>
       {onShortcuts !== undefined && (
         <IconButton
-          icon={KeyboardIcon}
+          icon={SHORTCUTS_ICON}
           keys={menuKeyLabel("showShortcuts", platform)}
-          label="Keyboard shortcuts"
+          label="Keyboard Shortcuts"
           onClick={onShortcuts}
         />
       )}
@@ -389,6 +420,7 @@ const TextBlock = ({
         <div className="border-foreground/10 border-t p-1">
           <DueOptions
             due={text.due}
+            keys={menuKeyLabel("setDue", platform)}
             now={now}
             onClose={closeDue}
             onPick={(due) => {
@@ -400,6 +432,29 @@ const TextBlock = ({
       )}
     </div>
   );
+};
+
+/**
+ * The windows still to appear as tiles: one Add Windows overtook shows at once, one being captured
+ * once it is known.
+ */
+const pendingWindows = (snapshot: DraftSnapshot): PendingSummary[] => {
+  const { activity } = snapshot;
+
+  return activity.kind === "capturing" && activity.pending !== null
+    ? [...snapshot.landing, activity.pending]
+    : [...snapshot.landing];
+};
+
+const saveLabel = (
+  activity: DraftSnapshot["activity"]["kind"],
+  landing: boolean
+) => {
+  if (activity === "saving") {
+    return "Saving…";
+  }
+
+  return landing ? "Adding…" : "Save";
 };
 
 /** Keyed by draft id, so local UI state such as the discard question resets with each new draft. */
@@ -421,16 +476,18 @@ const DraftForm = ({
   const quitting = activity === "confirmingQuit";
   const choosing = activity === "choosing";
 
-  const pending =
-    snapshot.activity.kind === "capturing" ? snapshot.activity.pending : null;
+  const pending = pendingWindows(snapshot);
+  const landing = snapshot.landing.length > 0;
 
   const mac = snapshot.platform === "macos";
   const { platform } = snapshot;
   const check = saveability(viewCount, text);
   const hasContent = viewCount > 0 || hasTyped(text);
 
-  // A blocked draft is still sent: main answers with the notice that says what is missing.
-  const canSave = activity === "idle" || activity === "saveFailed";
+  // A blocked draft is still sent: main answers with the notice that says what is missing. A
+  // window still landing would be lost, so Save waits for it.
+  const canSave =
+    (activity === "idle" || activity === "saveFailed") && !landing;
 
   const requestDiscard = async () => {
     if (hasContent) {
@@ -566,9 +623,9 @@ const DraftForm = ({
         <PanelHeader
           onShortcuts={closeSheet}
           platform={platform}
-          title="Keyboard shortcuts"
+          title="Keyboard Shortcuts"
         />
-        <PanelScroll>
+        <PanelScroll fade>
           <div className="px-3.5">
             <ShortcutList
               columns={1}
@@ -618,6 +675,7 @@ const DraftForm = ({
   return (
     <>
       <PanelHeader
+        keyHint
         onShortcuts={() => setSheet(true)}
         platform={platform}
         title="New capture"
@@ -704,8 +762,13 @@ const DraftForm = ({
             >
               Discard
             </Button>
-            <Button disabled={!canSave} onClick={save} size="sm">
-              {activity === "saving" ? "Saving…" : "Save"}
+            <Button
+              disabled={!canSave}
+              onClick={save}
+              size="sm"
+              title={landing ? "Waits for the window being added" : undefined}
+            >
+              {saveLabel(activity, landing)}
               <Kbd>{mac ? "⌘↵" : "Ctrl+Enter"}</Kbd>
             </Button>
           </footer>

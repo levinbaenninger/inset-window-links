@@ -35,11 +35,18 @@ import {
 import { formatClock, formatDay } from "@/lib/format";
 
 import type { CaptureListItem, ListedView } from "../../../shared/dto";
-import type { DueFilter } from "../../../shared/due";
-import { DUE_FILTERS, parseQuery, withDueFilter } from "../../../shared/due";
-import { matchesCapture } from "../../../shared/search";
+import type { DueFilter, SearchQuery } from "../../../shared/due";
+import {
+  DUE_FILTER_LABELS,
+  DUE_FILTERS,
+  dueSuggestions,
+  parseQuery,
+  withDueFilter,
+} from "../../../shared/due";
+import { matchesCapture, matchSource } from "../../../shared/search";
 import type { StatusKind } from "../../../shared/status";
 import { MenuEntries, useCaptureCommands } from "./capture-commands";
+import { entryText } from "./copy-keys";
 
 export type CurrentItem = Extract<CaptureListItem, { kind: "current" }>;
 
@@ -70,8 +77,17 @@ const Thumbnail = ({ views }: { views: readonly ListedView[] }) => {
   );
 };
 
-/** "1/3" with a check, or nothing when the capture has no next steps. */
-const Progress = ({ item }: { item: CurrentItem }) => {
+/**
+ * "1/3" with a check, or nothing when the capture has no next steps. A narrow row with a due chip
+ * leaves it out, so the chip's date stays whole.
+ */
+const Progress = ({
+  item,
+  dueShown,
+}: {
+  item: CurrentItem;
+  dueShown: boolean;
+}) => {
   if (item.todos.length === 0) {
     return null;
   }
@@ -81,7 +97,10 @@ const Progress = ({ item }: { item: CurrentItem }) => {
   return (
     <span
       aria-label={`${done} of ${item.todos.length} next steps done`}
-      className="flex items-center gap-1"
+      className={cn(
+        "flex items-center gap-1",
+        dueShown && "@max-[250px]:hidden"
+      )}
     >
       <HugeiconsIcon icon={CheckmarkCircle02Icon} size={12} />
       {done}/{item.todos.length}
@@ -127,7 +146,13 @@ const Highlight = ({ text, needle }: { text: string; needle: string }) => {
   return parts;
 };
 
-/** A capture in the list; right-click opens what the capture's own "…" menu holds. */
+const ROW_SELECTOR = "[data-testid='recent-item']";
+
+/**
+ * A capture in the list; right-click opens what the capture's own "…" menu holds. Space marks the
+ * row in focus done, or takes a done one back. The row then leaves this list, so focus moves on
+ * to the next row first, and Space again does the next one.
+ */
 const CurrentRow = ({
   item,
   active,
@@ -141,10 +166,24 @@ const CurrentRow = ({
 }) => {
   const commands = useCaptureCommands({
     due: item.due,
+    from: active ? "openRow" : "row",
     id: item.id,
     reopenable: item.reopenable,
     status: item.status,
   });
+
+  const found = matchSource(item, needle);
+  const dueShown = item.due !== null && item.status.kind !== "done";
+
+  const toggleDone = (row: HTMLElement) => {
+    const rows = [...document.querySelectorAll<HTMLElement>(ROW_SELECTOR)];
+    const at = rows.indexOf(row);
+
+    (rows[at + 1] ?? rows[at - 1])?.focus();
+    void (item.status.kind === "done"
+      ? commands.backToList.run()
+      : commands.done.run());
+  };
 
   return (
     <li>
@@ -152,11 +191,25 @@ const CurrentRow = ({
         <ContextMenuTrigger asChild>
           <Link
             aria-current={active ? "page" : undefined}
+            aria-keyshortcuts="Space"
             className={cn(
               "focus-visible:ring-ring/50 data-[state=open]:bg-foreground/5 flex items-start gap-2.5 rounded-md px-2 py-2 outline-none focus-visible:ring-3",
               active ? "bg-foreground/10" : "hover:bg-foreground/5"
             )}
+            data-copy={entryText(item.relationship, item.description)}
             data-testid="recent-item"
+            onKeyDown={(event) => {
+              const plain =
+                !event.metaKey &&
+                !event.ctrlKey &&
+                !event.altKey &&
+                !event.shiftKey;
+
+              if (event.key === " " && plain && !event.repeat) {
+                event.preventDefault();
+                toggleDone(event.currentTarget);
+              }
+            }}
             params={{ captureId: item.id }}
             to="/captures/$captureId"
           >
@@ -165,22 +218,28 @@ const CurrentRow = ({
               <span className="line-clamp-2 text-sm leading-snug font-medium">
                 <Highlight needle={needle} text={item.relationship} />
               </span>
+              {found !== null && (
+                <span
+                  className="text-muted-foreground line-clamp-1 text-xs"
+                  data-testid="match-source"
+                >
+                  <span className="font-medium">{found.where}: </span>
+                  <Highlight needle={needle} text={found.text} />
+                </span>
+              )}
               <span className="text-muted-foreground flex min-w-0 items-center gap-2.5 text-xs tabular-nums">
                 <span
                   className={cn(
                     "flex shrink-0 items-center gap-2.5 whitespace-nowrap",
-                    item.due !== null &&
-                      item.status.kind !== "done" &&
-                      "@max-[180px]:hidden"
+                    dueShown && "@max-[200px]:hidden"
                   )}
                 >
                   <When item={item} />
-                  <Progress item={item} />
+                  <Progress dueShown={dueShown} item={item} />
                 </span>
-                {item.due !== null && item.status.kind !== "done" && (
+                {dueShown && item.due !== null && (
                   <DueBadge
-                    className="ml-auto @max-[180px]:ml-0"
-                    compact
+                    className="ml-auto @max-[200px]:ml-0"
                     due={item.due}
                     now={now}
                   />
@@ -259,15 +318,49 @@ const byDay = (items: readonly CaptureListItem[]) => {
   return groups;
 };
 
-const FILTER_LABELS: Record<DueFilter, string> = {
-  overdue: "Overdue",
-  today: "Due today",
-  week: "Due this week",
+/**
+ * The due filters a search can still become, under the field while a due: word is being typed,
+ * or after one that names no filter. Picking one finishes the word.
+ */
+export const DueSuggestions = ({
+  query,
+  onQuery,
+  onPicked,
+}: {
+  query: string;
+  onQuery: (query: string) => void;
+  onPicked: () => void;
+}) => {
+  const filters = dueSuggestions(parseQuery(query));
+
+  return filters.length === 0 ? null : (
+    <ul
+      aria-label="Due filters"
+      className="flex flex-wrap gap-1 pt-1.5"
+      data-testid="due-suggestions"
+    >
+      {filters.map((filter) => (
+        <li key={filter}>
+          <button
+            className="bg-foreground/5 hover:bg-foreground/10 focus-visible:ring-ring/50 flex h-6 items-center gap-1.5 rounded-md px-2 text-xs outline-none focus-visible:ring-3"
+            onClick={() => {
+              onQuery(withDueFilter(query, filter));
+              onPicked();
+            }}
+            title={DUE_FILTER_LABELS[filter]}
+            type="button"
+          >
+            <span className="font-medium">due:{filter}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
 };
 
 /**
- * The sidebar's search. Its filter menu adds due:today, due:week or due:overdue to the words,
- * which can also be typed; Escape clears the search.
+ * The sidebar's search. Its filter menu adds a due filter to the words, which can also be typed;
+ * Return finishes a due: word being typed, and Escape clears the search.
  */
 export const SearchField = ({
   query,
@@ -280,7 +373,8 @@ export const SearchField = ({
   field: RefObject<HTMLInputElement | null>;
   findKeys: string;
 }) => {
-  const active = parseQuery(query).due;
+  const parsed = parseQuery(query);
+  const active = parsed.due;
 
   const setFilter = (filter: DueFilter | null) => {
     onQuery(withDueFilter(query, filter === active ? null : filter));
@@ -296,9 +390,18 @@ export const SearchField = ({
         aria-label={`Search captures (${findKeys})`}
         onChange={(event) => onQuery(event.target.value)}
         onKeyDown={(event) => {
+          const [first] = dueSuggestions(parsed);
+
           if (event.key === "Escape" && query !== "") {
             event.preventDefault();
             onQuery("");
+          } else if (
+            event.key === "Enter" &&
+            parsed.partialDue !== null &&
+            first !== undefined
+          ) {
+            event.preventDefault();
+            onQuery(withDueFilter(query, first));
           }
         }}
         placeholder="Search or due:today"
@@ -322,10 +425,10 @@ export const SearchField = ({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <InputGroupButton
-              aria-label="Filter by due date"
+              aria-label="Filter by Due"
               data-testid="due-filter"
               size="icon-xs"
-              title="Filter by due date"
+              title="Filter by Due"
             >
               <HugeiconsIcon
                 className={cn(active !== null && "text-brand")}
@@ -333,11 +436,11 @@ export const SearchField = ({
               />
             </InputGroupButton>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-48">
-            <DropdownMenuLabel>Show captures that are</DropdownMenuLabel>
+          <DropdownMenuContent align="end" className="min-w-52">
+            <DropdownMenuLabel>Filter by Due</DropdownMenuLabel>
             {DUE_FILTERS.map((filter) => (
               <DropdownMenuItem key={filter} onSelect={() => setFilter(filter)}>
-                <span className="flex-1">{FILTER_LABELS[filter]}</span>
+                <span className="flex-1">{DUE_FILTER_LABELS[filter]}</span>
                 {filter === active ? (
                   <HugeiconsIcon icon={Tick02Icon} />
                 ) : (
@@ -351,7 +454,7 @@ export const SearchField = ({
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => setFilter(null)}>
-                  Any due date
+                  Show all
                 </DropdownMenuItem>
               </>
             )}
@@ -361,6 +464,23 @@ export const SearchField = ({
     </InputGroup>
   );
 };
+
+/** How the empty state names a due filter: "No matches for “chairs”, due today". */
+const LOOKED_FOR: Readonly<Record<DueFilter, string>> = {
+  any: "with a due date",
+  none: "without a due date",
+  overdue: "overdue",
+  today: "due today",
+  week: "due this week",
+};
+
+const lookedFor = (search: SearchQuery) =>
+  [
+    search.text === "" ? null : `“${search.text}”`,
+    search.due === null ? null : LOOKED_FOR[search.due],
+  ]
+    .filter((part) => part !== null)
+    .join(", ");
 
 /** Which list a row belongs to. A record the app can't read stays with the captures in the list. */
 export const listOf = (item: CaptureListItem): StatusKind =>
@@ -414,14 +534,7 @@ export const RecentList = ({
   }
 
   if (shown.length === 0) {
-    const what = [
-      search.text === "" ? null : `“${search.text}”`,
-      search.due === null
-        ? null
-        : FILTER_LABELS[search.due].toLocaleLowerCase(),
-    ]
-      .filter((part) => part !== null)
-      .join(", ");
+    const what = lookedFor(search);
 
     return (
       <div
@@ -441,7 +554,7 @@ export const RecentList = ({
         <p className="text-muted-foreground text-xs text-balance">
           {search.unknownDue === null
             ? "Search looks in titles, descriptions, next steps and windows."
-            : "Try due:today, due:week or due:overdue."}
+            : "Pick one of the filters under the search field."}
         </p>
         <Button onClick={onClear} size="sm" variant="outline">
           Clear search

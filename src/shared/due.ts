@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { calendarDays, dayLabel, longDate } from "./dates";
+
 /**
  * A due date: a calendar day with no time, written YYYY-MM-DD. It says when something should be
  * done by. Unlike a snooze it hides nothing. Every date here is built from local year, month and
@@ -52,11 +54,9 @@ export const dueDay = (due: DueDate): Date => {
 const addDays = (date: Date, days: number): Date =>
   new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 
-const DAY_MS = 86_400_000;
-
 /** Whole days from today to the due date: 0 today, 1 tomorrow, -1 yesterday. */
 export const daysUntil = (due: DueDate, now: Date): number =>
-  Math.round((dueDay(due).getTime() - addDays(now, 0).getTime()) / DAY_MS);
+  calendarDays(dueDay(due), now);
 
 const SATURDAY = 6;
 const SUNDAY = 0;
@@ -112,56 +112,14 @@ export const dueState = (due: DueDate, now: Date): DueState => {
   return days === 0 ? "today" : "upcoming";
 };
 
-/**
- * The short form for a chip: Today, Tomorrow, Yesterday, a weekday within the coming week, else
- * the weekday, day and month, or the day, month and year when it is not this year's.
- */
-export const dueLabel = (
-  due: DueDate,
-  now: Date,
-  locale?: Intl.LocalesArgument
-): string => {
-  const days = daysUntil(due, now);
-  const date = dueDay(due);
-
-  if (days === 0) {
-    return "Today";
-  }
-
-  if (days === 1) {
-    return "Tomorrow";
-  }
-
-  if (days === -1) {
-    return "Yesterday";
-  }
-
-  const options: Intl.DateTimeFormatOptions =
-    days > 1 && days < WEEK
-      ? { weekday: "long" }
-      : { day: "numeric", month: "short", weekday: "short" };
-
-  if (date.getFullYear() !== now.getFullYear()) {
-    options.year = "numeric";
-    delete options.weekday;
-  }
-
-  return date.toLocaleDateString(locale, options);
-};
+/** What a chip says: Today, Tomorrow, Yesterday, a weekday in the coming week, else a short date. */
+export const dueLabel = (due: DueDate, now: Date, locale?: string): string =>
+  dayLabel(dueDay(due), now, locale);
 
 /** The whole date, for a tooltip or an accessible name: "Friday, 7 November 2026". */
-export const dueLongLabel = (
-  due: DueDate,
-  locale?: Intl.LocalesArgument
-): string =>
-  dueDay(due).toLocaleDateString(locale, {
-    day: "numeric",
-    month: "long",
-    weekday: "long",
-    year: "numeric",
-  });
+export const dueLongLabel = (due: DueDate): string => longDate(dueDay(due));
 
-/** What a chip says aloud: "Due today", "Overdue, was due Yesterday", "Due Friday". */
+/** What a chip says aloud: "Due today", "Overdue, was due yesterday", "Due Friday". */
 export const dueSentence = (due: DueDate, now: Date): string => {
   const label = dueLabel(due, now);
 
@@ -174,20 +132,32 @@ export const dueSentence = (due: DueDate, now: Date): string => {
     : `Due ${relative}`;
 };
 
-/** The due filters search understands, typed as due:<name>. */
-export const DUE_FILTERS = ["today", "week", "overdue"] as const;
+/** The due filters search understands, typed as due:<name>, in the order the menu lists them. */
+export const DUE_FILTERS = ["today", "week", "overdue", "any", "none"] as const;
 
 export type DueFilter = (typeof DUE_FILTERS)[number];
 
+export const DUE_FILTER_LABELS: Readonly<Record<DueFilter, string>> = {
+  any: "Has a due date",
+  none: "No due date",
+  overdue: "Overdue",
+  today: "Due today",
+  week: "Due this week",
+};
+
 /**
- * today: due today. week: due from today through the next six days. overdue: due before today.
- * A capture without a due date matches none of them.
+ * today: due today. week: overdue, today or the next six days, since what is overdue is due this
+ * week too. overdue: due before today. any: has a due day. none: has none.
  */
 export const matchesDue = (
   due: DueDate | null,
   filter: DueFilter,
   now: Date
 ): boolean => {
+  if (filter === "none" || filter === "any") {
+    return (due === null) === (filter === "none");
+  }
+
   if (due === null) {
     return false;
   }
@@ -200,7 +170,7 @@ export const matchesDue = (
     }
 
     case "week": {
-      return days >= 0 && days < WEEK;
+      return days < WEEK;
     }
 
     default: {
@@ -213,13 +183,18 @@ export interface SearchQuery {
   /** The words to find, lower-cased, with the filter taken out. */
   text: string;
   due: DueFilter | null;
-  /** A due: word that names no filter, so the page can say which ones exist. */
+  /**
+   * A due: word still being typed, the start of one or more filters ("due:" or "due:to"). It
+   * filters nothing; the page offers the filters it can still become.
+   */
+  partialDue: string | null;
+  /** A due: word that can become no filter, so the page can say which ones exist. */
   unknownDue: string | null;
 }
 
 const DUE_TOKEN = /(?:^|\s)due:(?<name>\S*)/iu;
 
-/** Splits a search into its words and an optional due:today, due:week or due:overdue filter. */
+/** Splits a search into its words and an optional due filter, finished, partial or unknown. */
 export const parseQuery = (query: string): SearchQuery => {
   const found = DUE_TOKEN.exec(query);
   const name = found?.groups?.["name"]?.toLocaleLowerCase() ?? null;
@@ -229,17 +204,32 @@ export const parseQuery = (query: string): SearchQuery => {
     .replaceAll(/\s+/gu, " ")
     .toLocaleLowerCase();
 
+  const none = { due: null, partialDue: null, text, unknownDue: null };
+
   if (name === null) {
-    return { due: null, text, unknownDue: null };
+    return none;
   }
 
-  const known = DUE_FILTERS.find((filter) => filter === name) ?? null;
+  const known = DUE_FILTERS.find((filter) => filter === name);
 
-  return {
-    due: known,
-    text,
-    unknownDue: known === null ? name : null,
-  };
+  if (known !== undefined) {
+    return { ...none, due: known };
+  }
+
+  return DUE_FILTERS.some((filter) => filter.startsWith(name))
+    ? { ...none, partialDue: name }
+    : { ...none, unknownDue: name };
+};
+
+/** The filters a partial due: word can still become, or every filter for an unknown one. */
+export const dueSuggestions = (query: SearchQuery): readonly DueFilter[] => {
+  if (query.partialDue !== null) {
+    const typed = query.partialDue;
+
+    return DUE_FILTERS.filter((filter) => filter.startsWith(typed));
+  }
+
+  return query.unknownDue === null ? [] : DUE_FILTERS;
 };
 
 /** The query with its due filter replaced, or removed when `filter` is null. */

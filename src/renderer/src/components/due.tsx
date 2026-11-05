@@ -1,5 +1,4 @@
 import {
-  ArrowRight01Icon,
   Calendar03Icon,
   CalendarRemove01Icon,
   Cancel01Icon,
@@ -8,6 +7,9 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "cn";
 import { useEffect, useRef, useState } from "react";
 import type { ComponentProps, KeyboardEvent } from "react";
+
+import { Kbd } from "@/components/ui/kbd";
+import { formatPickHint } from "@/lib/format";
 
 import type { DueDate, DueState } from "../../../shared/due";
 import {
@@ -67,12 +69,10 @@ export const DueBadge = ({
   due,
   now,
   className,
-  compact = false,
 }: {
   due: DueDate;
   now: Date;
   className?: string;
-  compact?: boolean;
 }) => (
   <span
     aria-label={dueSentence(due, now)}
@@ -86,11 +86,7 @@ export const DueBadge = ({
     title={dueLongLabel(due)}
   >
     <HugeiconsIcon className="shrink-0" icon={Calendar03Icon} size={12} />
-    <span className="truncate">
-      {compact && dueState(due, now) === "overdue"
-        ? "Overdue"
-        : chipText(due, now)}
-    </span>
+    <span className="truncate">{chipText(due, now)}</span>
   </span>
 );
 
@@ -118,7 +114,7 @@ export const DueChip = ({
     data-testid="due-chip"
   >
     <button
-      aria-label={`${dueSentence(due, now)}. Change the due date`}
+      aria-label={`${dueSentence(due, now)}. Change Due`}
       className="focus-visible:ring-ring/50 flex h-full items-center gap-1.5 rounded-md pr-1 pl-2 outline-none hover:brightness-95 focus-visible:ring-3 dark:hover:brightness-125"
       title={`Due ${dueLongLabel(due)}${keys === undefined ? "" : ` (${keys})`}`}
       type="button"
@@ -128,7 +124,7 @@ export const DueChip = ({
       {chipText(due, now)}
     </button>
     <button
-      aria-label="Clear the due date"
+      aria-label="Clear Due"
       className="focus-visible:ring-ring/50 mr-0.5 grid size-6 place-items-center rounded-sm opacity-70 outline-none hover:opacity-100 focus-visible:ring-3"
       onClick={onClear}
       type="button"
@@ -141,27 +137,23 @@ export const DueChip = ({
 const OPTION =
   "focus-visible:bg-accent hover:bg-accent focus-visible:text-accent-foreground flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none";
 
-/** "Fri 7 Nov", for the right of an option. */
-const hint = (due: DueDate) =>
-  dueDay(due).toLocaleDateString([], {
-    day: "numeric",
-    month: "short",
-    weekday: "short",
-  });
-
 /**
- * The due date's quick choices: Today, Tomorrow, This weekend, Next week, Pick a date… and Clear.
+ * Due's quick choices, laid out alike in all three Inset apps: a "Due" header with its key, Today,
+ * Tomorrow, This weekend and Next week with their dates, then Pick a date… and, once set, Clear.
  * The arrow keys move between them and Escape closes. The panel shows it in its own flow, so the
  * panel grows to fit; Recent Captures shows it in a popover.
  */
 export const DueOptions = ({
   due,
   now,
+  keys,
   onPick,
   onClose,
 }: {
   due: DueDate | null;
   now: Date;
+  /** The key that opens the picker, shown in its header. */
+  keys: string;
   onPick: (due: DueDate | null) => void;
   onClose: () => void;
 }) => {
@@ -237,7 +229,14 @@ export const DueOptions = ({
       data-testid="due-options"
       ref={list}
     >
-      <legend className="sr-only">Due date</legend>
+      <legend className="sr-only">Due</legend>
+      <div
+        aria-hidden
+        className="text-muted-foreground flex h-7 items-center justify-between px-2 text-xs font-medium"
+      >
+        Due
+        <Kbd>{keys}</Kbd>
+      </div>
       {duePresets(now).map((preset) => (
         <button
           aria-pressed={preset.due === due}
@@ -250,10 +249,11 @@ export const DueOptions = ({
         >
           <span className="flex-1">{preset.label}</span>
           <span className="text-muted-foreground text-xs tabular-nums">
-            {hint(preset.due)}
+            {formatPickHint(dueDay(preset.due), now)}
           </span>
         </button>
       ))}
+      <div className="bg-border -mx-1 my-1 h-px" />
       {picking ? (
         <form
           className="flex items-center gap-1.5 px-1 py-1"
@@ -263,7 +263,7 @@ export const DueOptions = ({
           }}
         >
           <input
-            aria-label="Due date"
+            aria-label="Date"
             className="border-input bg-background focus-visible:ring-ring/50 focus-visible:border-ring dark:bg-input/30 h-7 min-w-0 flex-1 rounded-md border px-2 text-sm outline-none focus-visible:ring-3"
             data-option
             onChange={(event) => setTyped(event.target.value)}
@@ -287,28 +287,21 @@ export const DueOptions = ({
           onKeyDown={onKeyDown}
           type="button"
         >
+          <HugeiconsIcon icon={Calendar03Icon} size={16} />
           <span className="flex-1">Pick a date…</span>
-          <HugeiconsIcon
-            className="text-muted-foreground"
-            icon={ArrowRight01Icon}
-            size={14}
-          />
         </button>
       )}
       {due !== null && (
-        <>
-          <div className="bg-border -mx-1 my-1 h-px" />
-          <button
-            className={cn(OPTION, "text-destructive")}
-            data-option
-            onClick={() => onPick(null)}
-            onKeyDown={onKeyDown}
-            type="button"
-          >
-            <HugeiconsIcon icon={CalendarRemove01Icon} size={16} />
-            <span className="flex-1">Clear</span>
-          </button>
-        </>
+        <button
+          className={cn(OPTION, "text-destructive")}
+          data-option
+          onClick={() => onPick(null)}
+          onKeyDown={onKeyDown}
+          type="button"
+        >
+          <HugeiconsIcon icon={CalendarRemove01Icon} size={16} />
+          <span className="flex-1">Clear</span>
+        </button>
       )}
     </fieldset>
   );

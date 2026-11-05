@@ -254,6 +254,9 @@ export const registerLibraryChannels = (
       }
     ),
     copyNote: invoke(z.tuple([DraftIdSchema]), async (captureId) => {
+      // The page sends its pending edits first; a write still under way is waited for here.
+      await store.idle();
+
       const entry = store.get(captureId);
 
       // Electron's clipboard writes resolve later; the page says Copied only once this has.

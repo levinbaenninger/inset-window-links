@@ -8,6 +8,7 @@ import { libraryApi, markPlatform } from "@/lib/bridge";
 import { listenForCommands } from "@/lib/commands";
 import { followSystemTheme } from "@/lib/theme";
 
+import { listenForCopy } from "./copy-keys";
 import { router } from "./router";
 import { SidebarProvider } from "./sidebar";
 
@@ -19,6 +20,8 @@ followSystemTheme();
 markPlatform();
 
 listenForCommands((listener) => libraryApi().onCommand(listener));
+
+listenForCopy();
 
 libraryApi().onChanged(() => {
   void router.invalidate();

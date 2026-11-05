@@ -321,6 +321,7 @@ const CANDIDATES = SAMPLE_WINDOWS.map((win, index) => ({
 interface DraftState {
   activity: object;
   draftId: string;
+  landing: (object | null)[];
   notice: object | null;
   platform: Platform;
   shortcut: object;
@@ -337,6 +338,7 @@ interface DraftState {
 const draft = (overrides: Partial<DraftState> = {}): DraftState => ({
   activity: { kind: "idle" },
   draftId: uuid(9),
+  landing: [],
   notice: null,
   platform: "macos",
   shortcut: { kind: "registered", label: "⌥⌘W" },
@@ -633,7 +635,7 @@ const SCENES: readonly Scene[] = [
   },
   {
     act: async (page) => {
-      await page.getByRole("button", { name: "Keyboard shortcuts" }).click();
+      await page.getByRole("button", { name: "Keyboard Shortcuts" }).click();
       await page.getByTestId("shortcut-list").waitFor();
     },
     data: { draft: draft(FULL_DRAFT) },
@@ -672,7 +674,11 @@ const SCENES: readonly Scene[] = [
       await page
         .getByRole("textbox", { name: /^Search captures/u })
         .fill("due:week");
-      assert.equal(await page.getByTestId("recent-item").count(), 2);
+      assert.equal(
+        await page.getByTestId("recent-item").count(),
+        3,
+        "due:week holds today, the coming six days and what is overdue"
+      );
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
@@ -756,7 +762,7 @@ const SCENES: readonly Scene[] = [
     act: async (page) => {
       await page.getByTestId("due-chip").getByRole("button").first().click();
       await page.getByRole("button", { name: "Pick a date…" }).click();
-      await page.getByLabel("Due date", { exact: true }).fill("2026-11-19");
+      await page.getByLabel("Date", { exact: true }).fill("2026-11-19");
       await page.getByRole("button", { name: "Set", exact: true }).click();
       await page.waitForFunction(
         "globalThis.__screens.data.captures[0].due === '2026-11-19'"
@@ -808,7 +814,7 @@ const SCENES: readonly Scene[] = [
   {
     act: async (page) => {
       await page.getByTestId("recent-item").nth(1).click({ button: "right" });
-      await page.getByRole("menuitem", { name: /^Change due date/u }).hover();
+      await page.getByRole("menuitem", { name: "Due", exact: true }).hover();
       await page
         .getByRole("menuitem", { name: "Pick a date…", exact: true })
         .click();
@@ -841,6 +847,10 @@ const SCENES: readonly Scene[] = [
         .getByRole("textbox", { name: /^Search captures/u })
         .fill("First free day");
       assert.equal(await page.getByTestId("recent-item").count(), 1);
+      assert.match(
+        (await page.getByTestId("match-source").textContent()) ?? "",
+        /^Window description: First free day/u
+      );
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
@@ -854,6 +864,7 @@ const SCENES: readonly Scene[] = [
         .fill("due:soon");
       await page.getByTestId("recent-no-match").waitFor();
       assert.equal(await page.getByTestId("recent-item").count(), 0);
+      await page.getByTestId("due-suggestions").waitFor();
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
@@ -909,6 +920,7 @@ const SCENES: readonly Scene[] = [
     act: async (page) => {
       await page.getByTestId("due-filter").click();
       await page.getByRole("menuitem", { name: /^Overdue/u }).waitFor();
+      assert.equal(await page.getByRole("menuitem").count(), 5);
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
@@ -919,12 +931,141 @@ const SCENES: readonly Scene[] = [
   {
     act: async (page) => {
       await page.getByTestId("recent-item").nth(1).click({ button: "right" });
-      await page.getByRole("menuitem", { name: /^Change due date/u }).hover();
+      await page.getByRole("menuitem", { name: "Due", exact: true }).hover();
       await page.getByRole("menuitem", { name: /^This weekend/u }).waitFor();
+      assert.equal(
+        (await page
+          .getByRole("menuitem", { name: /^Reopen all/u })
+          .textContent()) ?? "",
+        "Reopen all",
+        "a row that is not open shows no key for the open capture"
+      );
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
     name: "library-due-menu",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    data: {
+      draft: draft({
+        ...FULL_DRAFT,
+        landing: [{ appName: "Calendar", title: "Calendar: November" }],
+      }),
+    },
+    name: "popover-landing",
+    page: "popover",
+    platforms: ["windows"],
+  },
+  {
+    // macOS names no window before its image exists.
+    data: { draft: draft({ ...FULL_DRAFT, landing: [null] }) },
+    name: "popover-landing",
+    page: "popover",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      await page.evaluate(
+        "document.hasFocus = () => false; window.dispatchEvent(new Event('blur'))"
+      );
+      await page.getByTestId("unfocused-hint").waitFor();
+    },
+    data: { draft: draft(FULL_DRAFT) },
+    name: "popover-unfocused",
+    page: "popover",
+  },
+  {
+    act: async (page) => {
+      await page
+        .getByRole("button", { name: /^Add a description of window 3/u })
+        .click();
+      const field = page.getByTestId("window-description");
+
+      await waitForFocus(page, "[data-testid='window-description']");
+      await field.fill("First free day is the 24th.");
+      assert.equal(
+        await page.getByTestId("source-preview").count(),
+        1,
+        "the description opens under its own window's row"
+      );
+    },
+    data: { draft: draft(FULL_DRAFT) },
+    name: "popover-describe-window",
+    page: "popover",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      const search = page.getByRole("textbox", { name: /^Search captures/u });
+
+      await search.fill("due:o");
+      await page.getByTestId("due-suggestions").waitFor();
+      assert.equal(await page.getByTestId("recent-no-match").count(), 0);
+      assert.equal(await page.getByTestId("recent-item").count(), 3);
+      await search.press("Enter");
+      assert.equal(await search.inputValue(), "due:overdue");
+      await search.fill("due:");
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-search-partial-due",
+    page: "library",
+  },
+  {
+    act: async (page) => {
+      await page
+        .getByRole("textbox", { name: /^Search captures/u })
+        .fill("second quote");
+      assert.match(
+        (await page.getByTestId("match-source").textContent()) ?? "",
+        /^Step: Get a second quote/u
+      );
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-search-step",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      const rows = page.getByTestId("recent-item");
+
+      await rows.nth(1).focus();
+      await page.keyboard.press("ControlOrMeta+C");
+      assert.equal(
+        await page.evaluate<string>("navigator.clipboard.readText()"),
+        "Movers need the lift on Monday, keys only come Thursday",
+        "⌘C on a row copies its title"
+      );
+      await page.getByRole("button", { name: "More" }).focus();
+      await page.keyboard.press("ControlOrMeta+C");
+      assert.match(
+        await page.evaluate<string>("navigator.clipboard.readText()"),
+        /^Rieder's quote breaks the furniture cap and comes too late\n\nChairs are CHF 280/u,
+        "⌘C on the open capture copies its title and description"
+      );
+      await rows.nth(1).focus();
+      await page.keyboard.press("Space");
+      await page.waitForFunction(
+        "globalThis.__screens.data.captures[1].status.kind === 'done'"
+      );
+      await page.waitForFunction(
+        "document.querySelectorAll(\"[data-testid='recent-item']\").length === 2"
+      );
+      assert.equal(
+        await page.evaluate<string>(
+          "document.activeElement?.getAttribute('data-copy') ?? ''"
+        ),
+        "The floor plan has room for 12 desks only without the shelving wall",
+        "focus moves on to the next row"
+      );
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-row-keys",
     page: "library",
     platforms: ["macos"],
   },
@@ -993,7 +1134,9 @@ const shoot = async (
     colorScheme: theme,
     deviceScaleFactor: 2,
     timezoneId: "Europe/Zurich",
-    locale: "en-GB",
+    // The system's locale writes the dates; en-US matches the other two apps' screenshots.
+    locale: "en-US",
+    permissions: ["clipboard-read", "clipboard-write"],
     viewport: size,
   });
 

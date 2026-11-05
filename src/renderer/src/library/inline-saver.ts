@@ -190,6 +190,11 @@ export class InlineSaver {
     this.#latest = text;
   }
 
+  /** Resolves once every call to main queued so far has answered. */
+  async settled(): Promise<void> {
+    await this.#chain;
+  }
+
   /** A title left blank goes back to the saved one. */
   restoreBlankTitle(): void {
     if (isBlank(this.#latest.relationship)) {
@@ -238,3 +243,30 @@ export class InlineSaver {
     });
   }
 }
+
+/** The saver of each capture open for editing, so a copy from anywhere can wait for its edits. */
+const editing = new Map<CaptureId, InlineSaver>();
+
+/** Makes `saver` the one savePending waits on for its capture, until the returned call. */
+export const trackSaver = (id: CaptureId, saver: InlineSaver): (() => void) => {
+  editing.set(id, saver);
+
+  return () => {
+    if (editing.get(id) === saver) {
+      editing.delete(id);
+    }
+  };
+};
+
+/**
+ * Sends whatever is still being typed in a capture and waits until main has it. Every copy and
+ * export runs this first, so what lands on the clipboard is what the screen shows.
+ */
+export const savePending = async (id: CaptureId): Promise<void> => {
+  const saver = editing.get(id);
+
+  if (saver !== undefined) {
+    saver.flush();
+    await saver.settled();
+  }
+};

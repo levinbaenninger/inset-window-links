@@ -169,6 +169,7 @@ export const toSnapshot = (
 ): DraftSnapshot => ({
   activity: activitySummary(state),
   draftId: state.draft.id,
+  landing: state.background.map((item) => item.pending),
   notice: state.notice,
   platform,
   shortcut,

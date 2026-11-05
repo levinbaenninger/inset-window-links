@@ -7,6 +7,7 @@ import {
   duePresets,
   dueSentence,
   dueState,
+  dueSuggestions,
   matchesDue,
   parseQuery,
   toDueDate,
@@ -103,11 +104,14 @@ describe(dueLabel, () => {
     ]).toStrictEqual(["Today", "Tomorrow", "Yesterday", "Monday"]);
   });
 
-  it("gives the date further out, with the year only when it differs", () => {
+  it("gives a short date further out, with the year only when it differs", () => {
     expect([
-      dueLabel("2026-11-20", at(5), "en-GB"),
+      dueLabel("2026-11-11", at(5), "en-GB"),
+      dueLabel("2026-11-12", at(5), "en-GB"),
+      dueLabel("2026-11-02", at(5), "en-GB"),
       dueLabel("2027-01-08", at(5), "en-GB"),
-    ]).toStrictEqual(["Fri 20 Nov", "8 Jan 2027"]);
+      dueLabel("2026-11-12", at(5), "en-US"),
+    ]).toStrictEqual(["Wednesday", "12 Nov", "2 Nov", "8 Jan 2027", "Nov 12"]);
   });
 
   it("says overdue aloud", () => {
@@ -121,17 +125,21 @@ describe(dueLabel, () => {
 describe(matchesDue, () => {
   const now = at(5);
 
-  it("filters by today, the coming week and overdue", () => {
+  it("reads the past, today, six and seven days out the same way as the other Inset apps", () => {
     const dues = ["2026-11-01", "2026-11-05", "2026-11-11", "2026-11-12", null];
 
     expect({
+      any: dues.map((due) => matchesDue(due, "any", now)),
+      none: dues.map((due) => matchesDue(due, "none", now)),
       overdue: dues.map((due) => matchesDue(due, "overdue", now)),
       today: dues.map((due) => matchesDue(due, "today", now)),
       week: dues.map((due) => matchesDue(due, "week", now)),
     }).toStrictEqual({
+      any: [true, true, true, true, false],
+      none: [false, false, false, false, true],
       overdue: [true, false, false, false, false],
       today: [false, true, false, false, false],
-      week: [false, true, true, false, false],
+      week: [true, true, true, false, false],
     });
   });
 });
@@ -143,17 +151,53 @@ describe(parseQuery, () => {
       parseQuery("due:week"),
       parseQuery("quote"),
     ]).toStrictEqual([
-      { due: "today", text: "rieder chairs", unknownDue: null },
-      { due: "week", text: "", unknownDue: null },
-      { due: null, text: "quote", unknownDue: null },
+      {
+        due: "today",
+        partialDue: null,
+        text: "rieder chairs",
+        unknownDue: null,
+      },
+      { due: "week", partialDue: null, text: "", unknownDue: null },
+      { due: null, partialDue: null, text: "quote", unknownDue: null },
     ]);
   });
 
-  it("keeps an unknown filter apart, so the page can name the ones that exist", () => {
-    expect(parseQuery("due:soon")).toStrictEqual({
-      due: null,
-      text: "",
-      unknownDue: "soon",
+  it("reads due:any and due:none as filters", () => {
+    expect([
+      parseQuery("due:any").due,
+      parseQuery("due:NONE").due,
+    ]).toStrictEqual(["any", "none"]);
+  });
+
+  it("treats a filter still being typed as no filter, and offers what it can become", () => {
+    const typing = ["due:", "due:to", "due:o", "chairs due:n"].map(parseQuery);
+
+    expect(
+      typing.map((query) => ({
+        due: query.due,
+        partial: query.partialDue,
+        suggested: dueSuggestions(query),
+        unknown: query.unknownDue,
+      }))
+    ).toStrictEqual([
+      {
+        due: null,
+        partial: "",
+        suggested: ["today", "week", "overdue", "any", "none"],
+        unknown: null,
+      },
+      { due: null, partial: "to", suggested: ["today"], unknown: null },
+      { due: null, partial: "o", suggested: ["overdue"], unknown: null },
+      { due: null, partial: "n", suggested: ["none"], unknown: null },
+    ]);
+  });
+
+  it("keeps a word that can become no filter apart, so the page can name the ones that exist", () => {
+    const query = parseQuery("due:soon");
+
+    expect({ query, suggested: dueSuggestions(query) }).toStrictEqual({
+      query: { due: null, partialDue: null, text: "", unknownDue: "soon" },
+      suggested: ["today", "week", "overdue", "any", "none"],
     });
   });
 

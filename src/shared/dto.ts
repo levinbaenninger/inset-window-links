@@ -77,11 +77,19 @@ export type ActivitySummary =
       candidates: readonly CandidateSummary[] | "loading";
     };
 
+/** A window being captured: its title and app once known (Windows), else null. */
+export type PendingSummary = {
+  title: string | null;
+  appName: string | null;
+} | null;
+
 export interface DraftSnapshot {
   draftId: DraftId;
   views: readonly ViewSummary[];
   text: DraftText;
   activity: ActivitySummary;
+  /** Windows still landing from a capture that Add Windows overtook. Save waits for them. */
+  landing: readonly PendingSummary[];
   notice: Notice | null;
   shortcut: ShortcutStatus;
   platform: CapturePlatform;

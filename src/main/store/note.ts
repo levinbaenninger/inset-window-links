@@ -1,3 +1,4 @@
+import { longDate } from "../../shared/dates";
 import { dueDay } from "../../shared/due";
 import { isBlank } from "../../shared/text";
 import type { CaptureRecord } from "./schema";
@@ -36,15 +37,7 @@ export const formatNote = (
   const due =
     record.due === null
       ? []
-      : [
-          `Due: ${dueDay(record.due).toLocaleDateString(locale, {
-            day: "numeric",
-            month: "long",
-            weekday: "long",
-            year: "numeric",
-          })}`,
-          "",
-        ];
+      : [`Due: ${longDate(dueDay(record.due), locale)}`, ""];
 
   const description = isBlank(record.description)
     ? []

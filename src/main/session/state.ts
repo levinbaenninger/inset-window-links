@@ -75,9 +75,21 @@ export type Activity =
   | { kind: "saving"; after: "stay" | Exit }
   | { kind: "confirmingQuit"; resumeTo: Resumable; exit: Exit };
 
+/**
+ * A window capture that was still running when Add Windows took the panel over. It keeps going
+ * and its window joins the draft when it lands, whatever the panel shows by then.
+ */
+export interface BackgroundCapture {
+  token: CaptureToken;
+  via: "direct" | "chosen";
+  pending: PendingSource | null;
+}
+
 export interface SessionState {
   draft: Draft;
   activity: Activity;
+  /** Captures still landing behind the chooser or the draft, oldest first. */
+  background: readonly BackgroundCapture[];
   notice: Notice | null;
 }
 
