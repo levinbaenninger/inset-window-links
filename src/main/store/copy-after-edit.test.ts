@@ -5,13 +5,14 @@ import path from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 
 import {
+  copyAfterSaving,
   InlineSaver,
   savePending,
   trackSaver,
 } from "../../renderer/src/library/inline-saver";
 import { DraftIdSchema, ViewIdSchema } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
-import { nodeStoreFs, slowWrites } from "./fs";
+import { failingWrites, nodeStoreFs, slowWrites } from "./fs";
 import { formatNote } from "./note";
 import type { CaptureRecord } from "./schema";
 import { CaptureStore } from "./store";
@@ -63,7 +64,12 @@ const setup = async () => {
     "captures"
   );
 
-  const store = await CaptureStore.open(root, slowWrites(nodeStoreFs, 30));
+  let failing = false;
+
+  const store = await CaptureStore.open(
+    root,
+    failingWrites(slowWrites(nodeStoreFs, 30), () => failing)
+  );
 
   await store.publish({
     images: new Map([[VIEW, new Uint8Array([1])]]),
@@ -89,7 +95,22 @@ const setup = async () => {
       : "";
   };
 
-  return { copy, saver };
+  const storedNote = () => {
+    const entry = store.get(ID);
+
+    return entry?.kind === "current"
+      ? formatNote(entry.record, "en-GB", "UTC")
+      : "";
+  };
+
+  return {
+    copy,
+    saver,
+    setFailing: (on: boolean) => {
+      failing = on;
+    },
+    storedNote,
+  };
 };
 
 describe("Copy as Text after an edit", () => {
@@ -126,5 +147,55 @@ describe("Copy as Text after an edit", () => {
       "",
       "New description",
     ]);
+  });
+
+  it("copies nothing when the words on screen could not be saved, and says why", async () => {
+    const { saver, setFailing, storedNote } = await setup();
+    const copied: string[] = [];
+
+    setFailing(true);
+    saver.edit({ ...stored, description: "NEW UNSAVED WORDS" });
+
+    const outcome = await copyAfterSaving(ID, () => {
+      copied.push(storedNote());
+
+      return Promise.resolve();
+    });
+
+    expect({
+      copied,
+      outcome: outcome.kind,
+      reason:
+        outcome.kind === "failed" &&
+        outcome.message.includes("Injected write failure"),
+      shown: saver.state().text?.description,
+    }).toStrictEqual({
+      copied: [],
+      outcome: "failed",
+      reason: true,
+      shown: "NEW UNSAVED WORDS",
+    });
+  });
+
+  it("copies the new words once a failed save goes through on the next try", async () => {
+    const { saver, setFailing, storedNote } = await setup();
+
+    setFailing(true);
+    saver.edit({ ...stored, description: "Second try" });
+    await savePending(ID);
+    setFailing(false);
+
+    const copied: string[] = [];
+
+    const outcome = await copyAfterSaving(ID, () => {
+      copied.push(storedNote());
+
+      return Promise.resolve();
+    });
+
+    expect([
+      outcome.kind,
+      copied.map((note) => note.includes("Second try")),
+    ]).toStrictEqual(["ok", [true]]);
   });
 });

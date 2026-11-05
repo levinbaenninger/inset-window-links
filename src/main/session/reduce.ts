@@ -78,6 +78,25 @@ const restart = (ids: IdSource, effect: SessionEffect): Transition => [
   [effect],
 ];
 
+/** A window capture still running carries on in the background, so what takes over loses nothing. */
+const withCaptureParked = (state: SessionState): SessionState => {
+  const { activity } = state;
+
+  return activity.kind === "capturing"
+    ? {
+        ...state,
+        background: [
+          ...state.background,
+          {
+            pending: activity.pending,
+            token: activity.token,
+            via: activity.via,
+          },
+        ],
+      }
+    : state;
+};
+
 const withViews = (
   state: SessionState,
   views: readonly CapturedView[]
@@ -141,6 +160,35 @@ const onBackgroundFinished = (
   }
 };
 
+/**
+ * Once the last window has landed, a save chosen at quit goes ahead. If the draft can still not
+ * be saved, say because that window could not be captured, the panel says why and the app stays.
+ */
+const saveIfLanded = ([state, effects]: Transition): Transition => {
+  const { activity } = state;
+
+  if (activity.kind !== "savingWhenLanded" || state.background.length > 0) {
+    return [state, effects];
+  }
+
+  const check = saveability(state.draft.views.length, state.draft.text);
+
+  if (check.kind === "ok") {
+    const [saving, publish] = startSave(state, activity.exit);
+
+    return [saving, [...effects, ...publish]];
+  }
+
+  return [
+    {
+      ...state,
+      activity: activity.resumeTo,
+      notice: state.notice ?? { kind: check.reason },
+    },
+    [{ anchor: { kind: "keep" }, type: "showPopover" }],
+  ];
+};
+
 const onCaptureFinished = (
   state: SessionState,
   event: EventOf<"captureFinished">
@@ -149,7 +197,7 @@ const onCaptureFinished = (
   const behind = state.background.find((item) => item.token === event.token);
 
   if (behind !== undefined) {
-    return onBackgroundFinished(state, behind, event.outcome);
+    return saveIfLanded(onBackgroundFinished(state, behind, event.outcome));
   }
 
   if (activity.kind !== "capturing" || activity.token !== event.token) {
@@ -289,7 +337,11 @@ const onQuitRequested = (
     return unchanged(state);
   }
 
-  if (!isMeaningful(state.draft)) {
+  // A window still being captured is unsaved work too. Quitting again while a save waits for one
+  // asks again, so Discard can still end a capture that never lands.
+  const parked = withCaptureParked(state);
+
+  if (!isMeaningful(parked.draft) && parked.background.length === 0) {
     return [state, [exitApp(exit)]];
   }
 
@@ -297,7 +349,7 @@ const onQuitRequested = (
     activity.kind === "saveFailed" ? activity : ({ kind: "idle" } as const);
 
   return [
-    { ...state, activity: { exit, kind: "confirmingQuit", resumeTo } },
+    { ...parked, activity: { exit, kind: "confirmingQuit", resumeTo } },
     [{ type: "askQuit" }],
   ];
 };
@@ -324,15 +376,36 @@ const onQuitChosen = (
       return unchanged(resumed);
     }
 
+    // A window still landing counts as one: the save waits for it rather than leave it out.
     case "save": {
-      const check = saveability(state.draft.views.length, state.draft.text);
+      const landing = state.background.length;
 
-      return check.kind === "ok"
-        ? startSave(resumed, activity.exit)
-        : [
-            { ...resumed, notice: { kind: check.reason } },
-            [{ anchor: { kind: "keep" }, type: "showPopover" }],
-          ];
+      const check = saveability(
+        state.draft.views.length + landing,
+        state.draft.text
+      );
+
+      if (check.kind !== "ok") {
+        return [
+          { ...resumed, notice: { kind: check.reason } },
+          [{ anchor: { kind: "keep" }, type: "showPopover" }],
+        ];
+      }
+
+      return landing > 0
+        ? [
+            {
+              ...state,
+              activity: {
+                exit: activity.exit,
+                kind: "savingWhenLanded",
+                resumeTo: activity.resumeTo,
+              },
+              notice: null,
+            },
+            [],
+          ]
+        : startSave(resumed, activity.exit);
     }
 
     default: {
@@ -435,18 +508,7 @@ const onChooserRequested = (state: SessionState, ids: IdSource): Transition => {
 
   return [
     {
-      ...state,
-      background:
-        activity.kind === "capturing"
-          ? [
-              ...state.background,
-              {
-                pending: activity.pending,
-                token: activity.token,
-                via: activity.via,
-              },
-            ]
-          : state.background,
+      ...withCaptureParked(state),
       activity: {
         candidates: "loading",
         kind: "choosing",
@@ -530,6 +592,7 @@ const onTextChanged = (
   state: SessionState,
   event: EventOf<"textChanged">
 ): Transition => {
+  // While a quit save waits for a window, edits still count: the save has not been sent yet.
   if (state.activity.kind === "saving") {
     return unchanged(state);
   }
@@ -559,10 +622,18 @@ const onSaveRequested = (
     : [{ ...next, notice: { kind: check.reason } }, []];
 };
 
-const onDiscard = (state: SessionState, ids: IdSource): Transition =>
-  canEditDraft(state.activity)
+/** Discard while a quit save waits for a window ends the quit there, without saving. */
+const onDiscard = (state: SessionState, ids: IdSource): Transition => {
+  const { activity } = state;
+
+  if (activity.kind === "savingWhenLanded") {
+    return restart(ids, exitApp(activity.exit));
+  }
+
+  return canEditDraft(activity)
     ? restart(ids, { type: "hidePopover" })
     : unchanged(state);
+};
 
 const onPermissionRechecked = (
   state: SessionState,

@@ -95,13 +95,13 @@ describe(dueState, () => {
 });
 
 describe(dueLabel, () => {
-  it("names near days and the weekday within a week", () => {
+  it("names near days and the short weekday within a week", () => {
     expect([
       dueLabel("2026-11-05", at(5), "en-GB"),
       dueLabel("2026-11-06", at(5), "en-GB"),
       dueLabel("2026-11-04", at(5), "en-GB"),
       dueLabel("2026-11-09", at(5), "en-GB"),
-    ]).toStrictEqual(["Today", "Tomorrow", "Yesterday", "Monday"]);
+    ]).toStrictEqual(["Today", "Tomorrow", "Yesterday", "Mon"]);
   });
 
   it("gives a short date further out, with the year only when it differs", () => {
@@ -111,14 +111,15 @@ describe(dueLabel, () => {
       dueLabel("2026-11-02", at(5), "en-GB"),
       dueLabel("2027-01-08", at(5), "en-GB"),
       dueLabel("2026-11-12", at(5), "en-US"),
-    ]).toStrictEqual(["Wednesday", "12 Nov", "2 Nov", "8 Jan 2027", "Nov 12"]);
+    ]).toStrictEqual(["Wed", "12 Nov", "2 Nov", "8 Jan 2027", "Nov 12"]);
   });
 
-  it("says overdue aloud", () => {
+  it("says overdue aloud, and the whole weekday", () => {
     expect([
       dueSentence("2026-11-04", at(5)),
       dueSentence("2026-11-05", at(5)),
-    ]).toStrictEqual(["Overdue, was due yesterday", "Due today"]);
+      dueSentence("2026-11-09", at(5), "en-GB"),
+    ]).toStrictEqual(["Overdue, was due yesterday", "Due today", "Due Monday"]);
   });
 });
 
@@ -183,7 +184,7 @@ describe(parseQuery, () => {
       {
         due: null,
         partial: "",
-        suggested: ["today", "week", "overdue", "any", "none"],
+        suggested: ["today", "overdue", "week", "any", "none"],
         unknown: null,
       },
       { due: null, partial: "to", suggested: ["today"], unknown: null },
@@ -197,7 +198,7 @@ describe(parseQuery, () => {
 
     expect({ query, suggested: dueSuggestions(query) }).toStrictEqual({
       query: { due: null, partialDue: null, text: "", unknownDue: "soon" },
-      suggested: ["today", "week", "overdue", "any", "none"],
+      suggested: ["today", "overdue", "week", "any", "none"],
     });
   });
 

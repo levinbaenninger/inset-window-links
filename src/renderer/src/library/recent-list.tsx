@@ -10,6 +10,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
 import type { ReactNode, RefObject } from "react";
+import { useRef } from "react";
 
 import { DueBadge, useToday } from "@/components/due";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
+import { useCommands } from "@/lib/commands";
 import { formatClock, formatDay } from "@/lib/format";
 
 import type { CaptureListItem, ListedView } from "../../../shared/dto";
@@ -149,9 +151,10 @@ const Highlight = ({ text, needle }: { text: string; needle: string }) => {
 const ROW_SELECTOR = "[data-testid='recent-item']";
 
 /**
- * A capture in the list; right-click opens what the capture's own "…" menu holds. Space marks the
- * row in focus done, or takes a done one back. The row then leaves this list, so focus moves on
- * to the next row first, and Space again does the next one.
+ * A capture in the list; right-click focuses it and opens what the capture's own "…" menu holds.
+ * The row in focus takes the menu keys for a capture, and Space marks it done, or takes a done one
+ * back. The row then leaves this list, so focus moves on to the next row first, and Space again
+ * does the next one.
  */
 const CurrentRow = ({
   item,
@@ -166,12 +169,13 @@ const CurrentRow = ({
 }) => {
   const commands = useCaptureCommands({
     due: item.due,
-    from: active ? "openRow" : "row",
+    from: "row",
     id: item.id,
     reopenable: item.reopenable,
     status: item.status,
   });
 
+  const { feedback } = commands;
   const found = matchSource(item, needle);
   const dueShown = item.due !== null && item.status.kind !== "done";
 
@@ -184,6 +188,44 @@ const CurrentRow = ({
       ? commands.backToList.run()
       : commands.done.run());
   };
+
+  const link = useRef<HTMLAnchorElement>(null);
+
+  useCommands((command) => {
+    const row = link.current;
+
+    // Its menu still open counts too: that menu shows these keys beside its items.
+    if (
+      row === null ||
+      (document.activeElement !== row && row.dataset["state"] !== "open")
+    ) {
+      return false;
+    }
+
+    switch (command) {
+      case "copyNote": {
+        void commands.copy.run();
+
+        return true;
+      }
+
+      case "reopen": {
+        void commands.reopen?.run();
+
+        return true;
+      }
+
+      case "toggleDone": {
+        toggleDone(row);
+
+        return true;
+      }
+
+      default: {
+        return false;
+      }
+    }
+  });
 
   return (
     <li>
@@ -198,6 +240,8 @@ const CurrentRow = ({
             )}
             data-copy={entryText(item.relationship, item.description)}
             data-testid="recent-item"
+            // The menu's keys then act on this row once it closes.
+            onContextMenu={(event) => event.currentTarget.focus()}
             onKeyDown={(event) => {
               const plain =
                 !event.metaKey &&
@@ -211,6 +255,7 @@ const CurrentRow = ({
               }
             }}
             params={{ captureId: item.id }}
+            ref={link}
             to="/captures/$captureId"
           >
             <Thumbnail views={item.views} />
@@ -228,21 +273,29 @@ const CurrentRow = ({
                 </span>
               )}
               <span className="text-muted-foreground flex min-w-0 items-center gap-2.5 text-xs tabular-nums">
-                <span
-                  className={cn(
-                    "flex shrink-0 items-center gap-2.5 whitespace-nowrap",
-                    dueShown && "@max-[200px]:hidden"
-                  )}
-                >
-                  <When item={item} />
-                  <Progress dueShown={dueShown} item={item} />
-                </span>
+                {feedback === null ? (
+                  <span
+                    className={cn(
+                      "flex shrink-0 items-center gap-2.5 whitespace-nowrap",
+                      dueShown && "@max-[200px]:hidden"
+                    )}
+                  >
+                    <When item={item} />
+                    <Progress dueShown={dueShown} item={item} />
+                  </span>
+                ) : (
+                  <output
+                    className={cn(
+                      "min-w-0 truncate",
+                      feedback.failed && "text-destructive"
+                    )}
+                    title={feedback.text}
+                  >
+                    {feedback.text}
+                  </output>
+                )}
                 {dueShown && item.due !== null && (
-                  <DueBadge
-                    className="ml-auto @max-[200px]:ml-0"
-                    due={item.due}
-                    now={now}
-                  />
+                  <DueBadge className="ml-auto" due={item.due} now={now} />
                 )}
               </span>
             </span>
@@ -436,11 +489,13 @@ export const SearchField = ({
               />
             </InputGroupButton>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-52">
+          <DropdownMenuContent align="end" className="min-w-72">
             <DropdownMenuLabel>Filter by Due</DropdownMenuLabel>
             {DUE_FILTERS.map((filter) => (
               <DropdownMenuItem key={filter} onSelect={() => setFilter(filter)}>
-                <span className="flex-1">{DUE_FILTER_LABELS[filter]}</span>
+                <span className="flex-1 whitespace-nowrap">
+                  {DUE_FILTER_LABELS[filter]}
+                </span>
                 {filter === active ? (
                   <HugeiconsIcon icon={Tick02Icon} />
                 ) : (
@@ -467,8 +522,8 @@ export const SearchField = ({
 
 /** How the empty state names a due filter: "No matches for “chairs”, due today". */
 const LOOKED_FOR: Readonly<Record<DueFilter, string>> = {
-  any: "with a due date",
-  none: "without a due date",
+  any: "with a Due",
+  none: "without a Due",
   overdue: "overdue",
   today: "due today",
   week: "due this week",

@@ -11,7 +11,7 @@ import {
 import type { Add01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { DueOptions } from "@/components/due";
 import {
@@ -61,9 +61,16 @@ import type {
   StatusRequest,
 } from "../../../shared/status";
 import { ACTIVE, snoozePresets } from "../../../shared/status";
-import { savePending } from "./inline-saver";
+import { copyAfterSaving } from "./inline-saver";
 
 const FEEDBACK_MS = 2000;
+const FAILURE_MS = 6000;
+
+/** A short answer to a command, shown beside the capture; failed ones in the destructive colour. */
+export interface Feedback {
+  text: string;
+  failed: boolean;
+}
 
 type Icon = typeof Add01Icon;
 
@@ -99,12 +106,8 @@ export interface CaptureTarget {
   due: DueDate | null;
   /** The windows Reopen can bring back. */
   reopenable: readonly ViewId[];
-  /**
-   * Where the menu opens: on a row of the list, or on the open capture's own page. The menu keys
-   * act on the open capture only, and Space on the row in focus, so a hint shows only where its
-   * key does what the item does.
-   */
-  from: "row" | "openRow" | "page";
+  /** Where the menu opens: on a row of the list, where Space works too, or on the capture's page. */
+  from: "row" | "page";
 }
 
 /** "Opened 3 windows", or how many could not be. */
@@ -160,27 +163,44 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   const { captureId: openId } = useParams({ strict: false });
   const [confirming, setConfirming] = useState(false);
   const [pickingDue, setPickingDue] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
   /** When the snooze times were worked out; a menu asks again each time it opens. */
   const [now, setNow] = useState(() => new Date());
 
-  const say = (message: string | null) => {
-    setFeedback(message);
+  // A failure stays longer, so it is read before it goes; a newer answer restarts the wait.
+  useEffect(() => {
+    if (feedback === null) {
+      return;
+    }
 
-    if (message !== null) {
-      setTimeout(() => setFeedback(null), FEEDBACK_MS);
+    const timer = setTimeout(
+      () => setFeedback(null),
+      feedback.failed ? FAILURE_MS : FEEDBACK_MS
+    );
+
+    return () => clearTimeout(timer);
+  }, [feedback]);
+
+  const say = (text: string) => setFeedback({ failed: false, text });
+
+  /** Shows what went wrong, or nothing when the call went through. */
+  const report = (outcome: MutationOutcome) => {
+    const text = outcomeMessage(outcome);
+
+    if (text !== null) {
+      setFeedback({ failed: true, text });
     }
   };
 
   const setStatus = async (status: StatusRequest) => {
-    say(outcomeMessage(await libraryApi().setStatus(target.id, status)));
+    report(await libraryApi().setStatus(target.id, status));
   };
 
   const remove = async () => {
     const outcome = await libraryApi().remove(target.id);
 
     if (outcome.kind !== "ok" && outcome.kind !== "missing") {
-      say(outcomeMessage(outcome));
+      report(outcome);
 
       return;
     }
@@ -195,13 +215,12 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   const { status } = target;
 
   const setDue = async (due: DueDate | null) => {
-    say(outcomeMessage(await libraryApi().setDue(target.id, due)));
+    report(await libraryApi().setDue(target.id, due));
   };
 
-  /** The page's keys act on the open capture, so its menu, and its row's, show them. */
-  const onOpen = target.from !== "row";
-
-  const hint = (id: MenuKeyId) => (onOpen ? keys(id) : undefined);
+  // A row's keys act on that row once it has focus, which a right-click gives it, and the page's
+  // on the open capture, so every menu shows them.
+  const hint = (id: MenuKeyId) => keys(id);
 
   // The same layout as the Due picker: quick days with their dates, then Pick a date… and Clear.
   const dueMenu: MenuEntry = {
@@ -280,33 +299,42 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     kind: "item",
     label: "Copy as text",
     run: async () => {
-      // What is still being typed goes first, so the copy matches the screen.
-      await savePending(target.id);
-      await libraryApi().copyNote(target.id);
-      say("Copied");
+      const saved = await copyAfterSaving(target.id, () =>
+        libraryApi().copyNote(target.id)
+      );
+
+      if (saved.kind === "ok") {
+        say("Copied");
+      } else if (saved.kind === "failed") {
+        // Short enough for the page header; the field that could not be saved says why.
+        setFeedback({ failed: true, text: "Not copied: changes aren’t saved" });
+      } else {
+        report(saved);
+      }
     },
   };
 
-  const entries: readonly MenuEntry[] = [
-    ...(target.reopenable.length > 0
-      ? [
-          {
-            hint: hint("reopen"),
-            icon: RepeatIcon,
-            kind: "item" as const,
-            label:
-              target.reopenable.length === 1 ? "Reopen window" : "Reopen all",
-            run: async () => {
-              const { failed } = await libraryApi().reopen(
-                target.id,
-                target.reopenable
-              );
+  const reopen: MenuItem | null =
+    target.reopenable.length === 0
+      ? null
+      : {
+          hint: hint("reopen"),
+          icon: RepeatIcon,
+          kind: "item",
+          label:
+            target.reopenable.length === 1 ? "Reopen window" : "Reopen all",
+          run: async () => {
+            const { failed } = await libraryApi().reopen(
+              target.id,
+              target.reopenable
+            );
 
-              say(reopenedMessage(target.reopenable.length, failed));
-            },
+            say(reopenedMessage(target.reopenable.length, failed));
           },
-        ]
-      : []),
+        };
+
+  const entries: readonly MenuEntry[] = [
+    ...(reopen === null ? [] : [reopen]),
     copy,
     { id: "status", kind: "separator" },
     dueMenu,
@@ -371,6 +399,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     entries,
     feedback,
     onMenuOpen: () => setNow(new Date()),
+    reopen,
   };
 };
 

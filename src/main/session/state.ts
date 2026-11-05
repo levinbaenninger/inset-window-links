@@ -73,6 +73,8 @@ export type Activity =
       candidates: readonly FallbackCandidate[] | "loading";
     }
   | { kind: "saving"; after: "stay" | Exit }
+  /** Save was chosen at quit while a window was still landing: the save starts once it lands. */
+  | { kind: "savingWhenLanded"; resumeTo: Resumable; exit: Exit }
   | { kind: "confirmingQuit"; resumeTo: Resumable; exit: Exit };
 
 /**

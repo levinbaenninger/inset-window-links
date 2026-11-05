@@ -112,7 +112,7 @@ export const dueState = (due: DueDate, now: Date): DueState => {
   return days === 0 ? "today" : "upcoming";
 };
 
-/** What a chip says: Today, Tomorrow, Yesterday, a weekday in the coming week, else a short date. */
+/** What a chip says: Today, Tomorrow, Yesterday, a short weekday in the coming week, else a short date. */
 export const dueLabel = (due: DueDate, now: Date, locale?: string): string =>
   dayLabel(dueDay(due), now, locale);
 
@@ -120,8 +120,12 @@ export const dueLabel = (due: DueDate, now: Date, locale?: string): string =>
 export const dueLongLabel = (due: DueDate): string => longDate(dueDay(due));
 
 /** What a chip says aloud: "Due today", "Overdue, was due yesterday", "Due Friday". */
-export const dueSentence = (due: DueDate, now: Date): string => {
-  const label = dueLabel(due, now);
+export const dueSentence = (
+  due: DueDate,
+  now: Date,
+  locale?: string
+): string => {
+  const label = dayLabel(dueDay(due), now, locale, "long");
 
   const relative = ["Today", "Tomorrow", "Yesterday"].includes(label)
     ? label.toLocaleLowerCase()
@@ -133,16 +137,16 @@ export const dueSentence = (due: DueDate, now: Date): string => {
 };
 
 /** The due filters search understands, typed as due:<name>, in the order the menu lists them. */
-export const DUE_FILTERS = ["today", "week", "overdue", "any", "none"] as const;
+export const DUE_FILTERS = ["today", "overdue", "week", "any", "none"] as const;
 
 export type DueFilter = (typeof DUE_FILTERS)[number];
 
 export const DUE_FILTER_LABELS: Readonly<Record<DueFilter, string>> = {
-  any: "Has a due date",
-  none: "No due date",
+  any: "Has a Due",
+  none: "No Due",
   overdue: "Overdue",
   today: "Due today",
-  week: "Due this week",
+  week: "Due this week (incl. overdue)",
 };
 
 /**

@@ -49,9 +49,15 @@ export const shortDate = (
 
 /**
  * A chip's day: Today, Tomorrow or Yesterday, the weekday within the coming six days, else a
- * short date.
+ * short date. Chips use the short weekday ("Wed") so they fit narrow rows; what is read aloud
+ * uses the long one.
  */
-export const dayLabel = (date: Date, now: Date, locale?: Locale): string => {
+export const dayLabel = (
+  date: Date,
+  now: Date,
+  locale?: Locale,
+  weekday: "short" | "long" = "short"
+): string => {
   const days = calendarDays(date, now);
   const relative = RELATIVE.get(days);
 
@@ -60,7 +66,7 @@ export const dayLabel = (date: Date, now: Date, locale?: Locale): string => {
   }
 
   return days > 1 && days <= NEAR_DAYS
-    ? date.toLocaleDateString(locale, { weekday: "long" })
+    ? date.toLocaleDateString(locale, { weekday })
     : shortDate(date, now, { locale });
 };
 

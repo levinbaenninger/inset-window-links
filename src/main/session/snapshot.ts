@@ -156,6 +156,11 @@ const activitySummary = (state: SessionState): ActivitySummary => {
       return { kind: "capturing", pending: activity.pending };
     }
 
+    // The panel reads Saving… beside the tile of the window still landing.
+    case "savingWhenLanded": {
+      return { kind: "saving" };
+    }
+
     default: {
       return { kind: activity.kind };
     }

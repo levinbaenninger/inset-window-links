@@ -258,15 +258,38 @@ export const trackSaver = (id: CaptureId, saver: InlineSaver): (() => void) => {
   };
 };
 
+const SAVED: MutationOutcome = { kind: "ok" };
+
 /**
- * Sends whatever is still being typed in a capture and waits until main has it. Every copy and
- * export runs this first, so what lands on the clipboard is what the screen shows.
+ * Sends whatever is still being typed in a capture and waits until main has it. Anything but ok
+ * means main holds older words than the screen shows.
  */
-export const savePending = async (id: CaptureId): Promise<void> => {
+export const savePending = async (id: CaptureId): Promise<MutationOutcome> => {
   const saver = editing.get(id);
 
-  if (saver !== undefined) {
-    saver.flush();
-    await saver.settled();
+  if (saver === undefined) {
+    return SAVED;
   }
+
+  saver.flush();
+  await saver.settled();
+
+  return saver.state().outcome ?? SAVED;
+};
+
+/**
+ * Every copy of a capture's text goes through this, so the clipboard gets what the screen shows.
+ * When the pending edits could not be saved, it copies nothing and returns why.
+ */
+export const copyAfterSaving = async (
+  id: CaptureId,
+  copy: () => Promise<void>
+): Promise<MutationOutcome> => {
+  const saved = await savePending(id);
+
+  if (saved.kind === "ok") {
+    await copy();
+  }
+
+  return saved;
 };

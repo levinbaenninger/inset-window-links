@@ -81,6 +81,11 @@ if (page === "library") {
     {
       get: (id) =>
         Promise.resolve(captures.find((capture) => capture.id === id) ?? null),
+      copyNote: (captureId) => {
+        record("copyNote", captureId);
+
+        return nothing();
+      },
       list: () => Promise.resolve(items),
       onChanged: (listener) => subscribe("changed", listener),
       onCommand: (listener) => subscribe("command", listener),
@@ -104,6 +109,15 @@ if (page === "library") {
         return Promise.resolve({ kind: "ok" });
       },
       updateText: (captureId, text) => {
+        if (data.failSaves === true) {
+          record("updateText", captureId, text);
+
+          return Promise.resolve({
+            kind: "failed",
+            message: "The disk is full.",
+          });
+        }
+
         const capture = captures.find((item) => item.id === captureId);
 
         if (capture !== undefined) {

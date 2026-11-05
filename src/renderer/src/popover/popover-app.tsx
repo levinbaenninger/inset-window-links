@@ -481,7 +481,8 @@ const DraftForm = ({
 
   const mac = snapshot.platform === "macos";
   const { platform } = snapshot;
-  const check = saveability(viewCount, text);
+  // Save at quit waits for a window still landing, so it counts as one.
+  const check = saveability(viewCount + snapshot.landing.length, text);
   const hasContent = viewCount > 0 || hasTyped(text);
 
   // A blocked draft is still sent: main answers with the notice that says what is missing. A

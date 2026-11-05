@@ -965,6 +965,137 @@ describe("session lifecycle", () => {
     });
   });
 
+  it("waits for a window still landing when Save is chosen at quit, then saves both and exits", () => {
+    const source = ids();
+
+    const asked = run(source, [
+      foreignPress,
+      captured("t1", view(1, "macos:1176")),
+      { text: text("Two windows"), type: "textChanged" },
+      foreignPress,
+      { type: "chooserRequested" },
+      { type: "choiceCancelled" },
+      { type: "quitRequested" },
+    ]);
+
+    expect(asked.effects).toStrictEqual([{ type: "askQuit" }]);
+
+    const waiting = run(
+      source,
+      [{ choice: "save", type: "quitChosen" }],
+      asked.state
+    );
+
+    expect([waiting.state.activity, waiting.effects]).toStrictEqual([
+      { exit: "quit", kind: "savingWhenLanded", resumeTo: { kind: "idle" } },
+      [],
+    ]);
+
+    const landed = run(
+      source,
+      [
+        { text: text("Typed while waiting"), type: "textChanged" },
+        captured("t2", view(2, "macos:1180")),
+      ],
+      waiting.state
+    );
+
+    expect({
+      activity: landed.state.activity,
+      effects: landed.effects.map((effect) => effect.type),
+      published:
+        landed.effects[1]?.type === "publish"
+          ? {
+              text: landed.effects[1].draft.text.relationship,
+              titles: landed.effects[1].draft.views.map((v) => v.title),
+            }
+          : null,
+    }).toStrictEqual({
+      activity: { after: "quit", kind: "saving" },
+      effects: ["previewPopover", "publish"],
+      published: {
+        text: "Typed while waiting",
+        titles: ["Untitled 1", "Untitled 2"],
+      },
+    });
+
+    const done = run(
+      source,
+      [{ draftId: D1, result: { kind: "published" }, type: "saveFinished" }],
+      landed.state
+    );
+
+    expect(done.effects).toStrictEqual([{ type: "exitApp" }]);
+  });
+
+  it("asks before quitting while a window is still being captured, and keeps it on Cancel", () => {
+    const source = ids();
+
+    const asked = run(source, [foreignPress, { type: "quitRequested" }]);
+
+    expect(asked.effects).toStrictEqual([{ type: "askQuit" }]);
+
+    const kept = run(
+      source,
+      [
+        { choice: "cancel", type: "quitChosen" },
+        captured("t1", view(1, "macos:1176")),
+      ],
+      asked.state
+    );
+
+    expect([
+      kept.state.activity,
+      kept.state.background,
+      kept.state.draft.views.map((v) => v.title),
+    ]).toStrictEqual([{ kind: "idle" }, [], ["Untitled 1"]]);
+  });
+
+  it("stays open and says why when the window a quit save waited for could not be captured", () => {
+    const source = ids();
+
+    const waiting = run(source, [
+      { text: text("A limits B"), type: "textChanged" },
+      foreignPress,
+      { type: "quitRequested" },
+      { choice: "save", type: "quitChosen" },
+    ]);
+
+    expect(waiting.state.activity.kind).toBe("savingWhenLanded");
+
+    const refused = run(
+      source,
+      [
+        {
+          outcome: { kind: "permissionDenied" },
+          token: "t1",
+          type: "captureFinished",
+        },
+      ],
+      waiting.state
+    );
+
+    expect([
+      refused.state.activity,
+      refused.state.notice,
+      refused.effects,
+    ]).toStrictEqual([
+      { kind: "idle" },
+      { kind: "permissionDenied", stillDenied: false },
+      [{ anchor: { kind: "keep" }, type: "showPopover" }],
+    ]);
+
+    // A window that never lands must not keep the app from quitting.
+    expect([
+      run(
+        source,
+        [{ type: "quitRequested" }, { choice: "discard", type: "quitChosen" }],
+        waiting.state
+      ).effects,
+      run(source, [{ type: "discardRequested" }], waiting.state).effects,
+    ]).toStrictEqual([[{ type: "exitApp" }], [{ type: "exitApp" }]]);
+  });
+
   it("counts a typed next step as unsaved work, but not a blank one", () => {
     const { draft } = initialSession(D1);
 

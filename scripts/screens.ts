@@ -402,6 +402,8 @@ type Capture = Omit<(typeof CAPTURES)[number], "due"> & { due: string | null };
 /** What a scene's fake bridge answers from: the popover's draft, the library's captures or the settings view. */
 interface SceneData {
   captures?: readonly Capture[];
+  /** Every text save answers that it failed, as a full disk would. */
+  failSaves?: boolean;
   draft?: DraftState;
   view?: typeof SETTINGS_VIEW;
 }
@@ -933,12 +935,12 @@ const SCENES: readonly Scene[] = [
       await page.getByTestId("recent-item").nth(1).click({ button: "right" });
       await page.getByRole("menuitem", { name: "Due", exact: true }).hover();
       await page.getByRole("menuitem", { name: /^This weekend/u }).waitFor();
-      assert.equal(
+      assert.match(
         (await page
           .getByRole("menuitem", { name: /^Reopen all/u })
           .textContent()) ?? "",
-        "Reopen all",
-        "a row that is not open shows no key for the open capture"
+        /⌘O$/u,
+        "a row's menu shows the keys that act on it once it has focus"
       );
     },
     data: { captures: CAPTURES },
@@ -1066,6 +1068,88 @@ const SCENES: readonly Scene[] = [
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
     name: "library-row-keys",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      const title = page.getByTestId("record-relationship");
+
+      await title.fill(`${await title.inputValue()} (revised)`);
+      await sendCommand(page, "copyNote");
+      await page
+        .getByTestId("capture-feedback")
+        .filter({
+          hasText: "Not copied: changes aren’t saved",
+        })
+        .waitFor();
+      assert.equal(
+        await page.evaluate<number>(
+          "globalThis.__calls.filter((call) => call.method === 'copyNote').length"
+        ),
+        0,
+        "a failed save copies nothing"
+      );
+      await title.evaluate((field) =>
+        field.closest(".overflow-y-auto")?.scrollTo(0, 0)
+      );
+    },
+    data: { captures: CAPTURES, failSaves: true },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-copy-refused",
+    page: "library",
+  },
+  {
+    data: {
+      draft: draft({
+        activity: { kind: "confirmingQuit" },
+        landing: [{ appName: "Calendar", title: "Calendar: November" }],
+        text: { ...FULL_DRAFT.text, due: null, todos: [] },
+      }),
+    },
+    name: "popover-quit-landing",
+    page: "popover",
+    platforms: ["windows"],
+  },
+  {
+    data: {
+      draft: draft({
+        ...FULL_DRAFT,
+        activity: { kind: "saving" },
+        landing: [{ appName: "Calendar", title: "Calendar: November" }],
+      }),
+    },
+    name: "popover-saving-landing",
+    page: "popover",
+    platforms: ["windows"],
+  },
+  {
+    act: async (page) => {
+      const row = page.getByTestId("recent-item").nth(1);
+
+      await row.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Copy as text" }).waitFor();
+      await sendCommand(page, "copyNote");
+      await page.keyboard.press("Escape");
+      await page.getByRole("menu").waitFor({ state: "detached" });
+      assert.equal(
+        await row.evaluate((element) => element.matches(":focus")),
+        true,
+        "a right-click leaves focus on that row"
+      );
+      await sendCommand(page, "copyNote");
+      await row.getByText("Copied").waitFor();
+      assert.deepEqual(
+        await page.evaluate<unknown[]>(
+          "globalThis.__calls.filter((call) => call.method === 'copyNote').map((call) => call.args[0])"
+        ),
+        [uuid(2), uuid(2)],
+        "Copy as text acts on the right-clicked row, menu open or closed, not the open capture"
+      );
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-row-menu-keys",
     page: "library",
     platforms: ["macos"],
   },

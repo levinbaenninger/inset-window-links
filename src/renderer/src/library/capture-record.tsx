@@ -63,6 +63,7 @@ import {
   MAX_RELATIONSHIP,
   MAX_VIEW_DESCRIPTION,
 } from "../../../shared/text";
+import type { Feedback } from "./capture-commands";
 import {
   MenuEntries,
   reopenedMessage,
@@ -382,7 +383,9 @@ const Record = ({
     status: detail.status,
   });
 
-  const shown = reopened ?? commands.feedback;
+  const shown: Feedback | null =
+    reopened === null ? commands.feedback : { failed: false, text: reopened };
+
   const isDone = detail.status.kind === "done";
 
   const reopen = async (views: readonly ViewSummary[]) => {
@@ -424,6 +427,22 @@ const Record = ({
   };
 
   useCommands((command) => {
+    // A sidebar row in focus, or with its menu open, takes the keys for a capture itself.
+    const rowFocused =
+      (document.activeElement?.closest("[data-testid='recent-item']") ??
+        document.querySelector(
+          "[data-testid='recent-item'][data-state='open']"
+        )) !== null;
+
+    if (
+      rowFocused &&
+      (command === "copyNote" ||
+        command === "reopen" ||
+        command === "toggleDone")
+    ) {
+      return false;
+    }
+
     switch (command) {
       case "focusDescription": {
         focusDescription();
@@ -520,8 +539,15 @@ const Record = ({
           <StatusNote status={detail.status} />
         </p>
         {shown !== null && (
-          <output className="text-muted-foreground mr-2 text-xs">
-            {shown}
+          <output
+            className={cn(
+              "mr-2 max-w-3/5 shrink-0 truncate text-xs",
+              shown.failed ? "text-destructive" : "text-muted-foreground"
+            )}
+            data-testid="capture-feedback"
+            title={shown.text}
+          >
+            {shown.text}
           </output>
         )}
         <IconButton
