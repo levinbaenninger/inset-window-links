@@ -16,10 +16,14 @@ import { CURRENT_SCHEMA_VERSION } from "../store/schema";
 import type { NewCapture } from "../store/store";
 import type { CapturedView, Draft, SessionState } from "./state";
 
-export const toSavedView = (view: CapturedView): SavedView => ({
+export const toSavedView = (
+  view: CapturedView,
+  description = ""
+): SavedView => ({
   acquisition: view.acquisition,
   appName: view.appName,
   capturedAt: view.capturedAt.toISOString(),
+  description,
   height: view.height,
   id: view.id,
   origin: view.origin,
@@ -28,19 +32,25 @@ export const toSavedView = (view: CapturedView): SavedView => ({
   width: view.width,
 });
 
-/** The record a saved draft becomes. Blank to-dos are dropped, and the description is trimmed. */
+/**
+ * The record a saved draft becomes. Blank to-dos are dropped, and the descriptions are trimmed.
+ * A description typed for a window that was removed again is left behind.
+ */
 export const toNewCapture = (draft: Draft, now: Date): NewCapture => ({
   images: new Map(draft.views.map((view) => [view.id, view.png])),
   record: {
     createdAt: now.toISOString(),
     description: draft.text.description.trim(),
+    due: draft.text.due,
     id: draft.id,
     relationship: draft.text.relationship,
     schemaVersion: CURRENT_SCHEMA_VERSION,
     status: ACTIVE,
     todos: keptTodos(draft.text.todos),
     updatedAt: now.toISOString(),
-    views: draft.views.map(toSavedView),
+    views: draft.views.map((view) =>
+      toSavedView(view, (draft.text.viewDescriptions[view.id] ?? "").trim())
+    ),
   },
 });
 
@@ -99,6 +109,7 @@ export const summarizeViews = (
     return {
       appName: view.appName,
       capturedAt: view.capturedAt,
+      description: view.description,
       height: view.height,
       id: view.id,
       imageUrl: urlFor(view),
@@ -162,7 +173,8 @@ export const toSnapshot = (
   platform,
   shortcut,
   text: state.draft.text,
-  views: summarizeViews(state.draft.views.map(toSavedView), (view) =>
-    imageUrl({ kind: "draft", viewId: view.id })
+  views: summarizeViews(
+    state.draft.views.map((view) => toSavedView(view)),
+    (view) => imageUrl({ kind: "draft", viewId: view.id })
   ),
 });

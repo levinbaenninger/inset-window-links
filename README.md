@@ -1,6 +1,6 @@
 # Inset Window Links
 
-A small Mac and Windows app for keeping one thought together with the windows it is about. Add the windows that matter, either one at a time with a shortcut or several at once from a list. Give the capture a title that says what connects them, add details and next steps if you like, and save. Later, Recent Captures reopens the pages, files and apps the windows showed, and lets you check the steps off. Captures stay on this computer.
+A small Mac and Windows app for keeping one thought together with the windows it is about. Add the windows that matter, either one at a time with a shortcut or several at once from a list. Give the capture a title that says what connects them, add an optional description, next steps and a due date, and save. Later, Recent Captures reopens the pages, files and apps the windows showed, and lets you check the steps off. Captures stay on this computer.
 
 This is a research prototype. See `IMPLEMENTATION_REPORT.md` for what has been verified and what has not.
 
@@ -10,26 +10,31 @@ This is a research prototype. See `IMPLEMENTATION_REPORT.md` for what has been v
   - The panel opens centred on the screen you are working on, a little above the middle. Drag it by its header to move it; it reopens where you left it until the app quits.
   - It stays open when you click another window, and floats above other windows, so you can keep adding windows. Turn either off in Settings. Escape, or the − button, hides it and keeps the draft.
 - **Several windows at once.** The dashed Add tile in the panel (File > Add Windows…, `⇧⌘N`) lists every open window. Click the windows you want, then Add. Select all (`⌘A`) picks all of them; double-click adds just one.
-- **Write and save.** The title says what connects the windows; Return moves on to the optional details. Next steps is a list: Return starts the next step, Backspace in an empty one removes it. Save with `⌘↵` (`Ctrl+Enter` on Windows), the Save button, or File > Save Capture (`⌘S`). Without a window or a title, Save says what is missing. Discard asks once; while it asks, Escape keeps the draft.
+- **Write and save.** The title says what connects the windows; Return moves on to the optional Description. Next steps is a list: Return starts the next step, Backspace in an empty one removes it. Save with `⌘↵` (`Ctrl+Enter` on Windows), the Save button, or File > Save Capture (`⌘S`). Without a window or a title, Save says what is missing. Discard asks once; while it asks, Escape keeps the draft.
+- **Optional fields.** The add chips reveal Description (`⌘D`), Next steps (`⇧⌘S`) and Due (`⇧⌘D`). On Windows, use Ctrl in place of ⌘. Click a window tile to add its own description; in Recent Captures, use the description button beside its title.
+- **Due.** Pick Today, Tomorrow, This weekend, Next week or a date. Clear removes it. Today uses the accent colour; overdue dates use red. Due keeps the capture visible. Search with `due:today`, `due:overdue` or `due:week`, which means today through the next six days. The filter button offers the same choices.
+- **Keyboard shortcuts.** Open the sheet with `⌘/` (`Ctrl+/` on Windows), the keyboard button, Help or the tray menu. Save stays `⌘S`; the sidebar stays `⌃⌘S`.
 - **Quit** with an unsaved draft asks inside the panel: Save, Discard, or Cancel.
-- **Recent Captures** (View > Recent Captures, `⌘2`) opens on the newest capture, with the captures by day in a sidebar and search (`⌘F`) over the title, details, next steps, window titles and apps. Settings sits at the foot of the sidebar.
+- **Recent Captures** (View > Recent Captures, `⌘2`) opens on the newest capture, with the captures by day in a sidebar and search (`⌘F`) over the title, descriptions, next steps, window titles and apps. Settings sits at the foot of the sidebar.
   - Drag the sidebar's edge to make it wider or narrower; double-click the edge for the default width. Hide it with the sidebar button or `⌃⌘S` (`Ctrl+B` on Windows), or by dragging the edge far to the left. The width and whether it is hidden are kept.
-  - Edit the title, details and next steps right in the capture. Changes save as you type; a blank title goes back to the saved one. Each checked step is saved at once.
+  - Edit the title, Description and next steps right in the capture. Changes save as you type; a blank title goes back to the saved one. Each checked step is saved at once.
   - Reopen all opens the web page, file or app each window showed. Each window also has its own link.
-  - Right-click a capture in the sidebar, or open the capture's `…` menu, for Reopen, Copy as text, Snooze, Mark as done and Delete. Delete asks first.
+  - Right-click a capture in the sidebar, or open the capture's `…` menu, for Reopen, Copy as text, Due, Snooze, Mark as done and Delete. Delete asks first.
   - Mark as done (the check button in the capture's header) keeps a capture without leaving it in the list. Snooze hides it until in an hour, this evening, tomorrow at 9:00 or next Monday at 9:00; then it comes back to the list with a notification, also after the computer slept or the app was closed. Snoozed and Done sit at the foot of the sidebar and open their own lists.
-  - Copy as text (in the `…` menu) puts the title, the details, the steps as a checklist, and the windows with their addresses on the clipboard. Each image can be copied, dragged into another app, or opened at full size (`Z` switches to actual size, the arrow keys step between windows).
+  - Copy as text (in the `…` menu) puts the title, Description, Due, the steps as a checklist, and the windows with their addresses and descriptions on the clipboard. Each image can be copied, dragged into another app, or opened at full size (`Z` switches to actual size, the arrow keys step between windows).
 - **Settings** (`⌘,`):
   - Open at login.
   - Show the app icon in the Dock, the menu bar, or both (macOS). Menu bar only means no Dock icon and no menu bar.
   - Keep the panel on top, and hide it when you click away.
   - Remember pages and files. This needs Accessibility. Without it, Reopen brings back only the app. On Windows the setting is Remember web pages, a switch that starts off.
-- **Menus.** The app has the usual Mac menus: File, Edit, View, Window and Help. Window > Keep Capture Panel on Top does the same as the setting. The menu-bar icon has Capture Panel, Add Windows…, Recent Captures…, How It Works, Settings… and Quit.
+- **Menus.** The app has the usual Mac menus: File, Edit, Capture, View, Window and Help. Window > Keep Capture Panel on Top does the same as the setting. The menu-bar icon has Capture Panel, Add Windows…, Recent Captures…, How It Works, Keyboard Shortcuts, Settings… and Quit.
 - **Windows.**
   - The icon sits in the notification area. Windows 11 puts new icons behind the ^ next to the clock; drag it onto the taskbar to keep it in view. A left click opens the draft when it holds something, otherwise Recent Captures. Starting the app again while it runs does the same.
-  - There is no menu bar, but Inset's windows answer the menu keys with Ctrl: `Ctrl+N` and `Ctrl+1` open the panel, `Ctrl+Shift+N` adds windows, `Ctrl+S` saves, `Ctrl+F` finds, `Ctrl+2` opens Recent Captures, `Ctrl+,` opens Settings, and `Ctrl+W` closes the window or hides the panel. Alt+F4 also hides the panel and keeps the draft.
+  - There is no menu bar, but Inset's windows answer the menu keys with Ctrl: `Ctrl+N` and `Ctrl+1` open the panel, `Ctrl+Shift+N` opens Add Windows while an Inset window has focus, including while a capture is loading, `Ctrl+S` saves, `Ctrl+F` finds, `Ctrl+2` opens Recent Captures, `Ctrl+,` opens Settings, and `Ctrl+W` closes the window or hides the panel. Alt+F4 also hides the panel and keeps the draft.
   - Recent Captures and Settings open on the screen the pointer is on.
   - Reopen starts each window's app again, once per app. Windows starts a new window of it rather than bringing a running one forward. With Remember web pages on, a page in Chrome, Edge, Brave, Vivaldi or Opera opens again, in the browser it was in. Firefox pages are not read. Inset reads the address from the browser's address bar, which hides `https://`. An address without a scheme is stored as https, or as http for localhost and IP addresses. Files other apps had open are not remembered.
+
+The new Windows shortcut changes have unit coverage and Chromium fixture checks, but have not been verified on real Windows.
 
 Captures are stored as JSON and PNG files in `~/Library/Application Support/Inset Window Links/captures` on macOS and `%APPDATA%\Inset Window Links\captures` on Windows.
 

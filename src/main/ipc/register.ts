@@ -13,6 +13,7 @@ import type {
 } from "../../shared/channels";
 import { channelName } from "../../shared/channels";
 import type { CaptureDetail, CaptureListItem } from "../../shared/dto";
+import { DueDateSchema } from "../../shared/due";
 import {
   CandidateIdSchema,
   DraftIdSchema,
@@ -175,6 +176,7 @@ const listItem = (entry: StoreEntry): CaptureListItem => {
   return {
     createdAt: record.createdAt,
     description: record.description,
+    due: record.due,
     id: record.id,
     kind: "current",
     relationship: record.relationship,
@@ -185,6 +187,7 @@ const listItem = (entry: StoreEntry): CaptureListItem => {
     todos: record.todos,
     views: record.views.map((view) => ({
       appName: view.appName,
+      description: view.description,
       height: view.height,
       id: view.id,
       imageUrl: imageUrl({
@@ -208,6 +211,7 @@ const detail = (entry: StoreEntry | undefined): CaptureDetail | null => {
   return {
     createdAt: record.createdAt,
     description: record.description,
+    due: record.due,
     id: record.id,
     relationship: record.relationship,
     status: record.status,
@@ -284,6 +288,10 @@ export const registerLibraryChannels = (
     openSettings: send(z.tuple([]), actions.openSettings),
     remove: invoke(z.tuple([DraftIdSchema]), (captureId) =>
       store.remove(captureId)
+    ),
+    setDue: invoke(
+      z.tuple([DraftIdSchema, DueDateSchema.nullable()]),
+      (captureId, due) => store.setDue(captureId, due, new Date())
     ),
     setStatus: invoke(
       z.tuple([DraftIdSchema, StatusRequestSchema]),

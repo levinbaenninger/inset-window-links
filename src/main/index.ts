@@ -11,11 +11,13 @@ import {
   powerMonitor,
   shell,
   systemPreferences,
+  webContents,
 } from "electron";
 
 import type { IconPlace, SettingsView } from "../shared/settings";
-import type { AppMenuActions } from "./app-menu";
-import { appMenuTemplate, keyAction } from "./app-menu";
+import type { PageCommand } from "../shared/shortcuts";
+import type { AppMenuActions, KeyAction } from "./app-menu";
+import { appMenuTemplate } from "./app-menu";
 import { loadAppState, saveAppState } from "./app-state";
 import {
   capturePlatform,
@@ -30,6 +32,7 @@ import {
   registerSettingsChannels,
   trustedSender,
 } from "./ipc/register";
+import { wireMenuKeys } from "./menu-keys";
 import { SessionController } from "./session/controller";
 import { openSettingsStore } from "./settings-store";
 import { startSnoozeClock } from "./snooze-clock";
@@ -156,18 +159,13 @@ const start = async () => {
   await app.whenReady();
   denyEverything();
 
-  /** Set once the app's actions exist; until then a key press does nothing. */
-  let answerMenuKeys:
-    | ((event: Electron.Event, input: Electron.Input) => void)
-    | null = null;
+  /** Set once the app's actions exist; until then a key press reaches the page as usual. */
+  let answerMenuKeys: ((action: KeyAction) => void) | null = null;
 
-  // Windows has no menu bar, so every Inset window answers the Mac menu's keys itself.
+  // Windows has no menu bar, so every Inset page answers the Mac menu's keys itself: each
+  // page's contents, including any made before this line, so no window can miss them.
   if (!mac) {
-    app.on("browser-window-created", (_event, win) => {
-      win.webContents.on("before-input-event", (event, input) =>
-        answerMenuKeys?.(event, input)
-      );
-    });
+    wireMenuKeys(app, webContents.getAllWebContents(), () => answerMenuKeys);
   }
 
   const settings = await openSettingsStore(
@@ -266,6 +264,36 @@ const start = async () => {
     app.quit();
   };
 
+  /**
+   * A menu key for a page goes to the Inset window in front. With none in front, the field keys
+   * open the panel, and the sheet opens in Recent Captures; the keys for an open capture or the
+   * sidebar need Recent Captures to be open already.
+   */
+  const toPage = (command: PageCommand) => {
+    if (popover.isFocused()) {
+      popover.command(command);
+
+      return;
+    }
+
+    if (library.isFocused() || command === "showShortcuts") {
+      library.command(command);
+
+      return;
+    }
+
+    if (
+      command === "focusDescription" ||
+      command === "setDue" ||
+      command === "focusSteps"
+    ) {
+      showDraft();
+      popover.command(command);
+    } else if (library.window() !== null) {
+      library.command(command);
+    }
+  };
+
   const actions = {
     addFromWindowList: addWindows,
     checkForUpdates: () => updater.check(),
@@ -278,6 +306,7 @@ const start = async () => {
     },
     openRecent,
     openSettings,
+    openShortcuts: () => toPage("showShortcuts"),
     openWelcome: () => library.open("/welcome"),
     openScreenSettings:
       capturePlatform === "macos"
@@ -337,6 +366,14 @@ const start = async () => {
   const menuActions: AppMenuActions = {
     addWindows,
     checkForUpdates: actions.checkForUpdates,
+    copyNote: () => toPage("copyNote"),
+    focusDescription: () => toPage("focusDescription"),
+    focusSteps: () => toPage("focusSteps"),
+    reopen: () => toPage("reopen"),
+    setDue: () => toPage("setDue"),
+    showShortcuts: actions.openShortcuts,
+    toggleDone: () => toPage("toggleDone"),
+    toggleSidebar: () => toPage("toggleSidebar"),
     closeWindow: () => {
       if (popover.isFocused()) {
         popover.hide();
@@ -359,14 +396,7 @@ const start = async () => {
     },
   };
 
-  answerMenuKeys = (event, input) => {
-    const action = keyAction(input);
-
-    if (action !== null) {
-      event.preventDefault();
-      menuActions[action]();
-    }
-  };
+  answerMenuKeys = (action) => menuActions[action]();
 
   const refreshAppMenu = () => {
     if (!mac) {

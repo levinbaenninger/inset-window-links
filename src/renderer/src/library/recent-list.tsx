@@ -2,18 +2,30 @@ import {
   AlarmClockIcon,
   Cancel01Icon,
   CheckmarkCircle02Icon,
+  FilterHorizontalIcon,
   Search01Icon,
+  Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 
+import { DueBadge, useToday } from "@/components/due";
+import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   InputGroup,
   InputGroupAddon,
@@ -23,6 +35,9 @@ import {
 import { formatClock, formatDay } from "@/lib/format";
 
 import type { CaptureListItem, ListedView } from "../../../shared/dto";
+import type { DueFilter } from "../../../shared/due";
+import { DUE_FILTERS, parseQuery, withDueFilter } from "../../../shared/due";
+import { matchesCapture } from "../../../shared/search";
 import type { StatusKind } from "../../../shared/status";
 import { MenuEntries, useCaptureCommands } from "./capture-commands";
 
@@ -85,15 +100,47 @@ const When = ({ item }: { item: CurrentItem }) =>
     formatClock(item.createdAt)
   );
 
+/** The text with every match of the search marked, so a row shows why it is listed. */
+const Highlight = ({ text, needle }: { text: string; needle: string }) => {
+  if (needle === "") {
+    return text;
+  }
+
+  const lower = text.toLocaleLowerCase();
+  const parts: ReactNode[] = [];
+  let from = 0;
+  let at = lower.indexOf(needle);
+
+  while (at >= 0) {
+    parts.push(
+      text.slice(from, at),
+      <mark className="bg-brand/20 text-foreground rounded-xs" key={at}>
+        {text.slice(at, at + needle.length)}
+      </mark>
+    );
+    from = at + needle.length;
+    at = lower.indexOf(needle, from);
+  }
+
+  parts.push(text.slice(from));
+
+  return parts;
+};
+
 /** A capture in the list; right-click opens what the capture's own "…" menu holds. */
 const CurrentRow = ({
   item,
   active,
+  needle,
+  now,
 }: {
   item: CurrentItem;
   active: boolean;
+  needle: string;
+  now: Date;
 }) => {
   const commands = useCaptureCommands({
+    due: item.due,
     id: item.id,
     reopenable: item.reopenable,
     status: item.status,
@@ -114,13 +161,30 @@ const CurrentRow = ({
             to="/captures/$captureId"
           >
             <Thumbnail views={item.views} />
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="@container flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="line-clamp-2 text-sm leading-snug font-medium">
-                {item.relationship}
+                <Highlight needle={needle} text={item.relationship} />
               </span>
-              <span className="text-muted-foreground flex items-center gap-2.5 text-xs tabular-nums">
-                <When item={item} />
-                <Progress item={item} />
+              <span className="text-muted-foreground flex min-w-0 items-center gap-2.5 text-xs tabular-nums">
+                <span
+                  className={cn(
+                    "flex shrink-0 items-center gap-2.5 whitespace-nowrap",
+                    item.due !== null &&
+                      item.status.kind !== "done" &&
+                      "@max-[180px]:hidden"
+                  )}
+                >
+                  <When item={item} />
+                  <Progress item={item} />
+                </span>
+                {item.due !== null && item.status.kind !== "done" && (
+                  <DueBadge
+                    className="ml-auto @max-[180px]:ml-0"
+                    compact
+                    due={item.due}
+                    now={now}
+                  />
+                )}
               </span>
             </span>
           </Link>
@@ -140,7 +204,17 @@ const KeptRow = ({ children }: { children: string }) => (
   </li>
 );
 
-const Row = ({ item, active }: { item: CaptureListItem; active: boolean }) => {
+const Row = ({
+  item,
+  active,
+  needle,
+  now,
+}: {
+  item: CaptureListItem;
+  active: boolean;
+  needle: string;
+  now: Date;
+}) => {
   switch (item.kind) {
     case "unsupported": {
       return <KeptRow>Saved by a newer version</KeptRow>;
@@ -151,26 +225,11 @@ const Row = ({ item, active }: { item: CaptureListItem; active: boolean }) => {
     }
 
     default: {
-      return <CurrentRow active={active} item={item} />;
+      return (
+        <CurrentRow active={active} item={item} needle={needle} now={now} />
+      );
     }
   }
-};
-
-export const matches = (item: CaptureListItem, query: string): boolean => {
-  if (item.kind !== "current") {
-    return query === "";
-  }
-
-  const haystack = [
-    item.relationship,
-    item.description,
-    ...item.todos.map((todo) => todo.text),
-    ...item.views.flatMap((view) => [view.title ?? "", view.appName ?? ""]),
-  ]
-    .join("\n")
-    .toLocaleLowerCase();
-
-  return haystack.includes(query);
 };
 
 /** The time a row is grouped and ordered by: when a snoozed capture comes back, else when it was saved. */
@@ -200,49 +259,108 @@ const byDay = (items: readonly CaptureListItem[]) => {
   return groups;
 };
 
+const FILTER_LABELS: Record<DueFilter, string> = {
+  overdue: "Overdue",
+  today: "Due today",
+  week: "Due this week",
+};
+
+/**
+ * The sidebar's search. Its filter menu adds due:today, due:week or due:overdue to the words,
+ * which can also be typed; Escape clears the search.
+ */
 export const SearchField = ({
   query,
   onQuery,
   field,
+  findKeys,
 }: {
   query: string;
   onQuery: (query: string) => void;
   field: RefObject<HTMLInputElement | null>;
-}) => (
-  <InputGroup>
-    <InputGroupAddon>
-      <HugeiconsIcon icon={Search01Icon} />
-    </InputGroupAddon>
-    <InputGroupInput
-      aria-label="Search captures"
-      onChange={(event) => onQuery(event.target.value)}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && query !== "") {
-          event.preventDefault();
-          onQuery("");
-        }
-      }}
-      placeholder="Search"
-      ref={field}
-      type="text"
-      value={query}
-    />
-    {query === "" ? null : (
-      <InputGroupAddon align="inline-end">
-        <InputGroupButton
-          aria-label="Clear search"
-          onClick={() => {
-            onQuery("");
-            field.current?.focus();
-          }}
-          size="icon-xs"
-        >
-          <HugeiconsIcon icon={Cancel01Icon} />
-        </InputGroupButton>
+  findKeys: string;
+}) => {
+  const active = parseQuery(query).due;
+
+  const setFilter = (filter: DueFilter | null) => {
+    onQuery(withDueFilter(query, filter === active ? null : filter));
+    requestAnimationFrame(() => field.current?.focus());
+  };
+
+  return (
+    <InputGroup>
+      <InputGroupAddon>
+        <HugeiconsIcon icon={Search01Icon} />
       </InputGroupAddon>
-    )}
-  </InputGroup>
-);
+      <InputGroupInput
+        aria-label={`Search captures (${findKeys})`}
+        onChange={(event) => onQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && query !== "") {
+            event.preventDefault();
+            onQuery("");
+          }
+        }}
+        placeholder="Search or due:today"
+        ref={field}
+        type="text"
+        value={query}
+      />
+      <InputGroupAddon align="inline-end">
+        {query === "" ? null : (
+          <InputGroupButton
+            aria-label="Clear search"
+            onClick={() => {
+              onQuery("");
+              field.current?.focus();
+            }}
+            size="icon-xs"
+          >
+            <HugeiconsIcon icon={Cancel01Icon} />
+          </InputGroupButton>
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <InputGroupButton
+              aria-label="Filter by due date"
+              data-testid="due-filter"
+              size="icon-xs"
+              title="Filter by due date"
+            >
+              <HugeiconsIcon
+                className={cn(active !== null && "text-brand")}
+                icon={FilterHorizontalIcon}
+              />
+            </InputGroupButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-48">
+            <DropdownMenuLabel>Show captures that are</DropdownMenuLabel>
+            {DUE_FILTERS.map((filter) => (
+              <DropdownMenuItem key={filter} onSelect={() => setFilter(filter)}>
+                <span className="flex-1">{FILTER_LABELS[filter]}</span>
+                {filter === active ? (
+                  <HugeiconsIcon icon={Tick02Icon} />
+                ) : (
+                  <span className="text-muted-foreground text-xs">
+                    due:{filter}
+                  </span>
+                )}
+              </DropdownMenuItem>
+            ))}
+            {active !== null && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => setFilter(null)}>
+                  Any due date
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </InputGroupAddon>
+    </InputGroup>
+  );
+};
 
 /** Which list a row belongs to. A record the app can't read stays with the captures in the list. */
 export const listOf = (item: CaptureListItem): StatusKind =>
@@ -263,13 +381,16 @@ export const RecentList = ({
   list,
   query,
   activeId,
+  onClear,
 }: {
   items: readonly CaptureListItem[];
   list: StatusKind;
   query: string;
   activeId: string | undefined;
+  onClear: () => void;
 }) => {
-  const needle = query.trim().toLocaleLowerCase();
+  const now = useToday();
+  const search = parseQuery(query);
   const inList = items.filter((item) => listOf(item) === list);
 
   const ordered =
@@ -277,7 +398,7 @@ export const RecentList = ({
       ? inList.toSorted((a, b) => listedAt(a).localeCompare(listedAt(b)))
       : inList;
 
-  const shown = ordered.filter((item) => matches(item, needle));
+  const shown = ordered.filter((item) => matchesCapture(item, search, now));
 
   if (inList.length === 0) {
     return (
@@ -293,13 +414,39 @@ export const RecentList = ({
   }
 
   if (shown.length === 0) {
+    const what = [
+      search.text === "" ? null : `“${search.text}”`,
+      search.due === null
+        ? null
+        : FILTER_LABELS[search.due].toLocaleLowerCase(),
+    ]
+      .filter((part) => part !== null)
+      .join(", ");
+
     return (
-      <p
-        className="text-muted-foreground px-2 py-6 text-center text-xs"
+      <div
+        className="flex flex-col items-center gap-2 px-3 py-8 text-center"
         data-testid="recent-no-match"
       >
-        No matches
-      </p>
+        <HugeiconsIcon
+          className="text-muted-foreground"
+          icon={Search01Icon}
+          size={20}
+        />
+        <p className="text-sm font-medium text-balance">
+          {search.unknownDue === null
+            ? `No matches${what === "" ? "" : ` for ${what}`}`
+            : `There is no filter due:${search.unknownDue}`}
+        </p>
+        <p className="text-muted-foreground text-xs text-balance">
+          {search.unknownDue === null
+            ? "Search looks in titles, descriptions, next steps and windows."
+            : "Try due:today, due:week or due:overdue."}
+        </p>
+        <Button onClick={onClear} size="sm" variant="outline">
+          Clear search
+        </Button>
+      </div>
     );
   }
 
@@ -316,7 +463,13 @@ export const RecentList = ({
           </h2>
           <ul className="flex flex-col gap-0.5">
             {group.items.map((item) => (
-              <Row active={item.id === activeId} item={item} key={item.id} />
+              <Row
+                active={item.id === activeId}
+                item={item}
+                key={item.id}
+                needle={search.text}
+                now={now}
+              />
             ))}
           </ul>
         </section>

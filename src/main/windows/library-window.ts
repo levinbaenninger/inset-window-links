@@ -1,6 +1,7 @@
 import { app, BrowserWindow, nativeTheme } from "electron";
 
 import { pushChannels } from "../../shared/channels";
+import type { PageCommand } from "../../shared/shortcuts";
 import { cursorWorkArea } from "./cursor-display";
 import { windowIcon } from "./icon";
 import { centerIn } from "./placement";
@@ -162,10 +163,32 @@ export class LibraryWindow {
     this.window()?.webContents.send(pushChannels.libraryChanged);
   }
 
+  /**
+   * A menu key for the page, such as the open capture's due date or the shortcut sheet. It opens
+   * the window when needed; a page still loading subscribes before it has loaded, and holds the
+   * command until something on it listens.
+   */
+  command(command: PageCommand): void {
+    this.open();
+
+    const win = this.window();
+
+    if (win === null) {
+      return;
+    }
+
+    if (win.webContents.isLoading()) {
+      win.webContents.once("did-finish-load", () =>
+        win.webContents.send(pushChannels.command, command)
+      );
+    } else {
+      win.webContents.send(pushChannels.command, command);
+    }
+  }
+
   /** Asks the page to focus its search field. */
   find(): void {
-    this.open();
-    this.window()?.webContents.send(pushChannels.find);
+    this.command("find");
   }
 
   close(): void {

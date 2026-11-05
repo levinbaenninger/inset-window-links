@@ -1,21 +1,38 @@
-import { MinusSignIcon } from "@hugeicons/core-free-icons";
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { RefObject } from "react";
+import { KeyboardIcon, MinusSignIcon } from "@hugeicons/core-free-icons";
+import { cn } from "cn";
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
+import type { ReactNode, RefObject } from "react";
 
+import { AddChips } from "@/components/add-chips";
+import type { AddField } from "@/components/add-chips";
+import { DueChip, DueOptions, useToday } from "@/components/due";
 import { IconButton } from "@/components/icon-button";
+import { ShortcutList } from "@/components/shortcut-sheet";
 import { TodoEditor } from "@/components/todo-editor";
+import type { TodoEditorHandle } from "@/components/todo-editor";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { popoverApi } from "@/lib/bridge";
+import { useCommands } from "@/lib/commands";
+import { useWindowFocus } from "@/lib/use-window-focus";
 
 import type { DraftSnapshot } from "../../../shared/dto";
+import type { KeyPlatform } from "../../../shared/shortcuts";
+import { menuKeyLabel } from "../../../shared/shortcuts";
 import type { DraftText, Saveability } from "../../../shared/text";
 import {
   hasTyped,
   keptTodos,
   MAX_DESCRIPTION,
   MAX_RELATIONSHIP,
+  removeViewDescription,
   saveability,
 } from "../../../shared/text";
 import { blockedReasons, NoticeBanner } from "./notice-banner";
@@ -41,17 +58,87 @@ const chooseQuit = async (choice: "save" | "discard" | "cancel") => {
   await popoverApi().chooseQuit(choice);
 };
 
-/** The title strip: it moves the panel, and hides it. */
-const PanelHeader = ({ title }: { title: string }) => (
-  <header className="drag-region flex h-11 shrink-0 items-center gap-0.5 pr-2 pl-3.5">
-    <h1 className="mr-auto text-sm font-semibold">{title}</h1>
-    <IconButton
-      icon={MinusSignIcon}
-      label="Hide panel"
-      onClick={() => popoverApi().dismiss()}
-    />
-  </header>
-);
+const reportPanelHeight = (element: HTMLElement) => {
+  const scroll = element.querySelector<HTMLElement>("[data-panel-scroll]");
+
+  const overflow =
+    scroll === null ? 0 : scroll.scrollHeight - scroll.clientHeight;
+
+  popoverApi().reportHeight(
+    Math.ceil(element.getBoundingClientRect().height + overflow)
+  );
+};
+
+const PanelScroll = ({ children }: { children: ReactNode }) => {
+  const content = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const inner = content.current;
+    const panel = inner?.closest("main");
+
+    if (inner === null || !(panel instanceof HTMLElement)) {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => reportPanelHeight(panel));
+
+    observer.observe(inner);
+
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div className="min-h-0 overflow-y-auto" data-panel-scroll>
+      <div ref={content}>{children}</div>
+    </div>
+  );
+};
+
+/**
+ * The title strip: it moves the panel, opens the shortcut sheet, and hides the panel. The title
+ * dims while another app has the keyboard, so a key pressed then is not expected to reach it.
+ */
+const PanelHeader = ({
+  title,
+  platform,
+  onShortcuts,
+}: {
+  title: string;
+  platform: KeyPlatform;
+  onShortcuts?: () => void;
+}) => {
+  const focused = useWindowFocus();
+
+  return (
+    <header
+      className="drag-region flex h-11 shrink-0 items-center gap-0.5 pr-2 pl-3.5"
+      data-focused={focused}
+    >
+      <h1
+        className={cn(
+          "mr-auto text-sm font-semibold transition-colors",
+          !focused && "text-muted-foreground"
+        )}
+      >
+        {title}
+      </h1>
+      {onShortcuts !== undefined && (
+        <IconButton
+          icon={KeyboardIcon}
+          keys={menuKeyLabel("showShortcuts", platform)}
+          label="Keyboard shortcuts"
+          onClick={onShortcuts}
+        />
+      )}
+      <IconButton
+        icon={MinusSignIcon}
+        keys="Esc"
+        label="Hide panel"
+        onClick={() => popoverApi().dismiss()}
+      />
+    </header>
+  );
+};
 
 /** A quiet row for a question that replaces the footer until it is answered. */
 const PromptRow = ({
@@ -107,31 +194,126 @@ const QuitPrompt = ({ check }: { check: Saveability }) => (
   </PromptRow>
 );
 
+export interface TextBlockHandle {
+  focusDescription: () => void;
+  openDue: () => void;
+  focusSteps: () => void;
+}
+
 /**
- * The title, the details and the next steps on one surface. Each field grows with its text, and
- * Return in the title moves on to the details, since a title is one thought.
+ * The title and, once added, the description, the next steps and the due date, on one surface.
+ * Each field grows with its text. An empty field takes no room: the quiet row at the foot adds
+ * it, as do ⌘D, ⇧⌘D and ⇧⌘S. Return in the title moves on to the description, since a title is
+ * one thought. The due picker opens in the panel's own flow, so the panel grows to fit it.
  */
 const TextBlock = ({
   text,
   setText,
   title,
+  platform,
+  handle,
 }: {
   text: DraftText;
   setText: (text: DraftText) => void;
   title: RefObject<HTMLTextAreaElement | null>;
+  platform: KeyPlatform;
+  handle: RefObject<TextBlockHandle | null>;
 }) => {
-  const details = useRef<HTMLTextAreaElement>(null);
+  const description = useRef<HTMLTextAreaElement>(null);
+  const steps = useRef<TodoEditorHandle>(null);
+  const dueButton = useRef<HTMLButtonElement>(null);
+  const [describing, setDescribing] = useState(false);
+  const [dueOpen, setDueOpen] = useState(false);
+  const now = useToday();
+  const showDescription = describing || text.description !== "";
+  const showSteps = text.todos.length > 0;
+
+  const focusDescription = () => {
+    setDescribing(true);
+    // The field mounts with this render; focus it once it is there.
+    requestAnimationFrame(() => description.current?.focus());
+  };
+
+  const focusSteps = () => {
+    if (showSteps) {
+      steps.current?.focusOrAdd();
+    } else {
+      setText({
+        ...text,
+        todos: [{ done: false, id: crypto.randomUUID(), text: "" }],
+      });
+    }
+  };
+
+  const focusTitle = () => title.current?.focus();
+
+  const closeDue = () => {
+    setDueOpen(false);
+    requestAnimationFrame(() => (dueButton.current ?? title.current)?.focus());
+  };
+
+  useImperativeHandle(handle, () => ({
+    focusDescription,
+    focusSteps,
+    openDue: () => setDueOpen(true),
+  }));
+
+  const add = (field: AddField) => {
+    if (field === "description") {
+      focusDescription();
+    } else if (field === "steps") {
+      focusSteps();
+    } else {
+      setDueOpen(true);
+    }
+  };
+
+  const chips = [
+    ...(showDescription
+      ? []
+      : [
+          {
+            keys: menuKeyLabel("focusDescription", platform),
+            field: "description" as const,
+            label: "Description",
+          },
+        ]),
+    ...(showSteps
+      ? []
+      : [
+          {
+            keys: menuKeyLabel("focusSteps", platform),
+            field: "steps" as const,
+            label: "Next steps",
+          },
+        ]),
+    ...(text.due === null
+      ? [
+          {
+            keys: menuKeyLabel("setDue", platform),
+            field: "due" as const,
+            label: "Due",
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div className="bg-background mac:dark:bg-card border-foreground/10 flex flex-col rounded-lg border">
       <textarea
         aria-label={TITLE_PLACEHOLDER}
         autoFocus
-        className="placeholder:text-muted-foreground field-sizing-content max-h-[calc(6lh+0.75rem)] min-h-[calc(1lh+0.75rem)] resize-none bg-transparent px-3 pt-3 text-base leading-6 font-semibold outline-none"
+        className={cn(
+          "placeholder:text-muted-foreground field-sizing-content max-h-[calc(6lh+0.75rem)] min-h-[calc(1lh+0.75rem)] resize-none bg-transparent px-3 pt-3 text-base leading-6 font-semibold outline-none",
+          !showDescription && "pb-1"
+        )}
         id="relationship"
         maxLength={MAX_RELATIONSHIP}
         onChange={(event) =>
-          setText({ ...text, relationship: event.target.value })
+          setText({
+            ...text,
+            relationship: event.target.value.replaceAll(/[\r\n]+/gu, " "),
+          })
         }
         onKeyDown={(event) => {
           const plain =
@@ -146,7 +328,7 @@ const TextBlock = ({
             !event.nativeEvent.isComposing
           ) {
             event.preventDefault();
-            details.current?.focus();
+            focusDescription();
           }
         }}
         placeholder={TITLE_PLACEHOLDER}
@@ -154,24 +336,68 @@ const TextBlock = ({
         rows={1}
         value={text.relationship}
       />
-      <textarea
-        aria-label="Details"
-        className="placeholder:text-muted-foreground field-sizing-content max-h-[calc(8lh+0.75rem)] min-h-[calc(1lh+0.75rem)] resize-none bg-transparent px-3 pt-1 pb-2.5 text-sm outline-none"
-        maxLength={MAX_DESCRIPTION}
-        onChange={(event) =>
-          setText({ ...text, description: event.target.value })
-        }
-        placeholder="Add details"
-        ref={details}
-        rows={1}
-        value={text.description}
-      />
-      <div className="border-foreground/10 border-t p-1.5">
-        <TodoEditor
-          onChange={(todos) => setText({ ...text, todos })}
-          todos={text.todos}
+      {showDescription && (
+        <textarea
+          aria-label="Description"
+          className="placeholder:text-muted-foreground field-sizing-content max-h-[calc(8lh+0.75rem)] min-h-[calc(1lh+0.75rem)] resize-none bg-transparent px-3 pt-1 pb-2.5 text-sm outline-none"
+          data-testid="description"
+          maxLength={MAX_DESCRIPTION}
+          onBlur={() => setDescribing(false)}
+          onChange={(event) =>
+            setText({ ...text, description: event.target.value })
+          }
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget.blur();
+            }
+          }}
+          placeholder="Add a description"
+          ref={description}
+          rows={1}
+          value={text.description}
         />
-      </div>
+      )}
+      {showSteps && (
+        <div className="border-foreground/10 border-t p-1.5">
+          <TodoEditor
+            handle={steps}
+            onChange={(todos) => setText({ ...text, todos })}
+            onEmpty={focusTitle}
+            todos={text.todos}
+          />
+        </div>
+      )}
+      {(chips.length > 0 || text.due !== null) && (
+        <div className="border-foreground/10 flex flex-wrap items-center gap-1 border-t px-1.5 py-1.5">
+          {text.due !== null && (
+            <DueChip
+              aria-expanded={dueOpen}
+              due={text.due}
+              keys={menuKeyLabel("setDue", platform)}
+              now={now}
+              onClear={() => setText({ ...text, due: null })}
+              onClick={() => setDueOpen((open) => !open)}
+              ref={dueButton}
+            />
+          )}
+          <AddChips chips={chips} onAdd={add} />
+        </div>
+      )}
+      {dueOpen && (
+        <div className="border-foreground/10 border-t p-1">
+          <DueOptions
+            due={text.due}
+            now={now}
+            onClose={closeDue}
+            onPick={(due) => {
+              setText({ ...text, due });
+              closeDue();
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 };
@@ -187,7 +413,9 @@ const DraftForm = ({
   setText: (text: DraftText) => void;
 }) => {
   const relationship = useRef<HTMLTextAreaElement>(null);
+  const block = useRef<TextBlockHandle>(null);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const [sheet, setSheet] = useState(false);
   const viewCount = snapshot.views.length;
   const activity = snapshot.activity.kind;
   const quitting = activity === "confirmingQuit";
@@ -197,6 +425,7 @@ const DraftForm = ({
     snapshot.activity.kind === "capturing" ? snapshot.activity.pending : null;
 
   const mac = snapshot.platform === "macos";
+  const { platform } = snapshot;
   const check = saveability(viewCount, text);
   const hasContent = viewCount > 0 || hasTyped(text);
 
@@ -233,6 +462,55 @@ const DraftForm = ({
     []
   );
 
+  const closeSheet = useCallback(() => {
+    setSheet(false);
+    requestAnimationFrame(() => relationship.current?.focus());
+  }, []);
+
+  // The menu keys that belong to the page: the fields and the sheet. Not while windows are picked.
+  useCommands((command) => {
+    if (command === "showShortcuts") {
+      if (sheet) {
+        closeSheet();
+      } else {
+        setSheet(true);
+      }
+
+      return true;
+    }
+
+    if (choosing || quitting) {
+      return true;
+    }
+
+    setSheet(false);
+
+    requestAnimationFrame(() => {
+      switch (command) {
+        case "focusDescription": {
+          block.current?.focusDescription();
+          break;
+        }
+
+        case "setDue": {
+          block.current?.openDue();
+          break;
+        }
+
+        case "focusSteps": {
+          block.current?.focusSteps();
+          break;
+        }
+
+        default: {
+          break;
+        }
+      }
+    });
+
+    return true;
+  });
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       // Escape and Enter also end an IME composition, which must not hide or save.
@@ -240,10 +518,12 @@ const DraftForm = ({
         return;
       }
 
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
 
-        if (choosing) {
+        if (sheet) {
+          closeSheet();
+        } else if (choosing) {
           void cancelChoice();
         } else if (confirmingDiscard) {
           keepDraft();
@@ -276,62 +556,131 @@ const DraftForm = ({
     save,
     confirmingDiscard,
     keepDraft,
+    sheet,
+    closeSheet,
   ]);
+
+  if (sheet) {
+    return (
+      <>
+        <PanelHeader
+          onShortcuts={closeSheet}
+          platform={platform}
+          title="Keyboard shortcuts"
+        />
+        <PanelScroll>
+          <div className="px-3.5">
+            <ShortcutList
+              columns={1}
+              globalLabel={
+                snapshot.shortcut.kind === "registered"
+                  ? snapshot.shortcut.label
+                  : null
+              }
+              platform={platform}
+            />
+          </div>
+        </PanelScroll>
+        <footer className="flex shrink-0 items-center justify-end p-3.5">
+          <Button autoFocus onClick={closeSheet} size="sm" variant="outline">
+            Done
+            <Kbd>Esc</Kbd>
+          </Button>
+        </footer>
+      </>
+    );
+  }
 
   if (snapshot.activity.kind === "choosing") {
     return (
       <>
-        <PanelHeader title="Add windows" />
-        <div className="flex flex-col gap-3 px-3.5 pb-3.5">
-          {snapshot.notice !== null && (
-            <NoticeBanner notice={snapshot.notice} />
-          )}
-          <SourceChooser
-            candidates={snapshot.activity.candidates}
-            mac={mac}
-            onCancel={cancelChoice}
-            onChoose={async (ids) => {
-              await popoverApi().chooseSources(ids);
-            }}
-            reason={snapshot.activity.reason}
-          />
-        </div>
+        <PanelHeader platform={platform} title="Add windows" />
+        <PanelScroll>
+          <div className="flex flex-col gap-3 px-3.5 pb-3.5">
+            {snapshot.notice !== null && (
+              <NoticeBanner notice={snapshot.notice} />
+            )}
+            <SourceChooser
+              candidates={snapshot.activity.candidates}
+              mac={mac}
+              onCancel={cancelChoice}
+              onChoose={async (ids) => {
+                await popoverApi().chooseSources(ids);
+              }}
+              reason={snapshot.activity.reason}
+            />
+          </div>
+        </PanelScroll>
       </>
     );
   }
 
   return (
     <>
-      <PanelHeader title="New capture" />
-      <div className="flex flex-col gap-3 px-3.5 pb-3.5">
-        {snapshot.notice !== null && <NoticeBanner notice={snapshot.notice} />}
-        <SourceChips
-          onAdd={addWindows}
-          onRemove={async (view) => {
-            await popoverApi().removeView(view.id);
-          }}
-          pending={pending}
-          shortcut={snapshot.shortcut}
-          views={snapshot.views}
-        />
-        <TextBlock setText={setText} text={text} title={relationship} />
-        {snapshot.activity.kind === "saveFailed" && (
-          <div
-            className="bg-destructive/10 flex items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-3 text-xs"
-            data-testid="save-failed"
-            role="alert"
-          >
-            <p className="min-w-0 flex-1">
-              Couldn&apos;t save. Your windows and text are still here.{" "}
-              <span className="text-muted-foreground">
-                {snapshot.activity.message}
-              </span>
-            </p>
-            <Button onClick={save} size="sm" variant="outline">
-              Retry
-            </Button>
-          </div>
-        )}
+      <PanelHeader
+        onShortcuts={() => setSheet(true)}
+        platform={platform}
+        title="New capture"
+      />
+      <PanelScroll>
+        <div className="flex flex-col gap-3 px-3.5">
+          {snapshot.notice !== null && (
+            <NoticeBanner notice={snapshot.notice} />
+          )}
+          <SourceChips
+            addKeys={menuKeyLabel("addWindows", platform)}
+            descriptions={text.viewDescriptions}
+            onAdd={addWindows}
+            onDescribe={(view, description) =>
+              setText({
+                ...text,
+                viewDescriptions: {
+                  ...text.viewDescriptions,
+                  [view.id]: description,
+                },
+              })
+            }
+            onRemove={async (view) => {
+              setText({
+                ...text,
+                viewDescriptions: removeViewDescription(
+                  text.viewDescriptions,
+                  view.id
+                ),
+              });
+              await popoverApi().removeView(view.id);
+            }}
+            pending={pending}
+            shortcut={snapshot.shortcut}
+            views={snapshot.views}
+          />
+          <TextBlock
+            handle={block}
+            platform={platform}
+            setText={setText}
+            text={text}
+            title={relationship}
+          />
+          {snapshot.activity.kind === "saveFailed" && (
+            <div
+              className="bg-destructive/10 flex items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-3 text-xs"
+              data-testid="save-failed"
+              role="alert"
+            >
+              <p className="min-w-0 flex-1">
+                Couldn&apos;t save. Your windows and text are still here.{" "}
+                <span className="text-muted-foreground">
+                  {snapshot.activity.message}
+                </span>
+              </p>
+              <Button onClick={save} size="sm" variant="outline">
+                Retry
+              </Button>
+            </div>
+          )}
+        </div>
+      </PanelScroll>
+      <div className="shrink-0 px-3.5 pt-3 pb-3.5">
         {quitting && <QuitPrompt check={check} />}
         {!quitting && confirmingDiscard && (
           <PromptRow
@@ -378,9 +727,7 @@ export const PopoverApp = () => {
     }
 
     const observer = new ResizeObserver(() => {
-      popoverApi().reportHeight(
-        Math.ceil(element.getBoundingClientRect().height)
-      );
+      reportPanelHeight(element);
     });
 
     observer.observe(element);
@@ -391,7 +738,7 @@ export const PopoverApp = () => {
   return (
     <TooltipProvider delayDuration={500}>
       <main
-        className="text-foreground flex flex-col text-sm select-none [&_input]:select-text [&_textarea]:select-text"
+        className="text-foreground flex max-h-screen flex-col text-sm select-none [&_input]:select-text [&_textarea]:select-text"
         ref={root}
       >
         {snapshot !== null && (

@@ -2,24 +2,35 @@ import {
   Add01Icon,
   ArrowLeft01Icon,
   ArrowRight01Icon,
+  KeyboardIcon,
   Settings01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   getRouteApi,
   Outlet,
+  useNavigate,
   useParams,
   useSearch,
 } from "@tanstack/react-router";
 import type { CSSProperties } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { IconButton } from "@/components/icon-button";
+import { ShortcutList } from "@/components/shortcut-sheet";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { libraryApi } from "@/lib/bridge";
+import { useCommands } from "@/lib/commands";
 
 import type { CaptureListItem } from "../../../shared/dto";
+import { menuKeyLabel } from "../../../shared/shortcuts";
 import type { StatusKind } from "../../../shared/status";
 import { listOf, RecentList, SearchField } from "./recent-list";
 import { ResizeHandle, SidebarToggle, useSidebar } from "./sidebar";
@@ -65,6 +76,40 @@ const SideLists = ({
   </ul>
 );
 
+/** Every key, for this platform, over whatever the window shows. */
+const ShortcutSheet = ({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) => {
+  const { shortcut } = root.useLoaderData();
+  const { platform } = libraryApi();
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent className="w-[44rem]" data-testid="shortcut-sheet">
+        <header className="flex flex-col gap-0.5 px-5 pt-4 pb-3">
+          <DialogTitle>Keyboard shortcuts</DialogTitle>
+          <DialogDescription>
+            {platform === "macos"
+              ? "Also in the menus."
+              : "Inset's windows answer these keys; the menu key is Ctrl."}{" "}
+            Open this list with {menuKeyLabel("showShortcuts", platform)}.
+          </DialogDescription>
+        </header>
+        <div className="min-h-0 overflow-y-auto px-5 pb-5">
+          <ShortcutList
+            globalLabel={shortcut.kind === "registered" ? shortcut.label : null}
+            platform={platform}
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
 /**
  * A Mac app's two panes: captures in a sidebar on the window's translucent material, the open
  * capture on the page's own background beside it. On macOS the traffic lights sit in the
@@ -73,27 +118,55 @@ const SideLists = ({
  * capture has the whole window.
  */
 export const Shell = () => {
+  const navigate = useNavigate();
   const { items } = root.useLoaderData();
   const { view } = useSearch({ strict: false });
   const { captureId } = useParams({ strict: false });
   const [query, setQuery] = useState("");
   const [list, setList] = useState<StatusKind>("active");
+  const [sheet, setSheet] = useState(false);
   const sideList = SIDE_LISTS.find(({ kind }) => kind === list);
   const sidebar = useSidebar();
   const search = useRef<HTMLInputElement>(null);
+  const { platform } = libraryApi();
 
-  const { show } = sidebar;
+  const { show, toggle } = sidebar;
 
-  // Find shows a hidden sidebar first: a field under display: none cannot take focus.
-  useEffect(
-    () =>
-      libraryApi().onFind(() => {
-        flushSync(show);
-        search.current?.focus();
-        search.current?.select();
-      }),
-    [show]
-  );
+  const find = async () => {
+    if (view !== undefined && captureId !== undefined) {
+      await navigate({
+        to: "/captures/$captureId",
+        params: { captureId },
+        search: {},
+      });
+    }
+
+    flushSync(show);
+    requestAnimationFrame(() => {
+      search.current?.focus();
+      search.current?.select();
+    });
+  };
+
+  // The window's own menu keys. Those for the open capture are taken by it first; any it leaves,
+  // such as a field key while the image view is open, end here and do nothing.
+  useCommands((command) => {
+    if (command === "showShortcuts") {
+      setSheet((open) => !open);
+
+      return true;
+    } else if (command === "toggleSidebar") {
+      toggle();
+
+      return true;
+    } else if (command === "find") {
+      void find();
+
+      return true;
+    }
+
+    return false;
+  });
 
   if (view !== undefined) {
     return (
@@ -101,6 +174,7 @@ export const Shell = () => {
         <div className="bg-background h-screen">
           <Outlet />
         </div>
+        <ShortcutSheet onOpenChange={setSheet} open={sheet} />
       </TooltipProvider>
     );
   }
@@ -123,12 +197,18 @@ export const Shell = () => {
             <span className="flex-1" />
             <IconButton
               icon={Add01Icon}
+              keys={menuKeyLabel("newCapture", platform)}
               label="New capture"
               onClick={() => libraryApi().newCapture()}
             />
           </header>
           <div className="px-2.5 pb-2">
-            <SearchField field={search} onQuery={setQuery} query={query} />
+            <SearchField
+              field={search}
+              findKeys={menuKeyLabel("find", platform)}
+              onQuery={setQuery}
+              query={query}
+            />
           </div>
           <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
             {sideList !== undefined && (
@@ -145,18 +225,32 @@ export const Shell = () => {
               activeId={captureId}
               items={items}
               list={list}
+              onClear={() => {
+                setQuery("");
+                search.current?.focus();
+              }}
               query={query}
             />
           </nav>
           <footer className="flex shrink-0 flex-col gap-1 px-2 pb-2">
             {list === "active" && <SideLists items={items} onOpen={setList} />}
-            <IconButton
-              icon={Settings01Icon}
-              keys={libraryApi().platform === "macos" ? "⌘," : "Ctrl+,"}
-              label="Settings"
-              onClick={() => libraryApi().openSettings()}
-              side="top"
-            />
+            <span className="flex items-center gap-0.5">
+              <IconButton
+                icon={Settings01Icon}
+                keys={menuKeyLabel("openSettings", platform)}
+                label="Settings"
+                onClick={() => libraryApi().openSettings()}
+                side="top"
+              />
+              <IconButton
+                data-testid="open-shortcuts"
+                icon={KeyboardIcon}
+                keys={menuKeyLabel("showShortcuts", platform)}
+                label="Keyboard shortcuts"
+                onClick={() => setSheet(true)}
+                side="top"
+              />
+            </span>
           </footer>
           <ResizeHandle />
         </aside>
@@ -167,6 +261,7 @@ export const Shell = () => {
           <Outlet />
         </div>
       </div>
+      <ShortcutSheet onOpenChange={setSheet} open={sheet} />
     </TooltipProvider>
   );
 };

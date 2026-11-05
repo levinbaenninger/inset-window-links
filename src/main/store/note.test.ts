@@ -9,7 +9,8 @@ const record: CaptureRecord = {
   description: "",
   id: DraftIdSchema.parse("6f1c2b52-3d4e-4f60-8a71-92b3c4d5e6f7"),
   relationship: "The cap in the budget sheet rules out the quote in this mail.",
-  schemaVersion: 4,
+  due: null,
+  schemaVersion: 5,
   status: { kind: "active" },
   todos: [
     { done: false, id: "a", text: "Ask Dana before Friday" },
@@ -21,6 +22,7 @@ const record: CaptureRecord = {
       acquisition: { kind: "direct", windowKeyAtCapture: "macos:1176" },
       appName: "Numbers",
       capturedAt: "2026-10-21T14:02:11.000Z",
+      description: "",
       height: 900,
       id: ViewIdSchema.parse("0a000000-0000-4000-8000-000000000001"),
       origin: {
@@ -41,6 +43,7 @@ const record: CaptureRecord = {
       },
       appName: null,
       capturedAt: "2026-10-21T14:04:30.000Z",
+      description: "",
       height: 700,
       id: ViewIdSchema.parse("0a000000-0000-4000-8000-000000000002"),
       origin: null,
@@ -52,6 +55,37 @@ const record: CaptureRecord = {
 };
 
 describe(formatNote, () => {
+  it("includes the due date and each window's multiline description", () => {
+    expect(
+      formatNote(
+        {
+          ...record,
+          due: "2026-11-05",
+          todos: [],
+          views: record.views.map((view, index) => ({
+            ...view,
+            description: index === 0 ? "  The cap is firm.\nAsk Dana.  " : " ",
+          })),
+        },
+        "en-GB",
+        "UTC"
+      )
+    ).toBe(
+      [
+        "The cap in the budget sheet rules out the quote in this mail.",
+        "",
+        "Due: Thursday, 5 November 2026",
+        "",
+        "Windows:",
+        "1. Budget 2027 (Numbers), captured 21 Oct 2026, 14:02",
+        "   /Users/dana/Budget 2027.numbers",
+        "   The cap is firm.",
+        "   Ask Dana.",
+        "2. Untitled window, captured 21 Oct 2026, 14:04",
+      ].join("\n")
+    );
+  });
+
   it("puts the thought first, then the to-dos and numbered windows", () => {
     expect(formatNote(record, "en-GB", "UTC")).toBe(
       [

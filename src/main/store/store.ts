@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import type { MutationOutcome } from "../../shared/dto";
+import type { DueDate } from "../../shared/due";
 import type { CaptureId, ViewId } from "../../shared/ids";
 import { DraftIdSchema } from "../../shared/ids";
 import type { CaptureStatus } from "../../shared/status";
@@ -236,6 +237,29 @@ export class CaptureStore {
       description: text.description.trim(),
       relationship: text.relationship,
       todos: keptTodos(text.todos),
+      updatedAt: now.toISOString(),
+      // A view the text does not name keeps its description; the due date has its own call.
+      views: record.views.map((view) => ({
+        ...view,
+        description: (
+          text.viewDescriptions[view.id] ?? view.description
+        ).trim(),
+      })),
+    }));
+  }
+
+  /**
+   * Sets or clears the due date. Apart from the text, so a change from the list's menu is not
+   * undone by the open capture's next text save. It is an edit, so updatedAt moves.
+   */
+  setDue(
+    id: CaptureId,
+    due: DueDate | null,
+    now: Date
+  ): Promise<MutationOutcome> {
+    return this.#rewrite(id, (record) => ({
+      ...record,
+      due,
       updatedAt: now.toISOString(),
     }));
   }

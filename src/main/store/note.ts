@@ -1,9 +1,10 @@
+import { dueDay } from "../../shared/due";
 import { isBlank } from "../../shared/text";
 import type { CaptureRecord } from "./schema";
 
 /**
- * Plain text for the clipboard: the thought, its description when there is one, its to-dos as a
- * checklist, then the windows it connects.
+ * Plain text for the clipboard: the thought, its description and due date when it has them, its
+ * to-dos as a checklist, then the windows it connects, each with its description.
  */
 export const formatNote = (
   record: CaptureRecord,
@@ -25,8 +26,25 @@ export const formatNote = (
     const where = view.origin?.url ?? view.origin?.document ?? null;
     const link = where === null ? "" : `\n   ${where}`;
 
-    return `${index + 1}. ${view.title ?? "Untitled window"}${app}, captured ${time.format(new Date(view.capturedAt))}${link}`;
+    const about = isBlank(view.description)
+      ? ""
+      : `\n   ${view.description.trim().replaceAll(/\r?\n/gu, "\n   ")}`;
+
+    return `${index + 1}. ${view.title ?? "Untitled window"}${app}, captured ${time.format(new Date(view.capturedAt))}${link}${about}`;
   });
+
+  const due =
+    record.due === null
+      ? []
+      : [
+          `Due: ${dueDay(record.due).toLocaleDateString(locale, {
+            day: "numeric",
+            month: "long",
+            weekday: "long",
+            year: "numeric",
+          })}`,
+          "",
+        ];
 
   const description = isBlank(record.description)
     ? []
@@ -47,6 +65,7 @@ export const formatNote = (
     record.relationship.trim(),
     "",
     ...description,
+    ...due,
     ...todos,
     "Windows:",
     ...windows,

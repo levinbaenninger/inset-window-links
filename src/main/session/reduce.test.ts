@@ -63,8 +63,10 @@ const text = (
   description = ""
 ): DraftText => ({
   description,
+  due: null,
   relationship,
   todos: todo === "" ? [] : [{ done: false, id: "todo-1", text: todo }],
+  viewDescriptions: {},
 });
 
 interface Run {
@@ -100,6 +102,44 @@ const foreignPress: SessionEvent = {
 };
 
 describe("session lifecycle", () => {
+  it("opens Add Windows during a slow capture and ignores that capture's late result", () => {
+    const source = ids();
+
+    const capturing = run(source, [
+      foreignPress,
+      captured("t1", view(1, "windows:1176")),
+      { text: text("Keep my draft"), type: "textChanged" },
+      foreignPress,
+    ]);
+
+    const choosing = run(
+      source,
+      [{ type: "chooserRequested" }],
+      capturing.state
+    );
+
+    expect(choosing.effects).toStrictEqual([
+      { token: "t3", type: "loadCandidates" },
+      { anchor: { kind: "keep" }, type: "showPopover" },
+    ]);
+    expect(choosing.state.activity).toStrictEqual({
+      candidates: "loading",
+      kind: "choosing",
+      reason: "menu",
+      token: "t3",
+    });
+    expect(choosing.state.draft).toStrictEqual(capturing.state.draft);
+
+    const late = run(
+      source,
+      [captured("t2", view(2, "windows:1180"))],
+      choosing.state
+    );
+
+    expect(late.state).toBe(choosing.state);
+    expect(late.effects).toStrictEqual([]);
+  });
+
   it("adds a view on a foreign press and shows the popover beside it", () => {
     const source = ids();
     const pressed = run(source, [foreignPress]);
@@ -211,19 +251,33 @@ describe("session lifecycle", () => {
   });
 
   it("removes one view and keeps the others and the text", () => {
+    const typed = {
+      ...text("A limits B"),
+      viewDescriptions: {
+        [view(1, "windows:1175").id]: "First window",
+        [view(2, "windows:1176").id]: "Second window",
+      },
+    };
+
     const { state } = run(ids(), [
       foreignPress,
       captured("t1", view(1, "macos:1175")),
       foreignPress,
       captured("t2", view(2, "macos:1176")),
-      { text: text("A limits B"), type: "textChanged" },
+      { text: typed, type: "textChanged" },
       { type: "viewRemoved", viewId: view(1, "macos:1175").id },
     ]);
 
     expect([
       state.draft.views.map((v) => v.title),
       state.draft.text,
-    ]).toStrictEqual([["Untitled 2"], text("A limits B")]);
+    ]).toStrictEqual([
+      ["Untitled 2"],
+      {
+        ...text("A limits B"),
+        viewDescriptions: { [view(2, "windows:1176").id]: "Second window" },
+      },
+    ]);
   });
 
   it("drops a stale capture result", () => {
@@ -524,8 +578,10 @@ describe("session lifecycle", () => {
       { kind: "needsRelationship" },
       {
         description: "Chairs are CHF 280 over.",
+        due: null,
         relationship: "",
         todos: [],
+        viewDescriptions: {},
       },
     ]);
   });

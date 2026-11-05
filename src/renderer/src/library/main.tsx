@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { z } from "zod";
 
 import { libraryApi, markPlatform } from "@/lib/bridge";
+import { listenForCommands } from "@/lib/commands";
 import { followSystemTheme } from "@/lib/theme";
 
 import { router } from "./router";
@@ -16,6 +17,8 @@ const RouteSchema = z.string().regex(/^\/[\w/-]{0,120}$/u);
 followSystemTheme();
 
 markPlatform();
+
+listenForCommands((listener) => libraryApi().onCommand(listener));
 
 libraryApi().onChanged(() => {
   void router.invalidate();

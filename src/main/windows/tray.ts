@@ -68,6 +68,7 @@ export interface TrayActions {
   addFromWindowList: () => void;
   openRecent: () => void;
   openWelcome: () => void;
+  openShortcuts: () => void;
   openSettings: () => void;
   /** A left click on Windows: the draft when it holds something, else Recent Captures. */
   openHome: () => void;
@@ -103,6 +104,7 @@ const menuFor = (
       ]),
   { type: "separator" },
   { click: actions.openWelcome, label: "How It Works" },
+  { click: actions.openShortcuts, label: "Keyboard Shortcuts" },
   { click: actions.openSettings, label: "Settings…" },
   { type: "separator" },
   { enabled: false, label: `Version ${app.getVersion()}` },

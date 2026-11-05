@@ -1,7 +1,13 @@
 import type { Notice } from "../../shared/dto";
 import type { DraftId } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
-import { blankText, hasTyped, isBlank, saveability } from "../../shared/text";
+import {
+  blankText,
+  hasTyped,
+  isBlank,
+  removeViewDescription,
+  saveability,
+} from "../../shared/text";
 import type {
   Activity,
   CaptureToken,
@@ -331,7 +337,7 @@ const onShowDraft = (state: SessionState): Transition =>
     : unchanged(state);
 
 const onChooserRequested = (state: SessionState, ids: IdSource): Transition => {
-  if (!canEditDraft(state.activity)) {
+  if (!canEditDraft(state.activity) && state.activity.kind !== "capturing") {
     return unchanged(state);
   }
 
@@ -401,7 +407,22 @@ const onViewRemoved = (
 
   const views = state.draft.views.filter((view) => view.id !== event.viewId);
 
-  return [{ ...state, draft: { ...state.draft, views } }, []];
+  const viewDescriptions = removeViewDescription(
+    state.draft.text.viewDescriptions,
+    event.viewId
+  );
+
+  return [
+    {
+      ...state,
+      draft: {
+        ...state.draft,
+        views,
+        text: { ...state.draft.text, viewDescriptions },
+      },
+    },
+    [],
+  ];
 };
 
 const onTextChanged = (

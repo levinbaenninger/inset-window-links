@@ -3,6 +3,8 @@
 // with `page.addInitScript({ path })`, so it runs as a plain script before the renderer starts.
 const { data, page, platform } = globalThis.__screens;
 
+const captureShortcutLabel = platform === "macos" ? "⌥⌘W" : "Ctrl+Alt+W";
+
 const fitted = (height) => {
   globalThis.__fitted = height;
 };
@@ -15,16 +17,39 @@ const unsubscribe = Function.prototype;
 const none = () => unsubscribe;
 const resolved = (value) => () => Promise.resolve(value);
 
+const subscribe = (name, listener) => {
+  const receive = (event) => listener(event.detail);
+
+  window.addEventListener(`fixture:${name}`, receive);
+
+  return () => window.removeEventListener(`fixture:${name}`, receive);
+};
+
+const emit = (name, detail) =>
+  window.dispatchEvent(new CustomEvent(`fixture:${name}`, { detail }));
+
+globalThis.__calls = [];
+
+const record = (method, ...args) => globalThis.__calls.push({ method, args });
+
 /** Answers every method the renderer calls that the scene does not name itself. */
 const withFallback = (api, fallback) =>
   new Proxy(api, { get: (target, key) => target[key] ?? fallback });
 
 if (page === "popover") {
-  const snapshot = { ...data.draft, platform };
+  const snapshot = {
+    ...data.draft,
+    platform,
+    shortcut: {
+      ...data.draft.shortcut,
+      label: captureShortcutLabel,
+    },
+  };
 
   globalThis.inset = withFallback(
     {
       getDraft: resolved(snapshot),
+      onCommand: (listener) => subscribe("command", listener),
       onDraft: (listener) => {
         setTimeout(() => listener(snapshot), 0);
 
@@ -33,6 +58,16 @@ if (page === "popover") {
       onShown: none,
       platform,
       reportHeight: fitted,
+      setText: (text) => {
+        snapshot.text = text;
+        record("setText", text);
+      },
+      save: (text) => {
+        record("save", text);
+
+        return nothing();
+      },
+      dismiss: () => record("dismiss"),
     },
     nothing
   );
@@ -47,10 +82,59 @@ if (page === "library") {
       get: (id) =>
         Promise.resolve(captures.find((capture) => capture.id === id) ?? null),
       list: () => Promise.resolve(items),
-      onChanged: none,
-      onFind: none,
+      onChanged: (listener) => subscribe("changed", listener),
+      onCommand: (listener) => subscribe("command", listener),
       onNavigate: none,
       platform,
+      setDue: (captureId, due) => {
+        const found = captures.find((capture) => capture.id === captureId);
+
+        if (found !== undefined) {
+          found.due = due;
+          const listed = items.find((item) => item.id === captureId);
+
+          if (listed !== undefined) {
+            listed.due = due;
+          }
+        }
+
+        record("setDue", captureId, due);
+        emit("changed");
+
+        return Promise.resolve({ kind: "ok" });
+      },
+      updateText: (captureId, text) => {
+        const capture = captures.find((item) => item.id === captureId);
+
+        if (capture !== undefined) {
+          capture.relationship = text.relationship;
+          capture.description = text.description;
+          capture.todos = text.todos;
+
+          for (const view of capture.views) {
+            view.description =
+              text.viewDescriptions[view.id] ?? view.description;
+          }
+
+          const item = items.find((listed) => listed.id === captureId);
+
+          if (item !== undefined) {
+            item.relationship = capture.relationship;
+            item.description = capture.description;
+            item.todos = capture.todos;
+
+            for (const view of item.views) {
+              view.description =
+                text.viewDescriptions[view.id] ?? view.description;
+            }
+          }
+        }
+
+        record("updateText", captureId, text);
+        emit("changed");
+
+        return Promise.resolve({ kind: "ok" });
+      },
       setTodoDone: (captureId, todoId, done) => {
         const found = captures
           .find((capture) => capture.id === captureId)
@@ -64,7 +148,7 @@ if (page === "library") {
       },
       shortcut: resolved({
         kind: "registered",
-        label: platform === "macos" ? "⌥⌘W" : "Ctrl+Alt+W",
+        label: captureShortcutLabel,
       }),
     },
     () => Promise.resolve({ failed: 0, kind: "ok" })
@@ -72,7 +156,11 @@ if (page === "library") {
 }
 
 if (page === "settings") {
-  const settingsView = { ...data.view, platform };
+  const settingsView = {
+    ...data.view,
+    platform,
+    shortcut: { ...data.view.shortcut, label: captureShortcutLabel },
+  };
 
   globalThis.inset = withFallback(
     {

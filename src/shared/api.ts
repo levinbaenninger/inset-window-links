@@ -6,8 +6,10 @@ import type {
   MutationOutcome,
   ShortcutStatus,
 } from "./dto";
+import type { DueDate } from "./due";
 import type { CandidateId, CaptureId, ViewId } from "./ids";
 import type { SettingsChange, SettingsView } from "./settings";
+import type { PageCommand } from "./shortcuts";
 import type { StatusRequest } from "./status";
 import type { DraftText } from "./text";
 
@@ -44,6 +46,11 @@ export interface LibraryApi {
     captureId: CaptureId,
     status: StatusRequest
   ) => Promise<MutationOutcome>;
+  /** Sets or clears the due date, apart from the text. */
+  setDue: (
+    captureId: CaptureId,
+    due: DueDate | null
+  ) => Promise<MutationOutcome>;
   copyNote: (captureId: CaptureId) => Promise<void>;
   shortcut: () => Promise<ShortcutStatus>;
   copyImage: (captureId: CaptureId, viewId: ViewId) => Promise<void>;
@@ -77,6 +84,8 @@ export interface SettingsApi {
 export type PopoverBridge = PopoverApi & {
   onDraft: (listener: (snapshot: DraftSnapshot) => void) => () => void;
   onShown: (listener: () => void) => () => void;
+  /** A menu key for the page: a field, the sheet. */
+  onCommand: (listener: (command: PageCommand) => void) => () => void;
   platform: CapturePlatform;
 };
 
@@ -87,9 +96,9 @@ export type SettingsBridge = SettingsApi & {
 
 export type LibraryBridge = LibraryApi & {
   onChanged: (listener: () => void) => () => void;
-  /** Edit > Find Captures: the page focuses its search field. */
-  onFind: (listener: () => void) => () => void;
   /** Main asks the window to show a route, such as a capture that was just saved. */
   onNavigate: (listener: (route: string) => void) => () => void;
+  /** A menu key for the page: a field, the open capture, the sidebar, the sheet. */
+  onCommand: (listener: (command: PageCommand) => void) => () => void;
   platform: CapturePlatform;
 };

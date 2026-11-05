@@ -1,5 +1,6 @@
 import {
   AlarmClockIcon,
+  Calendar03Icon,
   CheckmarkCircle02Icon,
   Copy01Icon,
   Delete02Icon,
@@ -11,6 +12,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 
+import { DueOptions } from "@/components/due";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,6 +32,12 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
@@ -41,7 +49,11 @@ import { libraryApi } from "@/lib/bridge";
 import { formatClock, plural } from "@/lib/format";
 
 import type { MutationOutcome } from "../../../shared/dto";
+import type { DueDate } from "../../../shared/due";
+import { dueDay, duePresets } from "../../../shared/due";
 import type { CaptureId, ViewId } from "../../../shared/ids";
+import type { MenuKeyId } from "../../../shared/shortcuts";
+import { menuKeyLabel } from "../../../shared/shortcuts";
 import type {
   CaptureStatus,
   SnoozePreset,
@@ -72,6 +84,7 @@ export type MenuEntry =
 export interface CaptureTarget {
   id: CaptureId;
   status: CaptureStatus;
+  due: DueDate | null;
   /** The windows Reopen can bring back. */
   reopenable: readonly ViewId[];
 }
@@ -116,6 +129,17 @@ const presetHint = (preset: SnoozePreset): string => {
     : clock;
 };
 
+/** The menu key that does the same to the open capture. */
+const keys = (id: MenuKeyId) => menuKeyLabel(id, libraryApi().platform);
+
+/** "Fri 7 Nov", beside a due preset. */
+const dueHint = (due: DueDate) =>
+  dueDay(due).toLocaleDateString([], {
+    day: "numeric",
+    month: "short",
+    weekday: "short",
+  });
+
 /**
  * Everything that can be done to one capture, once: the right-click menu in the sidebar and the
  * capture's own header both draw these entries. Delete asks first, in the dialog this returns.
@@ -125,6 +149,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   const router = useRouter();
   const { captureId: openId } = useParams({ strict: false });
   const [confirming, setConfirming] = useState(false);
+  const [pickingDue, setPickingDue] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   /** When the snooze times were worked out; a menu asks again each time it opens. */
   const [now, setNow] = useState(() => new Date());
@@ -159,6 +184,39 @@ export const useCaptureCommands = (target: CaptureTarget) => {
 
   const { status } = target;
 
+  const setDue = async (due: DueDate | null) => {
+    say(outcomeMessage(await libraryApi().setDue(target.id, due)));
+  };
+
+  const dueMenu: MenuEntry = {
+    icon: Calendar03Icon,
+    items: [
+      ...duePresets(now).map((preset) => ({
+        hint: dueHint(preset.due),
+        kind: "item" as const,
+        label: preset.label,
+        run: () => setDue(preset.due),
+      })),
+      {
+        kind: "item",
+        label: "Pick a date…",
+        run: () => setPickingDue(true),
+      },
+      ...(target.due === null
+        ? []
+        : [
+            {
+              destructive: true,
+              kind: "item" as const,
+              label: "Clear due date",
+              run: () => setDue(null),
+            },
+          ]),
+    ],
+    kind: "submenu",
+    label: target.due === null ? "Due" : "Change due date",
+  };
+
   const snooze: MenuEntry = {
     icon: AlarmClockIcon,
     items: snoozePresets(now).map((preset) => ({
@@ -173,6 +231,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   };
 
   const done: MenuItem = {
+    hint: keys("toggleDone"),
     icon: CheckmarkCircle02Icon,
     kind: "item",
     label: "Mark as done",
@@ -186,16 +245,33 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     run: () => setStatus(ACTIVE),
   };
 
+  // ⌘K takes a done capture back; a snoozed one it marks done.
+  if (status.kind === "done") {
+    backToList.hint = keys("toggleDone");
+  }
+
   const byStatus: Record<CaptureStatus["kind"], readonly MenuEntry[]> = {
     active: [snooze, done],
     done: [backToList],
     snoozed: [backToList, snooze, done],
   };
 
+  const copy: MenuItem = {
+    hint: keys("copyNote"),
+    icon: Copy01Icon,
+    kind: "item",
+    label: "Copy as text",
+    run: async () => {
+      await libraryApi().copyNote(target.id);
+      say("Copied");
+    },
+  };
+
   const entries: readonly MenuEntry[] = [
     ...(target.reopenable.length > 0
       ? [
           {
+            hint: keys("reopen"),
             icon: RepeatIcon,
             kind: "item" as const,
             label:
@@ -211,16 +287,9 @@ export const useCaptureCommands = (target: CaptureTarget) => {
           },
         ]
       : []),
-    {
-      icon: Copy01Icon,
-      kind: "item",
-      label: "Copy as text",
-      run: async () => {
-        await libraryApi().copyNote(target.id);
-        say("Copied");
-      },
-    },
+    copy,
     { id: "status", kind: "separator" },
+    dueMenu,
     ...byStatus[status.kind],
     { id: "delete", kind: "separator" },
     {
@@ -233,27 +302,51 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   ];
 
   const dialog = (
-    <AlertDialog onOpenChange={setConfirming} open={confirming}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Its windows and text are removed from this computer. To keep it out
-            of the list instead, mark it as done.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={remove} variant="destructive">
-            Delete
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <>
+      <Dialog open={pickingDue} onOpenChange={setPickingDue}>
+        <DialogContent className="w-72">
+          <div className="p-2">
+            <header className="px-2 pt-2 pb-3">
+              <DialogTitle>Due date</DialogTitle>
+              <DialogDescription>
+                When should this capture be done by?
+              </DialogDescription>
+            </header>
+            <DueOptions
+              due={target.due}
+              now={now}
+              onClose={() => setPickingDue(false)}
+              onPick={(due) => {
+                setPickingDue(false);
+                void setDue(due);
+              }}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog onOpenChange={setConfirming} open={confirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Its windows and text are removed from this computer. To keep it
+              out of the list instead, mark it as done.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={remove} variant="destructive">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 
   return {
     backToList,
+    copy,
     dialog,
     done,
     entries,

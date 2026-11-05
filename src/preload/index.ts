@@ -55,6 +55,8 @@ if (role === "popover") {
     ...bridge("popover", popoverChannels),
     onDraft: (listener: (...args: readonly unknown[]) => void) =>
       subscribe(pushChannels.draft, listener),
+    onCommand: (listener: (...args: readonly unknown[]) => void) =>
+      subscribe(pushChannels.command, listener),
     onShown: (listener: () => void) =>
       subscribe(pushChannels.focusInput, () => listener()),
     platform,
@@ -66,8 +68,8 @@ if (role === "library") {
     ...bridge("library", libraryChannels),
     onChanged: (listener: () => void) =>
       subscribe(pushChannels.libraryChanged, () => listener()),
-    onFind: (listener: () => void) =>
-      subscribe(pushChannels.find, () => listener()),
+    onCommand: (listener: (...args: readonly unknown[]) => void) =>
+      subscribe(pushChannels.command, listener),
     onNavigate: (listener: (...args: readonly unknown[]) => void) =>
       subscribe(pushChannels.navigate, listener),
     platform,

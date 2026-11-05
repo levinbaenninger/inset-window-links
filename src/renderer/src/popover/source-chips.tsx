@@ -1,4 +1,8 @@
-import { Add01Icon, Cancel01Icon } from "@hugeicons/core-free-icons";
+import {
+  Add01Icon,
+  Cancel01Icon,
+  NoteEditIcon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "cn";
 import { useEffect, useRef, useState } from "react";
@@ -7,6 +11,8 @@ import { Kbd } from "@/components/ui/kbd";
 import { viewTitle } from "@/lib/format";
 
 import type { ShortcutStatus, ViewSummary } from "../../../shared/dto";
+import type { ViewDescriptions } from "../../../shared/text";
+import { isBlank, MAX_VIEW_DESCRIPTION } from "../../../shared/text";
 
 export interface PendingView {
   title: string | null;
@@ -22,16 +28,22 @@ const SourceChip = ({
   view,
   index,
   open,
+  description,
   onToggle,
+  onDescribe,
   onRemove,
 }: {
   view: ViewSummary;
   index: number;
   open: boolean;
+  description: string;
   onToggle: () => void;
+  /** Opens the window's image with its description field focused. */
+  onDescribe: () => void;
   onRemove: () => void;
 }) => {
   const title = viewTitle(view.title);
+  const described = !isBlank(description);
 
   return (
     <li
@@ -57,7 +69,7 @@ const SourceChip = ({
         />
       </button>
       <span
-        className={TILE_TITLE}
+        className={cn(TILE_TITLE, "flex items-center gap-1")}
         data-testid="source-chip-title"
         title={[
           title,
@@ -65,12 +77,33 @@ const SourceChip = ({
           view.sameWindowAs === null
             ? null
             : `again, as window ${view.sameWindowAs}`,
+          described ? description.trim() : null,
         ]
           .filter((part) => part !== null)
           .join(" · ")}
       >
-        {title}
+        {described && (
+          <HugeiconsIcon
+            aria-label="Has a description"
+            className="text-brand shrink-0"
+            icon={NoteEditIcon}
+            size={12}
+          />
+        )}
+        <span className="truncate">{title}</span>
       </span>
+      {!open && (
+        <button
+          aria-label={`${described ? "Edit the" : "Add a"} description of window ${index + 1}, ${title}`}
+          className="bg-background/90 text-foreground hover:bg-muted focus-visible:ring-ring/50 border-foreground/10 absolute top-1 left-1 grid size-6 place-items-center rounded-full border opacity-0 outline-none group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:ring-3"
+          data-testid="describe-window"
+          onClick={onDescribe}
+          title="Describe this window"
+          type="button"
+        >
+          <HugeiconsIcon icon={NoteEditIcon} size={12} />
+        </button>
+      )}
       <button
         aria-label={`Remove window ${index + 1}, ${title}`}
         className="bg-background/90 text-foreground hover:bg-destructive hover:border-destructive focus-visible:ring-ring/50 border-foreground/10 absolute top-1 right-1 grid size-6 place-items-center rounded-full border opacity-0 outline-none group-focus-within:opacity-100 group-hover:opacity-100 hover:text-white focus-visible:ring-3"
@@ -104,10 +137,12 @@ const PendingChip = ({ pending }: { pending: PendingView }) => (
 const AddTile = ({
   layout,
   shortcut,
+  addKeys,
   onAdd,
 }: {
   layout: AddLayout;
   shortcut: ShortcutStatus;
+  addKeys: string;
   onAdd: () => void;
 }) => {
   const bar = layout !== "cell";
@@ -127,8 +162,8 @@ const AddTile = ({
         onClick={onAdd}
         title={
           shortcut.kind === "registered"
-            ? undefined
-            : `${shortcut.label} is taken by another app`
+            ? `Pick windows from a list (${addKeys}), or press ${shortcut.label} in any window`
+            : `Pick windows from a list (${addKeys}). ${shortcut.label} is taken by another app`
         }
         type="button"
       >
@@ -170,16 +205,23 @@ export const SourceChips = ({
   views,
   pending,
   shortcut,
+  addKeys,
+  descriptions,
   onAdd,
+  onDescribe,
   onRemove,
 }: {
   views: readonly ViewSummary[];
   pending: PendingView | null;
   shortcut: ShortcutStatus;
+  addKeys: string;
+  descriptions: ViewDescriptions;
   onAdd: () => void;
+  onDescribe: (view: ViewSummary, description: string) => void;
   onRemove: (view: ViewSummary) => void;
 }) => {
   const list = useRef<HTMLUListElement>(null);
+  const field = useRef<HTMLTextAreaElement>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const count = views.length + (pending === null ? 0 : 1);
   const open = views.find((view) => view.id === openId) ?? null;
@@ -203,8 +245,13 @@ export const SourceChips = ({
       >
         {views.map((view, index) => (
           <SourceChip
+            description={descriptions[view.id] ?? ""}
             index={index}
             key={view.id}
+            onDescribe={() => {
+              setOpenId(view.id);
+              requestAnimationFrame(() => field.current?.focus());
+            }}
             onRemove={() => onRemove(view)}
             onToggle={() => setOpenId(open?.id === view.id ? null : view.id)}
             open={open?.id === view.id}
@@ -212,17 +259,45 @@ export const SourceChips = ({
           />
         ))}
         {pending === null ? null : <PendingChip pending={pending} />}
-        <AddTile layout={addLayout(count)} onAdd={onAdd} shortcut={shortcut} />
+        <AddTile
+          addKeys={addKeys}
+          layout={addLayout(count)}
+          onAdd={onAdd}
+          shortcut={shortcut}
+        />
       </ul>
       {open !== null && (
-        <img
-          alt={`Capture of ${viewTitle(open.title)}`}
-          className="border-foreground/10 bg-muted max-h-64 w-full rounded-lg border object-contain"
+        <div
+          className="border-foreground/10 bg-background mac:dark:bg-card flex flex-col overflow-hidden rounded-lg border"
           data-testid="source-preview"
-          height={open.height}
-          src={open.imageUrl}
-          width={open.width}
-        />
+        >
+          <img
+            alt={`Capture of ${viewTitle(open.title)}`}
+            className="bg-muted max-h-56 w-full object-contain"
+            height={open.height}
+            src={open.imageUrl}
+            width={open.width}
+          />
+          <textarea
+            aria-label={`Description of window ${views.indexOf(open) + 1}, ${viewTitle(open.title)}`}
+            className="placeholder:text-muted-foreground border-foreground/10 field-sizing-content max-h-[calc(5lh+1rem)] min-h-[calc(1lh+1rem)] resize-none border-t bg-transparent px-3 py-2 text-sm outline-none"
+            data-testid="window-description"
+            key={open.id}
+            maxLength={MAX_VIEW_DESCRIPTION}
+            onChange={(event) => onDescribe(open, event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                event.stopPropagation();
+                event.currentTarget.blur();
+              }
+            }}
+            placeholder={`What matters in ${viewTitle(open.title)}? (optional)`}
+            ref={field}
+            rows={1}
+            value={descriptions[open.id] ?? ""}
+          />
+        </div>
       )}
     </section>
   );

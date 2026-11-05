@@ -1,18 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MutationOutcome } from "../../../shared/dto";
-import type { CaptureId } from "../../../shared/ids";
+import type { CaptureId, ViewId } from "../../../shared/ids";
 import type { DraftText } from "../../../shared/text";
 import type { TextStore } from "./inline-saver";
 import { InlineSaver, SAVE_AFTER_MS } from "./inline-saver";
 
-// SAFETY: CaptureId is a branded UUID string; the saver only passes it through.
+// SAFETY: CaptureId and ViewId are branded UUID strings; the saver only passes them through.
 const ID = "00000000-0000-4000-8000-000000000001" as CaptureId;
+
+// SAFETY: a fixed UUID, as main gives views.
+const VIEW = "00000000-0000-4000-8000-000000000101" as ViewId;
 
 const initial: DraftText = {
   description: "",
+  due: null,
   relationship: "A limits B",
   todos: [{ done: false, id: "t1", text: "Call" }],
+  viewDescriptions: { [VIEW]: "" },
 };
 
 const setup = (
@@ -86,6 +91,28 @@ describe(InlineSaver, () => {
       ...initial,
       todos: [...initial.todos, { done: false, id: "t2", text: " " }],
     });
+    saver.flush();
+    await vi.runAllTimersAsync();
+
+    expect(calls).toStrictEqual([]);
+  });
+
+  it("saves a window's description, and ignores only spaces around it", async () => {
+    const { calls, saver } = setup();
+
+    saver.edit({ ...initial, viewDescriptions: { [VIEW]: "  " } });
+    saver.flush();
+    saver.edit({ ...initial, viewDescriptions: { [VIEW]: "The cap " } });
+    saver.flush();
+    await vi.runAllTimersAsync();
+
+    expect(calls).toStrictEqual(["text A limits B Call:false"]);
+  });
+
+  it("leaves the due date to its own call, so picking one sends no text", async () => {
+    const { calls, saver } = setup();
+
+    saver.edit({ ...initial, due: "2026-11-07" });
     saver.flush();
     await vi.runAllTimersAsync();
 

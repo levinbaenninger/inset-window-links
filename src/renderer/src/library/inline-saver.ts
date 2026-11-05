@@ -1,7 +1,12 @@
 import type { MutationOutcome } from "../../../shared/dto";
 import type { CaptureId } from "../../../shared/ids";
 import type { DraftText } from "../../../shared/text";
-import { blankText, isBlank, keptTodos } from "../../../shared/text";
+import {
+  blankText,
+  isBlank,
+  keptTodos,
+  keptViewDescriptions,
+} from "../../../shared/text";
 
 export const SAVE_AFTER_MS = 600;
 
@@ -17,11 +22,14 @@ export interface TextStore {
 /**
  * What main stores: it trims the text and drops blank next steps. Comparing in this form keeps a
  * trailing space being typed from reading as a change that the reload after a save then undoes.
+ * The due date is left out: it is saved on its own, with setDue, as soon as it is picked.
  */
 const stored = (text: DraftText): DraftText => ({
   description: text.description.trim(),
+  due: null,
   relationship: text.relationship.trim(),
   todos: keptTodos(text.todos),
+  viewDescriptions: keptViewDescriptions(text.viewDescriptions),
 });
 
 const sameText = (a: DraftText, b: DraftText): boolean =>

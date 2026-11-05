@@ -5,6 +5,7 @@ import { app, BrowserWindow, nativeTheme, screen } from "electron";
 import { pushChannels } from "../../shared/channels";
 import type { DraftSnapshot } from "../../shared/dto";
 import type { Settings } from "../../shared/settings";
+import type { PageCommand } from "../../shared/shortcuts";
 import type { PopoverAnchor } from "../session/state";
 import { cursorWorkArea } from "./cursor-display";
 import type { Point } from "./placement";
@@ -330,6 +331,11 @@ export class PopoverWindow {
 
   push(snapshot: DraftSnapshot): void {
     this.#win.webContents.send(pushChannels.draft, snapshot);
+  }
+
+  /** A menu key for the panel's page, such as the description or the due date. */
+  command(command: PageCommand): void {
+    this.#win.webContents.send(pushChannels.command, command);
   }
 
   isVisible(): boolean {

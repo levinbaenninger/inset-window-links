@@ -32,6 +32,7 @@ export const libraryChannels = {
   openSettings: "send",
   remove: "invoke",
   reopen: "invoke",
+  setDue: "invoke",
   setStatus: "invoke",
   setTodoDone: "invoke",
   shortcut: "invoke",
@@ -47,8 +48,8 @@ export const settingsChannels = {
 } as const satisfies { [K in keyof SettingsApi]: ChannelKind };
 
 export const pushChannels = {
+  command: "push:command",
   draft: "push:draft",
-  find: "push:find",
   focusInput: "push:focus-input",
   libraryChanged: "push:library-changed",
   navigate: "push:navigate",

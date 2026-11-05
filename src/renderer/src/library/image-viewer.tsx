@@ -94,6 +94,17 @@ export const ImageViewer = ({
 
   useEffect(() => {
     const onKeyDown = async (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        document.querySelector('[role="dialog"], [role="menu"]') !== null
+      ) {
+        return;
+      }
+
       if (event.key === "Escape") {
         await go();
       }

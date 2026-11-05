@@ -1,3 +1,4 @@
+import type { DueDate } from "./due";
 import type { CandidateId, CaptureId, DraftId, ViewId } from "./ids";
 import type { CaptureStatus } from "./status";
 import type { DraftText, Todo } from "./text";
@@ -41,6 +42,8 @@ export interface ViewSummary {
   width: number;
   height: number;
   imageUrl: string;
+  /** What matters in this window. A draft's live copy is in its text, by view id. */
+  description: string;
   source: ViewSource;
   /** 1-based position of an earlier view of the same live window, so repeats read as intentional. */
   sameWindowAs: number | null;
@@ -88,6 +91,7 @@ export interface ListedView {
   id: ViewId;
   title: string | null;
   appName: string | null;
+  description: string;
   imageUrl: string;
   width: number;
   height: number;
@@ -100,6 +104,7 @@ export type CaptureListItem =
       createdAt: string;
       relationship: string;
       description: string;
+      due: DueDate | null;
       status: CaptureStatus;
       todos: readonly Todo[];
       views: readonly ListedView[];
@@ -115,6 +120,7 @@ export interface CaptureDetail {
   updatedAt: string;
   relationship: string;
   description: string;
+  due: DueDate | null;
   status: CaptureStatus;
   todos: readonly Todo[];
   views: readonly ViewSummary[];
