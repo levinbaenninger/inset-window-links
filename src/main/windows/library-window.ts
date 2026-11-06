@@ -1,7 +1,9 @@
 import { app, BrowserWindow, nativeTheme } from "electron";
 
 import { pushChannels } from "../../shared/channels";
+import type { LeaveAnswer } from "../../shared/leave";
 import type { PageCommand } from "../../shared/shortcuts";
+import { LeaveGate } from "../leave-gate";
 import { cursorWorkArea } from "./cursor-display";
 import { windowIcon } from "./icon";
 import { routeShowsCapture } from "./library-route";
@@ -46,12 +48,23 @@ export class LibraryWindow {
   /** An open request that arrived while the previous window was still being torn down. */
   #reopen: { route: string | undefined } | null = null;
   #closing = false;
+  /**
+   * Set once the app exits. Words reported after Recent Captures let the quit go are sent from
+   * pagehide, and will-quit waits for them to be written.
+   */
+  #quitting = false;
   readonly #routeListeners = new Set<() => void>();
   /**
    * The page of the latest window, kept while it closes: its last save is sent from pagehide,
    * after close has begun. A closed page sends nothing more, so it is trusted until replaced.
    */
   #contents: Electron.WebContents | null = null;
+
+  /** Holds the window's close, and the app's quit, while the page has words that can't be saved. */
+  readonly #leaving = new LeaveGate<Electron.WebContents>({
+    ask: (contents, reason) => contents.send(pushChannels.leave, reason),
+    show: () => this.open(),
+  });
 
   constructor(page: RendererPage) {
     this.#page = page;
@@ -126,7 +139,20 @@ export class LibraryWindow {
     win.once("ready-to-show", () => win.show());
     win.webContents.on("did-navigate-in-page", () => this.#routeChanged());
     win.webContents.on("did-finish-load", () => this.#routeChanged());
-    win.on("close", () => {
+    // A held close leaves the window open and usable, so its prompt shows and the menus still reach it.
+    win.on("close", (event) => {
+      const again = () => {
+        if (!win.isDestroyed()) {
+          win.close();
+        }
+      };
+
+      if (!this.#quitting && this.#leaving.holdClose(win.webContents, again)) {
+        event.preventDefault();
+
+        return;
+      }
+
       this.#closing = true;
     });
     win.on("closed", () => {
@@ -216,6 +242,28 @@ export class LibraryWindow {
 
   close(): void {
     this.window()?.close();
+  }
+
+  /** The page says whether it holds words main does not have. */
+  reportUnsaved(unsaved: boolean): void {
+    if (this.#contents !== null) {
+      this.#leaving.report(this.#contents, unsaved);
+    }
+  }
+
+  answerLeave(answer: LeaveAnswer): void {
+    if (this.#contents !== null) {
+      this.#leaving.answer(this.#contents, answer);
+    }
+  }
+
+  /** Before the app quits: `go` at once unless the page holds words it may not be able to save. */
+  letQuit(): Promise<"go" | "stay"> {
+    return this.#leaving.request(this.#contents, "quit");
+  }
+
+  quitting(): void {
+    this.#quitting = true;
   }
 
   mediaSourceId(): string | null {

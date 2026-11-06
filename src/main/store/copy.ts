@@ -3,9 +3,11 @@ import { readFile } from "node:fs/promises";
 import type { CopyRequest } from "../../shared/copy";
 import type { MutationOutcome } from "../../shared/dto";
 import type { CaptureId } from "../../shared/ids";
+import type { DraftText } from "../../shared/text";
 import { formatEntry, formatNote } from "./note";
 import type { CaptureRecord } from "./schema";
 import type { CaptureStore } from "./store";
+import { withText } from "./store";
 
 /** What goes on the clipboard: text, or a window's PNG. */
 export type Clip =
@@ -47,14 +49,16 @@ const clipOf = async (
 };
 
 /**
- * Puts a stored capture on the clipboard once every write queued before it has landed. The page
- * asks only after its own edits were saved. Ok means the clipboard holds it; anything else means
- * nothing was written.
+ * Puts a capture on the clipboard once every write queued before it has landed. The page asks only
+ * after the words it copies were saved, and sends them along: they are copied as sent, never read
+ * back from a record a later save may have changed since. Without them the stored words are
+ * copied. Ok means the clipboard holds it; anything else means nothing was written.
  */
 export const copyCapture = async (
   store: CaptureStore,
   id: CaptureId,
   request: CopyRequest,
+  text: DraftText | null,
   write: (clip: Clip) => Promise<void>,
   place: NotePlace
 ): Promise<MutationOutcome> => {
@@ -73,8 +77,10 @@ export const copyCapture = async (
     };
   }
 
+  const record = text === null ? entry.record : withText(entry.record, text);
+
   try {
-    const clip = await clipOf(store, entry.record, request, place);
+    const clip = await clipOf(store, record, request, place);
 
     if (clip === null) {
       return { kind: "missing" };

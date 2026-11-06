@@ -18,11 +18,13 @@ import {
   DraftIdSchema,
   ViewIdSchema,
 } from "../../shared/ids";
+import type { LeaveAnswer } from "../../shared/leave";
+import { LeaveAnswerSchema } from "../../shared/leave";
 import { SettingsChangeSchema } from "../../shared/settings";
 import { StatusRequestSchema, statusFor } from "../../shared/status";
 import {
   DraftTextSchema,
-  MAX_RELATIONSHIP,
+  EditedTextSchema,
   TodoIdSchema,
 } from "../../shared/text";
 import { openScreenSettings } from "../capture/capturer";
@@ -223,12 +225,11 @@ const detail = (entry: StoreEntry | undefined): CaptureDetail | null => {
   };
 };
 
-const EditedTextSchema = DraftTextSchema.extend({
-  relationship: z.string().trim().min(1).max(MAX_RELATIONSHIP),
-});
-
 export interface LibraryActions {
   startDrag: (file: string, icon: Electron.NativeImage) => void;
+  menuOpen: (open: boolean) => void;
+  reportUnsaved: (unsaved: boolean) => void;
+  answerLeave: (answer: LeaveAnswer) => void;
   newCapture: () => void;
   addWindows: () => void;
   openSettings: () => void;
@@ -241,11 +242,12 @@ export const registerLibraryChannels = (
 ): void => {
   const table: Table<typeof libraryChannels> = {
     addWindows: send(z.tuple([]), actions.addWindows),
-    // The page's copy gate asks only once what is typed is saved.
+    answerLeave: send(z.tuple([LeaveAnswerSchema]), actions.answerLeave),
+    // The page's copy gate asks only once the words it copies are saved.
     copy: invoke(
-      z.tuple([DraftIdSchema, CopyRequestSchema]),
-      (captureId, request) =>
-        copyCapture(store, captureId, request, writeClip, {
+      z.tuple([DraftIdSchema, CopyRequestSchema, EditedTextSchema.nullable()]),
+      (captureId, request, text) =>
+        copyCapture(store, captureId, request, text, writeClip, {
           locale: app.getLocale(),
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         })
@@ -267,8 +269,10 @@ export const registerLibraryChannels = (
       detail(store.get(captureId))
     ),
     list: invoke(z.tuple([]), () => store.list().map(listItem)),
+    menuOpen: send(z.tuple([z.boolean()]), actions.menuOpen),
     newCapture: send(z.tuple([]), actions.newCapture),
     openSettings: send(z.tuple([]), actions.openSettings),
+    reportUnsaved: send(z.tuple([z.boolean()]), actions.reportUnsaved),
     remove: invoke(z.tuple([DraftIdSchema]), (captureId) =>
       store.remove(captureId)
     ),
@@ -338,6 +342,7 @@ export const registerSettingsChannels = (
       actions.fitHeight
     ),
     getView: invoke(z.tuple([]), actions.getView),
+    menuOpen: send(z.tuple([z.boolean()]), actions.menuOpen),
     setOpenAtLogin: invoke(z.tuple([z.boolean()]), actions.setOpenAtLogin),
     update: invoke(z.tuple([SettingsChangeSchema]), (change) =>
       actions.update(change)

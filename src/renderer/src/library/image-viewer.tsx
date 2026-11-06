@@ -17,6 +17,7 @@ import { formatWhen, viewTitle } from "@/lib/format";
 
 import type { CaptureDetail, ViewSummary } from "../../../shared/dto";
 import { copyCapture, notCopiedText } from "./copy-gate";
+import { drafts } from "./page-drafts";
 
 const FEEDBACK_MS = 2000;
 const FAILURE_MS = 6000;
@@ -143,7 +144,8 @@ export const ImageViewer = ({
     const result = await copyCapture(
       captureId,
       { kind: "image", viewId: view.id },
-      libraryApi()
+      libraryApi(),
+      drafts
     );
 
     if (result.kind === "copied") {

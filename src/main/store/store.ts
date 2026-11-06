@@ -32,6 +32,24 @@ const VIEWS_DIR = "views";
 const STAGING_DIR = ".staging";
 const TRASH_DIR = ".trash";
 
+/**
+ * A record with the page's words in it, as they are saved and as they are copied. A view the text
+ * does not name keeps its description; the due date has its own call.
+ */
+export const withText = (
+  record: CaptureRecord,
+  text: DraftText
+): CaptureRecord => ({
+  ...record,
+  description: text.description.trim(),
+  relationship: text.relationship,
+  todos: keptTodos(text.todos),
+  views: record.views.map((view) => ({
+    ...view,
+    description: (text.viewDescriptions[view.id] ?? view.description).trim(),
+  })),
+});
+
 const entryId = (entry: StoreEntry): string =>
   entry.kind === "current" ? entry.record.id : entry.id;
 
@@ -233,18 +251,8 @@ export class CaptureStore {
     now: Date
   ): Promise<MutationOutcome> {
     return this.#rewrite(id, (record) => ({
-      ...record,
-      description: text.description.trim(),
-      relationship: text.relationship,
-      todos: keptTodos(text.todos),
+      ...withText(record, text),
       updatedAt: now.toISOString(),
-      // A view the text does not name keeps its description; the due date has its own call.
-      views: record.views.map((view) => ({
-        ...view,
-        description: (
-          text.viewDescriptions[view.id] ?? view.description
-        ).trim(),
-      })),
     }));
   }
 

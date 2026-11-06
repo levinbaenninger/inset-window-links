@@ -13,6 +13,7 @@ import {
   systemPreferences,
   webContents,
 } from "electron";
+import type { WebContents } from "electron";
 
 import type { IconPlace, SettingsView } from "../shared/settings";
 import type { PageCommand } from "../shared/shortcuts";
@@ -33,6 +34,7 @@ import {
   trustedSender,
 } from "./ipc/register";
 import { wireMenuKeys } from "./menu-keys";
+import { OpenMenus } from "./menu-open";
 import { SessionController } from "./session/controller";
 import { openSettingsStore } from "./settings-store";
 import { startSnoozeClock } from "./snooze-clock";
@@ -162,10 +164,19 @@ const start = async () => {
   /** Set once the app's actions exist; until then a key press reaches the page as usual. */
   let answerMenuKeys: ((action: KeyAction) => void) | null = null;
 
+  const menus = new OpenMenus<WebContents>((contents) =>
+    BrowserWindow.fromWebContents(contents)
+  );
+
   // Windows has no menu bar, so every Inset page answers the Mac menu's keys itself: each
   // page's contents, including any made before this line, so no window can miss them.
   if (!mac) {
-    wireMenuKeys(app, webContents.getAllWebContents(), () => answerMenuKeys);
+    wireMenuKeys(
+      app,
+      webContents.getAllWebContents(),
+      () => answerMenuKeys,
+      (contents) => menus.isOpen(contents)
+    );
   }
 
   const settings = await openSettingsStore(
@@ -208,7 +219,7 @@ const start = async () => {
     () => settings.current().rememberPages
   );
 
-  const session = new SessionController(capturer, store, popover);
+  const session = new SessionController(capturer, store, popover, library);
 
   store.onChange(() => library.notifyChanged());
 
@@ -244,6 +255,15 @@ const start = async () => {
     store,
     {
       addWindows,
+      answerLeave: (answer) => library.answerLeave(answer),
+      menuOpen: (open) => {
+        const contents = library.contents();
+
+        if (contents !== null) {
+          menus.set(contents, open);
+        }
+      },
+      reportUnsaved: (unsaved) => library.reportUnsaved(unsaved),
       newCapture: showDraft,
       openSettings,
       startDrag: (file, icon) =>
@@ -459,6 +479,13 @@ const start = async () => {
       },
       fitHeight: (height) => settingsWindow.fitHeight(height),
       getView: () => Promise.resolve(settingsView()),
+      menuOpen: (open) => {
+        const contents = settingsWindow.window()?.webContents;
+
+        if (contents !== undefined) {
+          menus.set(contents, open);
+        }
+      },
       setOpenAtLogin: (on) => {
         app.setLoginItemSettings({ openAtLogin: on });
         pushSettings();

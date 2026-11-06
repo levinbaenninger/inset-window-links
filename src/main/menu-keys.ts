@@ -26,12 +26,15 @@ export interface KeySource<T extends KeyTarget> {
  * Gives every page of the app the menu's keys, on Windows where there is no menu bar to hold
  * them. It listens on each page's contents, not on its window, so it covers pages created before
  * this ran as well as later ones, and each page is wired once however often it is seen. `answer`
- * is read on every press, so keys pressed before the app's actions exist do nothing.
+ * is read on every press, so keys pressed before the app's actions exist do nothing. While a page
+ * has a menu open, every key goes to the page: its menu runs the keys it shows for its owner and
+ * swallows the other app keys, so none acts on the page or the app behind the menu.
  */
 export const wireMenuKeys = <T extends KeyTarget>(
   source: KeySource<T>,
   existing: readonly T[],
-  answer: () => ((action: KeyAction) => void) | null
+  answer: () => ((action: KeyAction) => void) | null,
+  menuOpen: (contents: T) => boolean
 ): void => {
   const wired = new WeakSet<T>();
 
@@ -42,6 +45,10 @@ export const wireMenuKeys = <T extends KeyTarget>(
 
     wired.add(contents);
     contents.on("before-input-event", (event, input) => {
+      if (menuOpen(contents)) {
+        return;
+      }
+
       const action = keyAction(input);
       const run = answer();
 

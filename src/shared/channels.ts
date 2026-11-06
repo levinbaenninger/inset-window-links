@@ -23,14 +23,17 @@ export const popoverChannels = {
 
 export const libraryChannels = {
   addWindows: "send",
+  answerLeave: "send",
   copy: "invoke",
   dragImage: "send",
   get: "invoke",
   list: "invoke",
+  menuOpen: "send",
   newCapture: "send",
   openSettings: "send",
   remove: "invoke",
   reopen: "invoke",
+  reportUnsaved: "send",
   setDue: "invoke",
   setStatus: "invoke",
   setTodoDone: "invoke",
@@ -42,6 +45,7 @@ export const settingsChannels = {
   allowOrigins: "invoke",
   fitHeight: "send",
   getView: "invoke",
+  menuOpen: "send",
   setOpenAtLogin: "invoke",
   update: "invoke",
 } as const satisfies { [K in keyof SettingsApi]: ChannelKind };
@@ -50,6 +54,7 @@ export const pushChannels = {
   command: "push:command",
   draft: "push:draft",
   focusInput: "push:focus-input",
+  leave: "push:leave",
   libraryChanged: "push:library-changed",
   navigate: "push:navigate",
   settingsView: "push:settings-view",

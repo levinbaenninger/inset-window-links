@@ -10,7 +10,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
 import type { ReactNode, RefObject } from "react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { DueBadge, useToday } from "@/components/due";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,7 @@ import { matchesCapture, matchSource } from "../../../shared/search";
 import type { StatusKind } from "../../../shared/status";
 import { MenuEntries, useCaptureCommands } from "./capture-commands";
 import { useEntryCopy } from "./copy-keys";
+import { drafts } from "./page-drafts";
 import type { RowAction } from "./row-keys";
 import { neighborRow, rowKey } from "./row-keys";
 
@@ -217,6 +218,13 @@ const CurrentRow = ({
   });
 
   const { feedback } = commands;
+
+  // Words typed in this capture that could not be saved: they wait in it, so the row says so.
+  const unsaved = useSyncExternalStore(
+    drafts.subscribe,
+    () => drafts.error(item.id) !== undefined
+  );
+
   const found = matchSource(item, needle);
   const dueShown = item.due !== null && item.status.kind !== "done";
 
@@ -410,6 +418,15 @@ const CurrentRow = ({
                   {!chipOwnLine && badge}
                   {feedback === null ? (
                     <>
+                      {unsaved && (
+                        <span
+                          className="text-destructive shrink-0"
+                          data-testid="row-unsaved"
+                          title="Changes couldn’t be saved. Open the capture to retry or discard them."
+                        >
+                          Not saved
+                        </span>
+                      )}
                       <Progress item={item} />
                       <When item={item} />
                     </>

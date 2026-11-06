@@ -9,6 +9,7 @@ import type {
 } from "./dto";
 import type { DueDate } from "./due";
 import type { CandidateId, CaptureId, ViewId } from "./ids";
+import type { LeaveAnswer, LeaveReason } from "./leave";
 import type { SettingsChange, SettingsView } from "./settings";
 import type { PageCommand } from "./shortcuts";
 import type { StatusRequest } from "./status";
@@ -52,10 +53,15 @@ export interface LibraryApi {
     captureId: CaptureId,
     due: DueDate | null
   ) => Promise<MutationOutcome>;
-  /** Copies the stored capture; only the page's copy gate calls this, once its edits are saved. */
+  /**
+   * Copies a capture; only the page's copy gate calls this, once its edits are saved. `text` is
+   * the words the copy was asked for, which main copies instead of reading them back; null copies
+   * the stored words.
+   */
   copy: (
     captureId: CaptureId,
-    request: CopyRequest
+    request: CopyRequest,
+    text: DraftText | null
   ) => Promise<MutationOutcome>;
   shortcut: () => Promise<ShortcutStatus>;
   /** Starts a native file drag of the saved PNG, for dropping into another app. */
@@ -70,6 +76,12 @@ export interface LibraryApi {
     captureId: CaptureId,
     viewIds: readonly ViewId[]
   ) => Promise<{ failed: number }>;
+  /** Says when the page's first menu opens and its last one closes: main leaves the keys to it meanwhile. */
+  menuOpen: (open: boolean) => void;
+  /** Says when the page first holds words main does not have, and when it holds none: main holds a close meanwhile. */
+  reportUnsaved: (unsaved: boolean) => void;
+  /** Answers main's request to let the window go (onLeave). */
+  answerLeave: (answer: LeaveAnswer) => void;
   /** Shows the capture panel, to start or continue a capture. */
   newCapture: () => void;
   addWindows: () => void;
@@ -83,6 +95,8 @@ export interface SettingsApi {
   /** Asks macOS for Accessibility, which lets captures remember pages and files. */
   allowOrigins: () => Promise<void>;
   fitHeight: (height: number) => void;
+  /** As in Recent Captures: main leaves the keys to an open dropdown. */
+  menuOpen: (open: boolean) => void;
 }
 
 export type PopoverBridge = PopoverApi & {
@@ -104,5 +118,7 @@ export type LibraryBridge = LibraryApi & {
   onNavigate: (listener: (route: string) => void) => () => void;
   /** A menu key for the page: a field, the open capture, the sidebar, the sheet. */
   onCommand: (listener: (command: PageCommand) => void) => () => void;
+  /** Main asks the page to let its window close, or the app quit; it answers with answerLeave. */
+  onLeave: (listener: (reason: LeaveReason) => void) => () => void;
   platform: CapturePlatform;
 };

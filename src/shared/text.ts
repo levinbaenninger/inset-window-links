@@ -57,6 +57,11 @@ export const DraftTextSchema = z.object({
 
 export type DraftText = z.infer<typeof DraftTextSchema>;
 
+/** A saved capture's text, as it arrives in main to be saved or copied: its title is never blank. */
+export const EditedTextSchema = DraftTextSchema.extend({
+  relationship: z.string().trim().min(1).max(MAX_RELATIONSHIP),
+});
+
 export const blankText: DraftText = {
   description: "",
   due: null,

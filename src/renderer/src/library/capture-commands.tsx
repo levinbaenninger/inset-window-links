@@ -65,6 +65,7 @@ import type {
 } from "../../../shared/status";
 import { ACTIVE, snoozePresets } from "../../../shared/status";
 import { copyCapture, notCopiedText } from "./copy-gate";
+import { drafts } from "./page-drafts";
 import { neighborRow, ROW_SELECTOR } from "./row-keys";
 
 const FEEDBACK_MS = 2000;
@@ -245,6 +246,8 @@ export const useCaptureCommands = (target: CaptureTarget) => {
       return;
     }
 
+    // Its unsaved words have nowhere to go now.
+    drafts.forget(target.id);
     afterDelete.current = next;
     next?.focus();
 
@@ -335,7 +338,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
 
   /** Copies through the gate; when what is typed could not be saved, copies nothing and says so. */
   const copy = async (request: CopyRequest): Promise<boolean> => {
-    const result = await copyCapture(target.id, request, libraryApi());
+    const result = await copyCapture(target.id, request, libraryApi(), drafts);
 
     if (result.kind === "copied") {
       say("Copied");

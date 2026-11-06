@@ -70,6 +70,8 @@ if (role === "library") {
       subscribe(pushChannels.libraryChanged, () => listener()),
     onCommand: (listener: (...args: readonly unknown[]) => void) =>
       subscribe(pushChannels.command, listener),
+    onLeave: (listener: (...args: readonly unknown[]) => void) =>
+      subscribe(pushChannels.leave, listener),
     onNavigate: (listener: (...args: readonly unknown[]) => void) =>
       subscribe(pushChannels.navigate, listener),
     platform,

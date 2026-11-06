@@ -71,8 +71,9 @@ import {
   useCaptureCommands,
 } from "./capture-commands";
 import { useEntryCopy } from "./copy-keys";
+import type { SaveError } from "./drafts";
 import { ImageViewer } from "./image-viewer";
-import { saverFor, trackSaver } from "./inline-saver";
+import { drafts } from "./page-drafts";
 import { PaneHeader } from "./pane-header";
 import { ROW_SELECTOR } from "./row-keys";
 
@@ -328,25 +329,75 @@ const problem = (outcome: MutationOutcome): string => {
   }
 };
 
+/**
+ * Words that could not be saved: why, then Retry and Discard changes. A deleted or unreadable
+ * capture can't take them however often it is asked, so it offers only Discard changes.
+ */
+const SaveFailure = ({
+  failure,
+  busy,
+  onRetry,
+  onDiscard,
+}: {
+  failure: SaveError;
+  /** A save is on its way: the buttons wait for its answer, in place, so nothing moves. */
+  busy: boolean;
+  onRetry: () => void;
+  onDiscard: () => void;
+}) => (
+  <div
+    className="flex flex-wrap items-center gap-x-2 gap-y-1"
+    data-testid="save-failure"
+  >
+    <p className="text-destructive text-xs" role="alert">
+      {problem(failure)}
+    </p>
+    <span className="flex items-center gap-1">
+      {failure.kind === "failed" && (
+        <Button disabled={busy} onClick={onRetry} size="xs" variant="outline">
+          Retry
+        </Button>
+      )}
+      <Button
+        disabled={busy}
+        onClick={onDiscard}
+        size="xs"
+        title="Go back to the saved words"
+        variant="ghost"
+      >
+        Discard changes
+      </Button>
+    </span>
+  </div>
+);
+
 const dueProblem = (outcome: MutationOutcome): string | null =>
   outcome.kind === "ok" ? null : problem(outcome);
 
 const Record = ({
   detail,
   text,
-  error,
+  failure,
+  saving,
   onText,
   onToggle,
   onTitleBlur,
   onLeave,
+  onRetry,
+  onDiscard,
 }: {
   detail: CaptureDetail;
   text: DraftText;
-  error: string | null;
+  /** Why the words on screen could not be saved; they stay until saved or discarded. */
+  failure: SaveError | null;
+  /** Whether a save of them is on its way. */
+  saving: boolean;
   onText: (text: DraftText) => void;
   onToggle: (todo: Todo, done: boolean) => void;
   onTitleBlur: () => void;
   onLeave: () => void;
+  onRetry: () => void;
+  onDiscard: () => void;
 }) => {
   const title = useRef<HTMLTextAreaElement>(null);
   const description = useRef<HTMLTextAreaElement>(null);
@@ -670,10 +721,19 @@ const Record = ({
                 rows={1}
                 value={text.relationship}
               />
-              {error !== null && (
-                <p className="text-destructive text-xs" role="alert">
-                  {error}
-                </p>
+              {failure !== null && (
+                <SaveFailure
+                  busy={saving}
+                  failure={failure}
+                  onDiscard={() => {
+                    onDiscard();
+                    title.current?.focus();
+                  }}
+                  onRetry={() => {
+                    onRetry();
+                    title.current?.focus();
+                  }}
+                />
               )}
               {showDescription && (
                 <textarea
@@ -797,9 +857,9 @@ const Record = ({
 };
 
 /**
- * One capture, edited in place. Keyed by the capture's id, so its text starts from the stored
- * copy once and is not reset by every reload: each save makes main report a change, and the
- * reload that follows would otherwise overwrite what is being typed.
+ * One capture, edited in place. Its unsaved words live in the page's draft store, not here, so
+ * leaving the capture, or opening one of its windows, never drops them: they are shown again, with
+ * their error when they could not be saved, until they are saved or discarded.
  */
 const CapturePane = ({
   detail,
@@ -808,32 +868,23 @@ const CapturePane = ({
   detail: CaptureDetail;
   viewIndex: number;
 }) => {
-  const saver = useMemo(() => saverFor(detail.id, libraryApi()), [detail.id]);
+  const { id } = detail;
+  const stored = useMemo(() => textOf(detail), [detail]);
+  const draft = useSyncExternalStore(drafts.subscribe, () => drafts.draft(id));
 
-  const { text, outcome } = useSyncExternalStore(saver.subscribe, saver.state);
+  const confirmed = useSyncExternalStore(drafts.subscribe, () =>
+    drafts.confirmed(id)
+  );
 
-  // The first copy is taken once; later ones only when they cannot overwrite typing.
+  const error = useSyncExternalStore(drafts.subscribe, () => drafts.error(id));
+  const text = draft?.values ?? confirmed ?? stored;
+
   useEffect(() => {
-    saver.adopt(textOf(detail));
-  }, [saver, detail]);
+    drafts.adopt(id, stored);
+  }, [id, stored]);
 
-  /*
-   * A copy from the sidebar or a menu key waits for what is typed here. Leaving the capture for
-   * another one unmounts the pane, which saves what is left before the saver is let go. Closing
-   * the window runs no cleanup and, with ⌘W from the menu, no blur either, so pagehide saves then.
-   */
-  useEffect(() => {
-    const untrack = trackSaver(detail.id, saver);
-    const flush = () => saver.flush({ leaving: true });
-
-    window.addEventListener("pagehide", flush);
-
-    return () => {
-      window.removeEventListener("pagehide", flush);
-      saver.flush();
-      untrack();
-    };
-  }, [detail.id, saver]);
+  // Leaving the capture saves what is left at once, rather than after the pause.
+  useEffect(() => () => drafts.flush(id), [id]);
 
   if (detail.views[viewIndex] !== undefined) {
     return <ImageViewer detail={detail} index={viewIndex} />;
@@ -842,12 +893,18 @@ const CapturePane = ({
   return (
     <Record
       detail={detail}
-      error={outcome === null ? null : problem(outcome)}
-      onLeave={() => saver.flush()}
-      onText={(next) => saver.edit(next)}
-      onTitleBlur={() => saver.restoreBlankTitle()}
-      onToggle={(todo, done) => saver.toggle(todo.id, done)}
-      text={text ?? textOf(detail)}
+      failure={error ?? null}
+      onDiscard={() => drafts.discard(id)}
+      onLeave={() => drafts.flush(id)}
+      onRetry={() => drafts.retry(id)}
+      onText={(next) => drafts.edit(id, next, text)}
+      onTitleBlur={() => drafts.restoreBlankTitle(id)}
+      onToggle={(todo, done) => drafts.toggle(id, todo.id, done, text)}
+      saving={
+        draft?.kind === "saving" ||
+        (draft?.kind === "dirty" && draft.inFlight !== null)
+      }
+      text={text}
     />
   );
 };

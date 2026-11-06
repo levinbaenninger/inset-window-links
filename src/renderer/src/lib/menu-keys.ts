@@ -104,6 +104,52 @@ export const keyForMenu = (key: MenuKey | null): boolean => {
 export const commandForMenu = (command: PageCommand): boolean =>
   keyForMenu(command === "copyNote" || command === "reopen" ? command : null);
 
+let openMenus = 0;
+let announce: ((open: boolean) => void) | null = null;
+
+/**
+ * Tells main when the page's first menu opens and its last one closes, so main leaves every key to
+ * the menu meanwhile. Main forgets an open menu when the window loses focus, and a menu can stay
+ * open across that, so the page says so again when the window has focus back.
+ */
+export const announceMenus = (listener: (open: boolean) => void): void => {
+  announce = listener;
+  window.addEventListener("focus", () => {
+    if (openMenus > 0) {
+      listener(true);
+    }
+  });
+};
+
+/** A menu is open until the returned function is called. */
+export const holdMenuOpen = (): (() => void) => {
+  let held = true;
+
+  openMenus += 1;
+
+  if (openMenus === 1) {
+    announce?.(true);
+  }
+
+  return () => {
+    if (!held) {
+      return;
+    }
+
+    held = false;
+    openMenus -= 1;
+
+    if (openMenus === 0) {
+      announce?.(false);
+    }
+  };
+};
+
+/** Holds the page's menus open while `shown`, for a menu root that may or may not be controlled. */
+export const useMenuHold = (shown: boolean): void => {
+  useEffect(() => (shown ? holdMenuOpen() : undefined), [shown]);
+};
+
 /**
  * A keydown inside a menu, before the menu itself sees it. A key the menu shows runs for its owner
  * whatever is highlighted. Space and Return are left to the menu, which picks the highlighted

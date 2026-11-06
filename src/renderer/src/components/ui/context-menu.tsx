@@ -6,12 +6,29 @@ import * as React from "react";
 
 import { keyPlatform } from "@/lib/bridge";
 import type { MenuKeyHandler } from "@/lib/menu-keys";
-import { menuKeyDown, useMountedMenu } from "@/lib/menu-keys";
+import { menuKeyDown, useMenuHold, useMountedMenu } from "@/lib/menu-keys";
 
+/** Main leaves every key to the page while any menu is open (lib/menu-keys.ts). */
 function ContextMenu({
+  onOpenChange,
+  open,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
-  return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />;
+  const [ownOpen, setOwnOpen] = React.useState(false);
+
+  useMenuHold(open ?? ownOpen);
+
+  return (
+    <ContextMenuPrimitive.Root
+      data-slot="context-menu"
+      onOpenChange={(next) => {
+        setOwnOpen(next);
+        onOpenChange?.(next);
+      }}
+      open={open}
+      {...props}
+    />
+  );
 }
 
 function ContextMenuTrigger({

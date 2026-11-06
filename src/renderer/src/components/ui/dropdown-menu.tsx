@@ -8,12 +8,31 @@ import * as React from "react";
 
 import { keyPlatform } from "@/lib/bridge";
 import type { MenuKeyHandler } from "@/lib/menu-keys";
-import { menuKeyDown, useMountedMenu } from "@/lib/menu-keys";
+import { menuKeyDown, useMenuHold, useMountedMenu } from "@/lib/menu-keys";
 
+/** Main leaves every key to the page while any menu is open (lib/menu-keys.ts). */
 function DropdownMenu({
+  defaultOpen,
+  onOpenChange,
+  open,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
+  const [ownOpen, setOwnOpen] = React.useState(defaultOpen ?? false);
+
+  useMenuHold(open ?? ownOpen);
+
+  return (
+    <DropdownMenuPrimitive.Root
+      data-slot="dropdown-menu"
+      defaultOpen={defaultOpen}
+      onOpenChange={(next) => {
+        setOwnOpen(next);
+        onOpenChange?.(next);
+      }}
+      open={open}
+      {...props}
+    />
+  );
 }
 
 function DropdownMenuPortal({

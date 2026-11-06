@@ -102,19 +102,74 @@ if (page === "library") {
   const { captures } = data;
   const items = data.items ?? [];
 
+  /** Text saves a scene holds back until it calls __releaseSaves, as a slow disk would. */
+  const heldSaves = [];
+
+  globalThis.__releaseSaves = () => {
+    for (const run of heldSaves.splice(0)) {
+      run();
+    }
+  };
+
+  /** What main does with a text save: write it, or fail as a full disk would. */
+  const saveText = (captureId, text) => {
+    if (data.failSaves === true) {
+      return { kind: "failed", message: "The disk is full." };
+    }
+
+    const capture = captures.find((item) => item.id === captureId);
+
+    if (capture !== undefined) {
+      capture.relationship = text.relationship;
+      capture.description = text.description;
+      capture.todos = text.todos;
+
+      for (const view of capture.views) {
+        view.description = text.viewDescriptions[view.id] ?? view.description;
+      }
+
+      const item = items.find((listed) => listed.id === captureId);
+
+      if (item !== undefined) {
+        item.relationship = capture.relationship;
+        item.description = capture.description;
+        item.todos = capture.todos;
+
+        for (const view of item.views) {
+          view.description = text.viewDescriptions[view.id] ?? view.description;
+        }
+      }
+    }
+
+    emit("changed");
+
+    return { kind: "ok" };
+  };
+
   globalThis.inset = withFallback(
     {
-      // Main writes the clipboard once the page's edits are saved; the call is recorded after it,
-      // under the name of what was copied, so a scene can tell ⌘C, Copy as text and an image apart.
-      copy: async (captureId, request) => {
+      answerLeave: (answer) => record("answerLeave", answer),
+      // Main writes the clipboard once the page's edits are saved, from the words the page sent
+      // when there are any. The call is recorded after it, under the name of what was copied, so a
+      // scene can tell ⌘C, Copy as text and an image apart.
+      copy: async (captureId, request, text) => {
         const capture = captures.find((item) => item.id === captureId);
 
         if (capture === undefined) {
           return { kind: "missing" };
         }
 
-        await navigator.clipboard.writeText(clipText(capture, request));
-        record(COPY_CALLS[request.kind], captureId, request);
+        const words =
+          text === null || text === undefined
+            ? capture
+            : {
+                ...capture,
+                description: text.description,
+                relationship: text.relationship,
+              };
+
+        await navigator.clipboard.writeText(clipText(words, request));
+        record(COPY_CALLS[request.kind], captureId, request, text ?? null);
 
         return { kind: "ok" };
       },
@@ -137,13 +192,19 @@ if (page === "library") {
 
         return Promise.resolve({ failed: 0 });
       },
+      // A copy, as IPC hands the page: a capture saved meanwhile reads as a new stored copy.
       get: (id) =>
-        Promise.resolve(captures.find((capture) => capture.id === id) ?? null),
+        Promise.resolve(
+          structuredClone(captures.find((capture) => capture.id === id) ?? null)
+        ),
       list: () => Promise.resolve(items),
+      menuOpen: (open) => record("menuOpen", open),
       onChanged: (listener) => subscribe("changed", listener),
       onCommand: (listener) => subscribe("command", listener),
+      onLeave: (listener) => subscribe("leave", listener),
       onNavigate: none,
       platform,
+      reportUnsaved: (unsaved) => record("reportUnsaved", unsaved),
       setDue: (captureId, due) => {
         const found = captures.find((capture) => capture.id === captureId);
 
@@ -162,45 +223,17 @@ if (page === "library") {
         return Promise.resolve({ kind: "ok" });
       },
       updateText: (captureId, text) => {
-        if (data.failSaves === true) {
-          record("updateText", captureId, text);
-
-          return Promise.resolve({
-            kind: "failed",
-            message: "The disk is full.",
-          });
-        }
-
-        const capture = captures.find((item) => item.id === captureId);
-
-        if (capture !== undefined) {
-          capture.relationship = text.relationship;
-          capture.description = text.description;
-          capture.todos = text.todos;
-
-          for (const view of capture.views) {
-            view.description =
-              text.viewDescriptions[view.id] ?? view.description;
-          }
-
-          const item = items.find((listed) => listed.id === captureId);
-
-          if (item !== undefined) {
-            item.relationship = capture.relationship;
-            item.description = capture.description;
-            item.todos = capture.todos;
-
-            for (const view of item.views) {
-              view.description =
-                text.viewDescriptions[view.id] ?? view.description;
-            }
-          }
-        }
-
         record("updateText", captureId, text);
-        emit("changed");
 
-        return Promise.resolve({ kind: "ok" });
+        if (data.holdSaves === true) {
+          const { promise, resolve } = Promise.withResolvers();
+
+          heldSaves.push(() => resolve(saveText(captureId, text)));
+
+          return promise;
+        }
+
+        return Promise.resolve(saveText(captureId, text));
       },
       setStatus: (captureId, status) => {
         for (const listed of [...captures, ...items]) {
@@ -245,6 +278,7 @@ if (page === "settings") {
     {
       fitHeight: fitted,
       getView: resolved(settingsView),
+      menuOpen: (open) => record("menuOpen", open),
       onView: none,
       platform,
     },

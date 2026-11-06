@@ -404,6 +404,8 @@ interface SceneData {
   captures?: readonly Capture[];
   /** Every text save answers that it failed, as a full disk would. */
   failSaves?: boolean;
+  /** Text saves wait until the scene calls __releaseSaves, as a slow disk would. */
+  holdSaves?: boolean;
   draft?: DraftState;
   view?: typeof SETTINGS_VIEW;
 }
@@ -1716,37 +1718,33 @@ const SCENES: readonly Scene[] = [
     platforms: ["macos"],
   },
   {
-    // A's title can't be saved: no way of copying puts anything on the clipboard or says Copied.
+    /*
+     * A's title can't be saved. No way of copying A puts anything on the clipboard or says Copied,
+     * and none sends the words again: the failed draft refuses at once. Leaving A, and copying it
+     * from its row long after the save failed, still refuses, and A shows its words and error
+     * again. After Discard changes, every one of those ways copies.
+     */
     act: async (page) => {
       const title = page.getByTestId("record-relationship");
       const rowA = page.getByTestId("recent-item").first();
+      const rowB = page.getByTestId("recent-item").nth(1);
       const menu = page.getByRole("menu");
       const more = page.getByRole("button", { name: "More" });
+      const failure = page.getByTestId("save-failure");
 
       await title.fill("NEW UNSAVED TITLE");
       await rowA.focus();
-      await page.getByText("Couldn't save. The disk is full.").waitFor();
+      await failure.getByText("Couldn't save. The disk is full.").waitFor();
+      await failure.getByRole("button", { name: "Retry" }).waitFor();
+      await failure.getByRole("button", { name: "Discard changes" }).waitFor();
       await seedClipboard(page);
 
-      /** Each copy first sends the unsaved title again, which fails again: then nothing is copied. */
-      const refused = async (what: string, copy: () => Promise<void>) => {
-        const before = await callCount(page, "updateText");
+      const saves = await callCount(page, "updateText");
 
-        await copy();
-
-        try {
-          await until(
-            page,
-            `globalThis.__calls.filter((call) => call.method === "updateText").length > ${before}`,
-            "the save to be tried again"
-          );
-        } catch (error) {
-          throw new Error(`${what}: ${String(error)}`, { cause: error });
-        }
-
-        await page.waitForTimeout(100);
-        assert.equal(await copiedShown(page), 0, `${what} says Copied`);
-      };
+      const copies = () =>
+        page.evaluate<number>(
+          `globalThis.__calls.filter((call) => ["copyEntry", "copyNote", "copyImage"].includes(call.method)).length`
+        );
 
       const inMore = async (act: () => Promise<void>) => {
         await more.click();
@@ -1765,47 +1763,69 @@ const SCENES: readonly Scene[] = [
       const item = (name: RegExp) =>
         menu.getByRole("menuitem", { name }).click();
 
-      await refused("⌘C on the page", async () => {
-        await more.focus();
-        await page.keyboard.press("Meta+C");
+      /** Every way to copy A: from its page, its row, both menus, main, and its windows. */
+      const ways: readonly (readonly [string, () => Promise<void>])[] = [
+        [
+          "⌘C on the page",
+          async () => {
+            await more.focus();
+            await page.keyboard.press("Meta+C");
+          },
+        ],
+        [
+          "⌘C on the row",
+          async () => {
+            await rowA.focus();
+            await page.keyboard.press("Meta+C");
+          },
+        ],
+        [
+          "Copy as text sent by main, page",
+          async () => {
+            await more.focus();
+            await sendCommand(page, "copyNote");
+          },
+        ],
+        [
+          "Copy as text sent by main, row",
+          async () => {
+            await rowA.focus();
+            await sendCommand(page, "copyNote");
+          },
+        ],
+        ["⋯ Copy", () => inMore(() => item(COPY_ITEM))],
+        ["⋯ Copy as text", () => inMore(() => item(/^Copy as text/u))],
+        ["⌘C in the ⋯ menu", () => inMore(() => page.keyboard.press("Meta+C"))],
+        [
+          "⌥⌘C in the ⋯ menu",
+          () => inMore(() => page.keyboard.press("Meta+Alt+C")),
+        ],
+        ["the row menu's Copy", () => inRowMenu(() => item(COPY_ITEM))],
+        [
+          "the row menu's Copy as text",
+          () => inRowMenu(() => item(/^Copy as text/u)),
+        ],
+        [
+          "⌘C in the row menu",
+          () => inRowMenu(() => page.keyboard.press("Meta+C")),
+        ],
+        [
+          "⌥⌘C in the row menu",
+          () => inRowMenu(() => page.keyboard.press("Meta+Alt+C")),
+        ],
+        [
+          "a window's Copy image",
+          () =>
+            page.getByRole("button", { name: "Copy image" }).first().click(),
+        ],
+      ];
+
+      await inTurn(ways, async ([what, copy]) => {
+        await copy();
+        await page.waitForTimeout(150);
+        assert.equal(await copiedShown(page), 0, `${what} says Copied`);
+        assert.equal(await copies(), 0, `${what} reached main's copy`);
       });
-      await refused("⌘C on the row", async () => {
-        await rowA.focus();
-        await page.keyboard.press("Meta+C");
-      });
-      await refused("Copy as text sent by main, page", async () => {
-        await more.focus();
-        await sendCommand(page, "copyNote");
-      });
-      await refused("Copy as text sent by main, row", async () => {
-        await rowA.focus();
-        await sendCommand(page, "copyNote");
-      });
-      await refused("⋯ Copy", () => inMore(() => item(COPY_ITEM)));
-      await refused("⋯ Copy as text", () =>
-        inMore(() => item(/^Copy as text/u))
-      );
-      await refused("⌘C in the ⋯ menu", () =>
-        inMore(() => page.keyboard.press("Meta+C"))
-      );
-      await refused("⌥⌘C in the ⋯ menu", () =>
-        inMore(() => page.keyboard.press("Meta+Alt+C"))
-      );
-      await refused("the row menu's Copy", () =>
-        inRowMenu(() => item(COPY_ITEM))
-      );
-      await refused("the row menu's Copy as text", () =>
-        inRowMenu(() => item(/^Copy as text/u))
-      );
-      await refused("⌘C in the row menu", () =>
-        inRowMenu(() => page.keyboard.press("Meta+C"))
-      );
-      await refused("⌥⌘C in the row menu", () =>
-        inRowMenu(() => page.keyboard.press("Meta+Alt+C"))
-      );
-      await refused("a window's Copy image", () =>
-        page.getByRole("button", { name: "Copy image" }).first().click()
-      );
       await page
         .getByTestId("capture-feedback")
         .filter({ hasText: "Not copied: changes aren’t saved" })
@@ -1816,40 +1836,359 @@ const SCENES: readonly Scene[] = [
         .first()
         .click();
       await page.getByTestId("viewer-image").waitFor();
-      await refused("the viewer's Copy image", () =>
-        page.getByRole("button", { name: "Copy image" }).click()
-      );
+      await page.getByRole("button", { name: "Copy image" }).click();
       await page
         .getByTestId("viewer-feedback")
         .filter({ hasText: "Not copied: couldn’t save. The disk is full." })
         .waitFor();
-
-      assert.deepEqual(
-        {
-          clipboard: await readClipboard(page),
-          copyEntry: await callsTo(page, "copyEntry"),
-          copyImage: await callsTo(page, "copyImage"),
-          copyNote: await callsTo(page, "copyNote"),
-        },
-        { clipboard: SENTINEL, copyEntry: [], copyImage: [], copyNote: [] },
-        "no copy reached main"
+      assert.equal(
+        await copiedShown(page),
+        0,
+        "the viewer's Copy image says Copied"
       );
 
       // The viewer is the same capture: back from it, the unsaved title and its error are still there.
       await page.getByRole("button", { name: "Back" }).click();
-      await page.getByText("Couldn't save. The disk is full.").waitFor();
+      await failure.getByText("Couldn't save. The disk is full.").waitFor();
       assert.equal(await title.inputValue(), "NEW UNSAVED TITLE");
-      await page
-        .getByRole("link", { name: /^Open window 1,/u })
-        .first()
-        .click();
-      await page.getByTestId("viewer-image").waitFor();
-      await page.getByRole("button", { name: "Copy image" }).click();
-      await page.getByTestId("viewer-feedback").waitFor();
+
+      // Leaving A, its words stay. Long after their save failed, A's row still refuses, and says why.
+      await rowB.click();
+      await until(
+        page,
+        `document.querySelector("[data-testid='record-relationship']")?.value === ${JSON.stringify(CAPTURES[1]?.relationship)}`,
+        "capture B to open"
+      );
+      await rowA.getByTestId("row-unsaved").waitFor({ timeout: 8000 });
+      await page.waitForTimeout(1000);
+      await inRowMenu(() => page.keyboard.press("Meta+C"));
+      await rowA.getByText("Not copied: not saved").waitFor();
+      assert.deepEqual(
+        { clipboard: await readClipboard(page), copies: await copies() },
+        { clipboard: SENTINEL, copies: 0 },
+        "no copy of A reached main"
+      );
+
+      // Back in A: its words, the error, Retry and Discard changes, and nothing sent again.
+      await rowA.click();
+      await failure.waitFor();
+      assert.equal(await title.inputValue(), "NEW UNSAVED TITLE");
+      assert.equal(
+        await callCount(page, "updateText"),
+        saves,
+        "a refused copy sends nothing again"
+      );
+
+      // Typing on after the failure keeps the error and its buttons where they are: nothing jumps.
+      const description = page.getByTestId("description");
+
+      /** How far the description sits below the title, which the error row between them sets. */
+      const gap = () =>
+        page.evaluate<number>(
+          `document.querySelector("[data-testid='description']").getBoundingClientRect().top - document.querySelector("#record-title").getBoundingClientRect().top`
+        );
+
+      const at = await gap();
+
+      await description.focus();
+      await page.keyboard.press("End");
+      await page.keyboard.type(" Typed after the failure.");
+      assert.ok(await failure.isVisible(), "the error stays while typing");
+      assert.equal(await gap(), at, "nothing moves while typing");
+      await waitForCalls(page, "updateText", saves + 1);
+      await failure.getByText("Couldn't save. The disk is full.").waitFor();
+      assert.equal(await gap(), at, "nothing moves once it fails again");
+
+      const sent = await callCount(page, "updateText");
+
+      // Discard changes: the stored words come back, the title has focus, and every way copies.
+      await failure.getByRole("button", { name: "Discard changes" }).click();
+      await failure.waitFor({ state: "detached" });
+      assert.equal(await title.inputValue(), CAPTURES[0]?.relationship);
+      await waitForFocus(page, "#record-title");
+      await inTurn(ways, async ([what, copy]) => {
+        const before = await copies();
+
+        await copy();
+
+        try {
+          await until(
+            page,
+            `globalThis.__calls.filter((call) => ["copyEntry", "copyNote", "copyImage"].includes(call.method)).length === ${before + 1}`,
+            "the copy"
+          );
+        } catch (error) {
+          throw new Error(`${what} after Discard changes: ${String(error)}`, {
+            cause: error,
+          });
+        }
+      });
+      assert.equal(
+        await callCount(page, "updateText"),
+        sent,
+        "the discarded words are never sent"
+      );
     },
     data: { captures: CAPTURES, failSaves: true },
     hash: `/captures/${uuid(1)}`,
     name: "library-copy-gate",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    // Words that can't be saved stay with their capture after it is left, and its row says so.
+    act: async (page) => {
+      const title = page.getByTestId("record-relationship");
+      const rows = page.getByTestId("recent-item");
+
+      await title.fill("Rieder's quote breaks the cap: ask Marco for CHF 260");
+      await rows.nth(1).click();
+      await rows.nth(0).getByTestId("row-unsaved").waitFor();
+      await rows.nth(0).click();
+      await page.getByTestId("save-failure").waitFor();
+      assert.equal(
+        await title.inputValue(),
+        "Rieder's quote breaks the cap: ask Marco for CHF 260"
+      );
+    },
+    data: { captures: CAPTURES, failSaves: true },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-draft-failed",
+    page: "library",
+  },
+  {
+    // Closing or quitting with words that couldn't be saved is held: the prompt says how many and why.
+    act: async (page) => {
+      const title = page.getByTestId("record-relationship");
+      const rows = page.getByTestId("recent-item");
+      const prompt = page.getByTestId("leave-prompt");
+      const failure = page.getByTestId("save-failure");
+      const typed = "Rieder's quote breaks the cap: ask Marco for CHF 260";
+
+      const leave = (reason: "close" | "quit") =>
+        page.evaluate(
+          `window.dispatchEvent(new CustomEvent("fixture:leave", { detail: ${JSON.stringify(reason)} }))`
+        );
+
+      const answers = () =>
+        page.evaluate<string[]>(
+          "globalThis.__calls.filter((call) => call.method === 'answerLeave').map((call) => call.args[0])"
+        );
+
+      const answered = (expected: readonly string[], what: string) =>
+        until(
+          page,
+          `JSON.stringify(globalThis.__calls.filter((call) => call.method === 'answerLeave').map((call) => call.args[0])) === ${JSON.stringify(JSON.stringify(expected))}`,
+          what
+        );
+
+      const failSaves = (on: boolean) =>
+        page.evaluate(`globalThis.__screens.data.failSaves = ${String(on)}`);
+
+      const retryFocused = (what: string) =>
+        until(page, "document.activeElement?.textContent === 'Retry'", what);
+
+      // Nothing unsaved: the window may go at once.
+      await leave("close");
+      await answered(["go"], "a clean page goes at once");
+      assert.equal(await prompt.count(), 0, "no prompt for a clean page");
+
+      await title.fill(typed);
+      await failure.waitFor();
+      await leave("close");
+      await prompt.waitFor();
+      assert.equal(
+        await prompt.getByRole("heading").textContent(),
+        "1 change couldn't be saved"
+      );
+      assert.equal(
+        await prompt
+          .locator("[data-slot=alert-dialog-description]")
+          .textContent(),
+        "The disk is full."
+      );
+      assert.deepEqual(await prompt.getByRole("button").allTextContents(), [
+        "Cancel",
+        "Discard and close",
+        "Retry",
+      ]);
+      await retryFocused("Retry has focus, so Return retries");
+      assert.deepEqual(await answers(), ["go", "held"]);
+
+      // Esc stays, with the words still there.
+      await page.keyboard.press("Escape");
+      await prompt.waitFor({ state: "detached" });
+      await answered(["go", "held", "stay"], "Esc stays");
+      assert.equal(await title.inputValue(), typed, "Esc keeps the words");
+
+      // A quit says so. Return retries; the disk is still full, so it holds again.
+      await leave("quit");
+      await prompt.getByRole("button", { name: "Discard and quit" }).waitFor();
+
+      const sent = await callCount(page, "updateText");
+
+      await page.keyboard.press("Enter");
+      await waitForCalls(page, "updateText", sent + 1);
+      await retryFocused("Retry has focus again");
+      assert.equal(await callCount(page, "updateText"), sent + 1, "one retry");
+      assert.deepEqual(await answers(), ["go", "held", "stay", "held"]);
+
+      // Once the disk works, Return saves the words and lets the app quit.
+      await failSaves(false);
+      await page.keyboard.press("Enter");
+      await prompt.waitFor({ state: "detached" });
+      await answered(["go", "held", "stay", "held", "go"], "Retry saved");
+      assert.equal(await page.getByTestId("row-unsaved").count(), 0);
+
+      // Discard and close gives the words up: the saved title comes back.
+      await failSaves(true);
+      await title.fill("Typed, then given up");
+      await failure.waitFor();
+      await leave("close");
+      await prompt.getByRole("button", { name: "Discard and close" }).click();
+      await prompt.waitFor({ state: "detached" });
+      await answered(
+        ["go", "held", "stay", "held", "go", "held", "go"],
+        "Discard lets go"
+      );
+      assert.equal(
+        await title.inputValue(),
+        typed,
+        "Discard brings the saved title back"
+      );
+      assert.equal(await page.getByTestId("row-unsaved").count(), 0);
+
+      // Two captures' words, each unsaved: the prompt counts both.
+      await title.fill("Ask Marco before Friday");
+      await failure.waitFor();
+      await rows.nth(1).click();
+      await rows.nth(0).getByTestId("row-unsaved").waitFor();
+      await title.fill("Delivery from the 24th clashes with the move");
+      await failure.waitFor();
+      await leave("close");
+      await prompt.waitFor();
+      assert.equal(
+        await prompt.getByRole("heading").textContent(),
+        "2 changes couldn't be saved"
+      );
+      await retryFocused("Retry has focus");
+    },
+    data: { captures: CAPTURES, failSaves: true },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-leave-held",
+    page: "library",
+  },
+  {
+    // With each save held on its way to disk, a copy waits for it and copies the words from when it started.
+    act: async (page) => {
+      const title = page.getByTestId("record-relationship");
+      const rows = page.getByTestId("recent-item");
+      const menu = page.getByRole("menu");
+      const more = page.getByRole("button", { name: "More" });
+      const release = () => page.evaluate("globalThis.__releaseSaves()");
+      const description = CAPTURES[0]?.description ?? "";
+
+      // A second edit typed during the wait is not copied: the copy took the words before it.
+      await title.fill("FIRST");
+      await more.focus();
+      await waitForCalls(page, "updateText", 1);
+      await seedClipboard(page);
+      await page.keyboard.press("Meta+C");
+      await title.fill("FIRST AND SECOND");
+      await more.focus();
+      await page.waitForTimeout(200);
+      assert.equal(
+        await callCount(page, "copyEntry"),
+        0,
+        "the copy waits for the save"
+      );
+      await release();
+      await waitForCalls(page, "copyEntry", 1);
+      assert.equal(await readClipboard(page), `FIRST\n\n${description}`);
+      assert.equal(await title.inputValue(), "FIRST AND SECOND");
+      await waitForCalls(page, "updateText", 2);
+      await release();
+
+      // Leaving A while its save is on its way: A's row waits for that save, then copies A's words.
+      await title.fill("TYPED IN A");
+      await rows.nth(1).click();
+      await waitForCalls(page, "updateText", 3);
+      await seedClipboard(page);
+      await rows.nth(0).click({ button: "right" });
+      await menu.waitFor();
+      await menu.getByRole("menuitem", { name: COPY_ITEM }).click();
+      await page.waitForTimeout(200);
+      assert.equal(
+        await callCount(page, "copyEntry"),
+        1,
+        "A's copy waits for A's save"
+      );
+      await release();
+      await waitForCalls(page, "copyEntry", 2);
+      assert.equal(await readClipboard(page), `TYPED IN A\n\n${description}`);
+      assert.deepEqual(await callsTo(page, "copyEntry"), [uuid(1), uuid(1)]);
+    },
+    data: { captures: CAPTURES, holdSaves: true },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-copy-held",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    // The page tells main when its first menu opens and its last one closes, however it closes.
+    act: async (page) => {
+      const rows = page.getByTestId("recent-item");
+      const menu = page.getByRole("menu");
+
+      const said = () =>
+        page.evaluate<boolean[]>(
+          "globalThis.__calls.filter((call) => call.method === 'menuOpen').map((call) => call.args[0])"
+        );
+
+      await rows.nth(1).click({ button: "right" });
+      await menu.waitFor();
+      assert.deepEqual(await said(), [true], "a row menu opening");
+      // Main forgets the menu when the window loses focus; the page says it again when focus is back.
+      await page.evaluate("window.dispatchEvent(new Event('focus'))");
+      assert.deepEqual(
+        await said(),
+        [true, true],
+        "focus back with the menu open"
+      );
+      await page.keyboard.press("Escape");
+      await menu.waitFor({ state: "detached" });
+      assert.deepEqual(await said(), [true, true, false], "Esc");
+
+      await page.getByRole("button", { name: "More" }).click();
+      await menu.waitFor();
+      await menu.getByRole("menuitem", { name: COPY_ITEM }).click();
+      await menu.waitFor({ state: "detached" });
+
+      await page.getByRole("button", { name: "Filter by Due" }).click();
+      await menu.waitFor();
+      await page.keyboard.press("Escape");
+      await menu.waitFor({ state: "detached" });
+
+      // An item that takes the row out of the list closes the menu with it.
+      await rows.nth(1).click({ button: "right" });
+      await menu.waitFor();
+      await menu.getByRole("menuitem", { name: "Mark as done" }).click();
+      await until(
+        page,
+        "globalThis.__screens.data.captures[1].status.kind === 'done'",
+        "the row marked done"
+      );
+      await menu.waitFor({ state: "detached" });
+      await page.evaluate("window.dispatchEvent(new Event('focus'))");
+      assert.deepEqual(
+        await said(),
+        [true, true, false, true, false, true, false, true, false],
+        "each menu opens and closes once, and focus without a menu says nothing"
+      );
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-menu-open",
     page: "library",
     platforms: ["macos"],
   },
@@ -1910,7 +2249,39 @@ const SCENES: readonly Scene[] = [
     platforms: ["macos"],
   },
 
-  { data: { view: SETTINGS_VIEW }, name: "settings", page: "settings" },
+  {
+    // The icon dropdown holds main's keys while it is open, as Recent Captures' menus do. Windows has no such choice.
+    act: async (page) => {
+      const select = page.getByRole("combobox");
+
+      if ((await select.count()) === 0) {
+        return;
+      }
+
+      await select.focus();
+      await page.keyboard.press("Enter");
+      await page.getByRole("listbox").waitFor();
+      await page.keyboard.press("Escape");
+      await page.getByRole("listbox").waitFor({ state: "detached" });
+      assert.deepEqual(
+        await page.evaluate<boolean[]>(
+          "globalThis.__calls.filter((call) => call.method === 'menuOpen').map((call) => call.args[0])"
+        ),
+        [true, false],
+        "the dropdown opening and closing"
+      );
+      // The closed list hands focus back to its button; the screenshot shows the window at rest.
+      await until(
+        page,
+        "document.activeElement?.getAttribute('role') === 'combobox'",
+        "focus back on the dropdown"
+      );
+      await select.blur();
+    },
+    data: { view: SETTINGS_VIEW },
+    name: "settings",
+    page: "settings",
+  },
 ];
 
 const SIZES = {
