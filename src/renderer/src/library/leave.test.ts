@@ -108,7 +108,12 @@ const held = (
   reason: "close" | "quit",
   unsaved: { count: number; error: MutationOutcome | null; late: boolean },
   retrying = false
-) => ({ kind: "held", reason, retrying, unsaved });
+) => ({
+  kind: "held",
+  reason,
+  retrying,
+  unsaved: { ...unsaved, undiscarded: false },
+});
 
 describe(LeaveFlow, () => {
   beforeEach(() => {
@@ -255,13 +260,13 @@ describe(LeaveFlow, () => {
           "held",
           "save A limits C",
           "discard sent",
-          "unsaved 0",
           "go",
         ],
       ],
       stored,
       0,
-      // Nothing is sent to put the saved words back: main drops or undoes the discarded save.
+      // Nothing is sent to put the saved words back: main drops or undoes the discarded save. The
+      // count drops once main has answered the Discard.
       [
         "unsaved 1",
         "save A limits C",
@@ -269,8 +274,8 @@ describe(LeaveFlow, () => {
         "held",
         "save A limits C",
         "discard sent",
-        "unsaved 0",
         "go",
+        "unsaved 0",
       ],
     ]);
   });

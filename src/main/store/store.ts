@@ -99,6 +99,11 @@ interface DraftWrite {
 interface Undo {
   rev: number;
   before: CaptureRecord;
+  /**
+   * A newer backup still in `record.json.prev.tmp`: a status change was renamed in, but its backup
+   * couldn't be yet. It goes in before the backup is used or changed again.
+   */
+  pending?: CaptureRecord;
   /** A Discard is putting it back: a newer save waits behind that, and leaves it be. */
   reverting: boolean;
 }
@@ -206,6 +211,8 @@ export class CaptureStore {
     const target = this.#record(id);
 
     if (await this.#present(`${target}${DISCARD_MARK}`)) {
+      await this.#settleBackup(target);
+
       try {
         await this.#fs.rename(`${target}.prev`, target);
       } catch (error) {
@@ -231,6 +238,50 @@ export class CaptureStore {
 
       return text;
     }
+  }
+
+  /**
+   * A status change writes the backup that takes it to `.prev.tmp` before its record is renamed
+   * in, and renames it in after. A crash between leaves it there: it goes in only if its status is
+   * the record's, so a change that never landed is never put back. A file that can't be read
+   * (rather than one that is missing or not a record) settles nothing: the start after fails to
+   * read the capture, and a later one decides.
+   */
+  async #settleBackup(target: string): Promise<void> {
+    const pending = `${target}.prev.tmp`;
+
+    if (!(await this.#present(pending))) {
+      return;
+    }
+
+    const statusIn = async (file: string) => {
+      let text: string;
+
+      try {
+        text = await this.#fs.readText(file);
+      } catch (error) {
+        if (errorCode(error) !== "ENOENT") {
+          throw error;
+        }
+
+        return null;
+      }
+
+      const read = readVersioned(text);
+
+      return read.kind === "current"
+        ? JSON.stringify(read.record.status)
+        : null;
+    };
+
+    const [backup, current] = await Promise.all([
+      statusIn(pending),
+      statusIn(target),
+    ]);
+
+    await (backup !== null && backup === current
+      ? this.#fs.rename(pending, `${target}.prev`)
+      : this.#fs.rmrf(pending));
   }
 
   async #present(file: string): Promise<boolean> {
@@ -454,10 +505,24 @@ export class CaptureStore {
 
       const undo = draft === undefined ? this.#undo.get(id) : undefined;
 
-      const backup =
-        undo === undefined ? null : (change(undo.before) ?? undo.before);
+      try {
+        await this.#catchUp(id, undo);
+      } catch (error) {
+        // The pending backup stays where it is, for the next try.
+        return { kind: "failed", message: saveProblem(error) };
+      }
 
       try {
+        if (draft !== undefined) {
+          // This save replaces what a marker left by an earlier Discard would put back, and a
+          // status backup left from before it is no backup of it: both go before anything is written.
+          await this.#unmark(id);
+          await this.#fs.rmrf(`${prev}.tmp`);
+        }
+
+        const backup =
+          undo === undefined ? null : (change(undo.before) ?? undo.before);
+
         await this.#fs.writeFileDurable(
           `${target}.tmp`,
           JSON.stringify(record, null, 2)
@@ -477,16 +542,14 @@ export class CaptureStore {
         }
 
         if (draft === undefined) {
-          // The backup first: if it can't take this change, the change fails, and a Discard still
-          // finds the backup in step with the record.
-          if (undo !== undefined && backup !== null) {
-            await this.#fs.rename(`${prev}.tmp`, prev);
-            undo.before = backup;
-          }
-
           await this.#fs.rename(`${target}.tmp`, target);
+
+          // Only once the change is on disk does the backup take it, so a change that failed is
+          // never put back by a Discard.
+          if (undo !== undefined && backup !== null) {
+            await this.#advance(id, undo, backup);
+          }
         } else {
-          await this.#unmark(id);
           await this.#fs.rename(target, prev);
 
           if (stale()) {
@@ -532,6 +595,36 @@ export class CaptureStore {
     void write.then(settled, settled);
 
     return write;
+  }
+
+  /**
+   * Renames in the backup a status change just wrote. If that fails, the change stays on disk and
+   * its backup waits aside as pending, to go in before the backup is used.
+   */
+  async #advance(id: string, undo: Undo, backup: CaptureRecord): Promise<void> {
+    const prev = `${this.#record(id)}.prev`;
+
+    try {
+      await this.#fs.rename(`${prev}.tmp`, prev);
+      undo.before = backup;
+      delete undo.pending;
+    } catch (error) {
+      undo.pending = backup;
+      console.error(`Couldn’t move the backup of ${id} in step`, error);
+    }
+  }
+
+  /** Renames a pending backup in. If it can't, what needs the backup fails. */
+  async #catchUp(id: string, undo: Undo | undefined): Promise<void> {
+    if (undo?.pending === undefined) {
+      return;
+    }
+
+    const prev = `${this.#record(id)}.prev`;
+
+    await this.#fs.rename(`${prev}.tmp`, prev);
+    undo.before = undo.pending;
+    delete undo.pending;
   }
 
   /** Renames a draft save's temp file in; if that fails, the record moved aside goes back. */
@@ -630,15 +723,13 @@ export class CaptureStore {
     const target = this.#record(id);
 
     try {
+      await this.#catchUp(id, undo);
       await this.#fs.rename(`${target}.prev`, target);
     } catch (error) {
       undo.reverting = false;
       console.error(`Couldn’t put back the saved version of ${id}`, error);
 
-      return {
-        kind: "failed",
-        message: `Couldn’t discard the changes. ${saveProblem(error)}`,
-      };
+      return { kind: "failed", message: saveProblem(error) };
     }
 
     this.#undo.delete(id);

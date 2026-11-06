@@ -4,7 +4,8 @@ import type { DraftStore, Unsaved } from "./drafts";
 /**
  * Recent Captures being asked to let go, as its window closes or the app quits.
  * - waiting: the saves on their way are being waited for, at most SETTLE_MS; nothing shows.
- * - held: words could not be saved, or not in time, and the prompt asks what to do with them.
+ * - held: words could not be saved or discarded, or not in time, and the prompt asks what to do
+ *   with them.
  */
 export type LeaveState =
   | { kind: "idle" }
@@ -13,7 +14,7 @@ export type LeaveState =
       kind: "held";
       reason: LeaveReason;
       unsaved: Unsaved;
-      /** Retry is on its way: Retry waits for its answer; Cancel and Discard still work. */
+      /** Retry, or a Discard again, is on its way: Retry waits for its answer; Cancel and Discard still work. */
       retrying: boolean;
     };
 
@@ -28,7 +29,10 @@ const merged = (a: LeaveReason, b: LeaveReason): LeaveReason =>
   a === "quit" || b === "quit" ? "quit" : "close";
 
 const sameUnsaved = (a: Unsaved, b: Unsaved): boolean =>
-  a.count === b.count && a.error === b.error && a.late === b.late;
+  a.count === b.count &&
+  a.error === b.error &&
+  a.late === b.late &&
+  a.undiscarded === b.undiscarded;
 
 /**
  * Holds a close or quit while the page has words that are not saved. Main asks only while the
@@ -98,6 +102,7 @@ export class LeaveFlow {
     this.#main().answerLeave(state.kind === "held" ? "held" : "waiting");
   }
 
+  /** Saves every capture's words again, keeping those a Discard couldn't finish with (Keep changes). */
   retry(): void {
     const state = this.#state;
 
@@ -110,9 +115,26 @@ export class LeaveFlow {
     void this.#wait();
   }
 
-  /** Gives every capture's words up and lets go, even while a save is still on its way. */
+  /**
+   * Gives every capture's words up and lets go, even while a save is still on its way. A Discard
+   * again of one main couldn't finish holds the close as Retry does, until main has put the saved
+   * versions back, and asks again if it can't: letting go first would close on a Discard that may
+   * fail again. Discards only still on their way let go at once, as any Discard does, so a write
+   * that hangs can't keep the window open; their marker finishes them at the next start.
+   */
   discard(): void {
-    if (this.#state.kind !== "held") {
+    const state = this.#state;
+
+    if (state.kind !== "held") {
+      return;
+    }
+
+    // Undiscarded with an error: at least one Discard failed, rather than all still being on their way.
+    if (state.unsaved.undiscarded && state.unsaved.error !== null) {
+      this.#set({ ...state, retrying: true });
+      this.#drafts.discardAll();
+      void this.#wait();
+
       return;
     }
 

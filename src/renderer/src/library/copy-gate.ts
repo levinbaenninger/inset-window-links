@@ -4,16 +4,17 @@ import { newCopyTicket } from "../../../shared/copy";
 import type { MutationOutcome } from "../../../shared/dto";
 import { copyProblem } from "../../../shared/errors";
 import type { CaptureId } from "../../../shared/ids";
-import type { DraftStore } from "./drafts";
+import type { DraftStore, SaveError } from "./drafts";
 import { DISCARDED, reasonOf, within } from "./drafts";
 
 /**
- * How a copy went: copied; refused because the words on screen aren't saved, or because the title
- * is blank and so can't be; or refused by main.
+ * How a copy went: copied; refused because the words on screen aren't saved, because a Discard of
+ * them couldn't finish, or because the title is blank and so can't be; or refused by main.
  */
 export type CopyResult =
   | { kind: "copied" }
   | { kind: "notSaved"; outcome: MutationOutcome }
+  | { kind: "notDiscarded"; outcome: SaveError }
   | { kind: "untitled" }
   | { kind: "notCopied"; outcome: MutationOutcome };
 
@@ -38,6 +39,10 @@ export const copyCapture = async (
     return { kind: "notSaved", outcome: snapshot.error };
   }
 
+  if (snapshot.kind === "undiscarded") {
+    return { kind: "notDiscarded", outcome: snapshot.error };
+  }
+
   if (snapshot.kind === "untitled") {
     return { kind: "untitled" };
   }
@@ -52,7 +57,9 @@ export const copyCapture = async (
       const saved = await within(snapshot.saved);
 
       if (saved.kind !== "ok") {
-        return { kind: "notSaved", outcome: saved };
+        return drafts.undiscarded(id)
+          ? { kind: "notDiscarded", outcome: saved }
+          : { kind: "notSaved", outcome: saved };
       }
 
       break;
@@ -135,15 +142,23 @@ export const notCopiedText = (
     return "This capture was deleted.";
   }
 
+  if (result.kind === "notDiscarded") {
+    return `Couldn’t discard your changes, so nothing was copied. ${reasonOf(result.outcome)}`;
+  }
+
   if (result.kind === "notCopied") {
     return outcome.kind === "failed"
-      ? `Not copied. ${outcome.message}`
-      : "Not copied. This capture can’t be read.";
+      ? outcome.message
+      : "This capture can’t be read, so nothing was copied.";
+  }
+
+  if (outcome === DISCARDED) {
+    return "Its changes were discarded, so nothing was copied.";
   }
 
   return outcome.kind === "ok"
-    ? "Not copied."
-    : `Not copied. ${reasonOf(outcome)}`;
+    ? "Nothing was copied."
+    : `Couldn’t save your changes, so nothing was copied. ${reasonOf(outcome)}`;
 };
 
 /** The name a refused copy's Retry button reads out. */

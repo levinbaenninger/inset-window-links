@@ -95,7 +95,7 @@ describe(copyCapture, () => {
         outcome: { kind: "failed", message: "Saving didn’t finish in time." },
       },
       retry: true,
-      says: "Not copied. Saving didn’t finish in time.",
+      says: "Couldn’t save your changes, so nothing was copied. Saving didn’t finish in time.",
     });
   });
 

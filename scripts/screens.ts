@@ -578,6 +578,40 @@ const callCount = (page: Page, method: string) =>
     `globalThis.__calls.filter((call) => call.method === ${JSON.stringify(method)}).length`
   );
 
+/** Changes how the fixture's main answers from now on, as `{ failSaves: true }`. */
+const setData = (page: Page, flags: string) =>
+  page.evaluate(`Object.assign(globalThis.__screens.data, ${flags})`);
+
+/**
+ * Types words on the open capture that can't be saved, then discards them while their Retry is on
+ * its way, and main can't put the saved version back: the page shows them as not discarded.
+ */
+const undiscard = async (page: Page, words: string) => {
+  const failure = page.getByTestId("save-failure");
+
+  await setData(
+    page,
+    `{ failDiscards: false, failSaves: true, holdSaves: false }`
+  );
+  await page.getByTestId("record-relationship").fill(words);
+  await failure.getByText(/The disk is full/u).waitFor();
+  await setData(
+    page,
+    `{ failDiscards: true, failSaves: false, holdSaves: true }`
+  );
+
+  const sent = await callCount(page, "updateText");
+
+  await failure.getByRole("button", { exact: true, name: "Retry" }).click();
+  await waitForCalls(page, "updateText", sent + 1);
+  await failure.getByRole("button", { name: "Discard changes" }).click();
+  await failure
+    .getByRole("button", { exact: true, name: "Discard again" })
+    .waitFor();
+  await setData(page, `{ holdSaves: false }`);
+  await page.evaluate("globalThis.__releaseSaves()");
+};
+
 /** How many things on screen say Copied, as text or as a button's label. */
 const copiedShown = (page: Page) =>
   page.evaluate<number>(
@@ -943,6 +977,19 @@ const SCENES: readonly Scene[] = [
         page,
         `document.activeElement?.textContent?.trim() === "Keep"`,
         "focus on Keep"
+      );
+
+      const keepBox = await prompt
+        .getByRole("button", { exact: true, name: "Keep" })
+        .boundingBox();
+
+      const discardBox = await prompt
+        .getByRole("button", { exact: true, name: "Discard" })
+        .boundingBox();
+
+      assert.ok(
+        keepBox !== null && discardBox !== null && keepBox.y < discardBox.y,
+        "Keep, the safe default, shows above Discard"
       );
       await prompt
         .getByRole("button", { exact: true, name: "Discard" })
@@ -1746,7 +1793,8 @@ const SCENES: readonly Scene[] = [
       await page
         .getByTestId("capture-feedback")
         .filter({
-          hasText: "Not copied. The disk is full.",
+          hasText:
+            "Couldn’t save your changes, so nothing was copied. The disk is full.",
         })
         .waitFor();
       assert.equal(
@@ -2066,7 +2114,11 @@ const SCENES: readonly Scene[] = [
       const saves = await callCount(page, "updateText");
       const refusal = page.getByTestId("row-copy-refused");
 
-      await refusal.getByText("Not copied. The disk is full.").waitFor();
+      await refusal
+        .getByText(
+          "Couldn’t save your changes, so nothing was copied. The disk is full."
+        )
+        .waitFor();
       await refusal
         .getByRole("button", { name: "Retry saving “NEW UNSAVED TITLE”" })
         .waitFor();
@@ -2074,7 +2126,10 @@ const SCENES: readonly Scene[] = [
       await page.keyboard.press("ControlOrMeta+C");
       await page
         .getByTestId("capture-feedback")
-        .filter({ hasText: "Not copied. The disk is full." })
+        .filter({
+          hasText:
+            "Couldn’t save your changes, so nothing was copied. The disk is full.",
+        })
         .waitFor();
       await page
         .getByRole("button", { exact: true, name: "Retry saving" })
@@ -2287,7 +2342,10 @@ const SCENES: readonly Scene[] = [
       });
       await page
         .getByTestId("capture-feedback")
-        .filter({ hasText: "Not copied. The disk is full." })
+        .filter({
+          hasText:
+            "Couldn’t save your changes, so nothing was copied. The disk is full.",
+        })
         .waitFor();
 
       await page
@@ -2298,7 +2356,10 @@ const SCENES: readonly Scene[] = [
       await page.getByRole("button", { name: "Copy image" }).click();
       await page
         .getByTestId("viewer-feedback")
-        .filter({ hasText: "Not copied. The disk is full." })
+        .filter({
+          hasText:
+            "Couldn’t save your changes, so nothing was copied. The disk is full.",
+        })
         .waitFor();
       assert.equal(
         await copiedShown(page),
@@ -2323,7 +2384,9 @@ const SCENES: readonly Scene[] = [
       await inRowMenu(() => page.keyboard.press("Meta+C"));
       await page
         .getByTestId("row-copy-refused")
-        .getByText("Not copied. The disk is full.")
+        .getByText(
+          "Couldn’t save your changes, so nothing was copied. The disk is full."
+        )
         .waitFor();
       assert.deepEqual(
         { clipboard: await readClipboard(page), copies: await copies() },
@@ -2834,13 +2897,16 @@ const SCENES: readonly Scene[] = [
       await more.focus();
       await page.keyboard.press("Meta+C");
       await header
-        .filter({ hasText: "Not copied. The disk is full." })
+        .filter({
+          hasText:
+            "Couldn’t save your changes, so nothing was copied. The disk is full.",
+        })
         .waitFor();
       await pageRetry.waitFor();
       await refusedAtOnce("the page", atPage);
       await failSaves(false);
       await pageRetry.click();
-      await header.filter({ hasText: "Saved. Copy again." }).waitFor();
+      await header.filter({ hasText: "Saved. You can copy it now." }).waitFor();
       await waitForFocus(page, "#record-title");
       await more.focus();
       await page.keyboard.press("Meta+C");
@@ -2864,11 +2930,14 @@ const SCENES: readonly Scene[] = [
       await page.getByRole("button", { name: "Copy image" }).click();
       await page
         .getByTestId("viewer-feedback")
-        .filter({ hasText: "Not copied. The disk is full." })
+        .filter({
+          hasText:
+            "Couldn’t save your changes, so nothing was copied. The disk is full.",
+        })
         .waitFor();
       await failSaves(false);
       await pageRetry.click();
-      await page.getByText("Saved. Copy again.").waitFor();
+      await page.getByText("Saved. You can copy it now.").waitFor();
       await page.getByRole("button", { name: "Copy image" }).click();
       await waitForCalls(page, "copyImage", 1);
       assert.equal(await readClipboard(page), `(image ${uuid(101)})`);
@@ -2901,11 +2970,15 @@ const SCENES: readonly Scene[] = [
 
       await rowA.focus();
       await page.keyboard.press("Meta+C");
-      await refusal.getByText("Not copied. The disk is full.").waitFor();
+      await refusal
+        .getByText(
+          "Couldn’t save your changes, so nothing was copied. The disk is full."
+        )
+        .waitFor();
       await refusedAtOnce("the row", atRow);
       await failSaves(false);
       await refusal.getByRole("button", { name: /^Retry saving/u }).click();
-      await rowA.getByText("Saved. Copy again.").waitFor();
+      await rowA.getByText("Saved. You can copy it now.").waitFor();
       await refusal.waitFor({ state: "detached" });
       await page.keyboard.press("Meta+C");
       await waitForCalls(page, "copyEntry", 2);
@@ -2918,7 +2991,11 @@ const SCENES: readonly Scene[] = [
       await unsaved("Rieder can deliver on the 22nd");
       await rowA.focus();
       await page.keyboard.press("Meta+C");
-      await refusal.getByText("Not copied. The disk is full.").waitFor();
+      await refusal
+        .getByText(
+          "Couldn’t save your changes, so nothing was copied. The disk is full."
+        )
+        .waitFor();
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
@@ -2977,7 +3054,11 @@ const SCENES: readonly Scene[] = [
 
       await seedClipboard(page);
       await sendCommand(page, "copyNote");
-      await header.getByText("Not copied. The disk is full.").waitFor();
+      await header
+        .getByText(
+          "Couldn’t save your changes, so nothing was copied. The disk is full."
+        )
+        .waitFor();
       assert.equal(await readClipboard(page), SENTINEL, "nothing copied");
       await page.getByRole("button", { name: /^Retry saving/u }).waitFor();
 
@@ -3012,6 +3093,274 @@ const SCENES: readonly Scene[] = [
   },
   {
     /*
+     * A Discard main can't finish brings the changes back with why, Keep changes and Discard again.
+     * Nothing is saved meanwhile, typing included, and copies are refused with no Retry. Discard
+     * again asks main again and never saves the discarded words; Keep changes saves them, and so
+     * does Return, whichever of the two has focus.
+     */
+    act: async (page) => {
+      const failure = page.getByTestId("save-failure");
+      const header = page.getByTestId("capture-feedback");
+      const title = page.getByTestId("record-relationship");
+
+      const rowTitle = page
+        .getByTestId("recent-item")
+        .first()
+        .locator("span.line-clamp-2");
+
+      const discardAgain = failure.getByRole("button", {
+        exact: true,
+        name: "Discard again",
+      });
+
+      const stored = CAPTURES[0]?.relationship;
+
+      await undiscard(page, "DISCARDED WORDS");
+
+      const saves = await callCount(page, "updateText");
+
+      await title.press("End");
+      await title.pressSequentially(" TYPED");
+      await page.waitForTimeout(900);
+
+      await seedClipboard(page);
+      await sendCommand(page, "copyNote");
+      await header
+        .getByText(
+          "Couldn’t discard your changes, so nothing was copied. Inset can’t write to its data folder."
+        )
+        .waitFor();
+
+      const discards = await callCount(page, "discard");
+
+      await discardAgain.click();
+      await waitForCalls(page, "discard", discards + 1);
+      await discardAgain.waitFor();
+
+      assert.deepEqual(
+        {
+          buttons: await failure.getByRole("button").allTextContents(),
+          clipboard: await readClipboard(page),
+          copyRetry: await page
+            .getByRole("button", { name: /^Retry (?:saving|copying)/u })
+            .count(),
+          saves: await callCount(page, "updateText"),
+          says: await failure.getByRole("alert").textContent(),
+          title: await title.inputValue(),
+        },
+        {
+          buttons: ["Keep changes", "Discard again"],
+          clipboard: SENTINEL,
+          copyRetry: 0,
+          saves,
+          says: "Couldn’t discard your changes. Inset can’t write to its data folder.",
+          title: "DISCARDED WORDS TYPED",
+        },
+        "the changes stay with why; typing, copies and a failed Discard again save nothing"
+      );
+
+      await setData(page, `{ failDiscards: false }`);
+      await discardAgain.click();
+      await failure.waitFor({ state: "detached" });
+      assert.deepEqual(
+        {
+          row: await rowTitle.textContent(),
+          saves: await callCount(page, "updateText"),
+          title: await title.inputValue(),
+        },
+        { row: stored, saves, title: stored },
+        "Discard again puts the saved words back, and never saves the discarded ones"
+      );
+
+      await undiscard(page, "KEPT WORDS");
+
+      const beforeKeep = await callCount(page, "updateText");
+
+      await failure.getByRole("button", { name: "Keep changes" }).click();
+      await failure.waitFor({ state: "detached" });
+      await waitForCalls(page, "updateText", beforeKeep + 1);
+      assert.deepEqual(
+        {
+          onDisk: await page.evaluate<string>(
+            "globalThis.__screens.data.captures[0].relationship"
+          ),
+          row: await rowTitle.textContent(),
+          title: await title.inputValue(),
+        },
+        { onDisk: "KEPT WORDS", row: "KEPT WORDS", title: "KEPT WORDS" },
+        "Keep changes saves the words on screen"
+      );
+
+      await undiscard(page, "RETURN WORDS");
+
+      const beforeReturn = {
+        discards: await callCount(page, "discard"),
+        saves: await callCount(page, "updateText"),
+      };
+
+      await discardAgain.focus();
+      await page.keyboard.press("Enter");
+      await failure.waitFor({ state: "detached" });
+      await waitForCalls(page, "updateText", beforeReturn.saves + 1);
+      assert.deepEqual(
+        {
+          discards: await callCount(page, "discard"),
+          onDisk: await page.evaluate<string>(
+            "globalThis.__screens.data.captures[0].relationship"
+          ),
+          title: await title.inputValue(),
+        },
+        {
+          discards: beforeReturn.discards,
+          onDisk: "RETURN WORDS",
+          title: "RETURN WORDS",
+        },
+        "Return on a focused Discard again keeps the changes, and never discards"
+      );
+
+      // As it looks: a Discard that couldn't finish, once the copy's note is gone.
+      await undiscard(page, "Rieder’s quote needs a second look");
+      await header.waitFor({ state: "detached", timeout: 7000 });
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-discard-failed",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    /*
+     * Closing or quitting after a Discard that couldn't finish asks the same: "1 change couldn’t be
+     * discarded", with Keep changes, Discard again and Cancel. Return keeps, whichever button has
+     * focus, and saves words typed since too. Discard again holds the close until main has put the
+     * saved version back, and asks again while it can't.
+     */
+    act: async (page) => {
+      const title = page.getByTestId("record-relationship");
+      const prompt = page.getByTestId("leave-prompt");
+
+      const button = (name: string) =>
+        prompt.getByRole("button", { exact: true, name });
+
+      const answers = () =>
+        page.evaluate<string[]>(
+          "globalThis.__calls.filter((call) => call.method === 'answerLeave').map((call) => call.args[0])"
+        );
+
+      const asking = async (reason: "close" | "quit") => {
+        await pushLeave(page, reason);
+        await prompt.waitFor();
+        await until(
+          page,
+          "document.activeElement?.textContent === 'Keep changes'",
+          `Keep changes has focus when the ${reason} is held`
+        );
+      };
+
+      await undiscard(page, "DISCARDED WORDS");
+      await title.fill("NEWER WORDS");
+      await page.waitForTimeout(900);
+
+      const before = {
+        discards: await callCount(page, "discard"),
+        saves: await callCount(page, "updateText"),
+      };
+
+      await asking("quit");
+      assert.deepEqual(
+        {
+          buttons: await prompt.getByRole("button").allTextContents(),
+          heading: await prompt.getByRole("heading").textContent(),
+          ring:
+            (await page.evaluate<string>(
+              "getComputedStyle(document.activeElement).boxShadow"
+            )) !== "none",
+          saves: await callCount(page, "updateText"),
+          says: await prompt
+            .locator("[data-slot=alert-dialog-description]")
+            .textContent(),
+        },
+        {
+          buttons: ["Cancel", "Discard again", "Keep changes"],
+          heading: "1 change couldn’t be discarded",
+          ring: true,
+          saves: before.saves,
+          says: "Inset can’t write to its data folder.",
+        },
+        "the quit asks about the Discard that couldn’t finish, and nothing typed since was sent"
+      );
+
+      await button("Discard again").focus();
+      await page.keyboard.press("Enter");
+      await prompt.waitFor({ state: "detached" });
+      await until(
+        page,
+        "globalThis.__calls.some((call) => call.method === 'answerLeave' && call.args[0] === 'go')",
+        "Keep changes lets the app quit"
+      );
+      assert.deepEqual(
+        {
+          answers: await answers(),
+          discards: await callCount(page, "discard"),
+          onDisk: await page.evaluate<string>(
+            "globalThis.__screens.data.captures[0].relationship"
+          ),
+          saves: await callCount(page, "updateText"),
+          title: await title.inputValue(),
+        },
+        {
+          answers: ["waiting", "held", "go"],
+          discards: before.discards,
+          onDisk: "NEWER WORDS",
+          saves: before.saves + 1,
+          title: "NEWER WORDS",
+        },
+        "Return on a focused Discard again keeps the words on screen, and never discards"
+      );
+
+      await undiscard(page, "GIVEN UP WORDS");
+      await asking("close");
+
+      const tried = await callCount(page, "discard");
+
+      await button("Discard again").click();
+      await waitForCalls(page, "discard", tried + 1);
+      await until(
+        page,
+        "document.activeElement?.textContent === 'Keep changes'",
+        "the prompt asks again once Discard again fails"
+      );
+      assert.deepEqual(
+        await answers(),
+        ["waiting", "held", "go", "waiting", "held"],
+        "a Discard again that fails never lets the window close"
+      );
+
+      await setData(page, `{ failDiscards: false }`);
+      await button("Discard again").click();
+      await prompt.waitFor({ state: "detached" });
+      await until(
+        page,
+        "globalThis.__calls.filter((call) => call.method === 'answerLeave' && call.args[0] === 'go').length === 2",
+        "Discard again lets the window close once it works"
+      );
+      assert.equal(
+        await title.inputValue(),
+        "NEWER WORDS",
+        "Discard again brings the saved words back"
+      );
+
+      // As it looks: the close held by a Discard that couldn't finish.
+      await undiscard(page, "Rieder’s quote needs a second look");
+      await asking("close");
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-leave-undiscarded",
+    page: "library",
+  },
+  {
+    /*
      * Main refuses a copy when the capture as it began is not on disk: a due date that couldn't be
      * written, or a write that didn't land within SETTLE_MS. The page, the row and the viewer say
      * why and copy nothing, and their Retry copies again.
@@ -3034,7 +3383,10 @@ const SCENES: readonly Scene[] = [
       await refuseNext("Saving didn’t finish in time.");
       await sendCommand(page, "copyNote");
       await header
-        .filter({ hasText: "Not copied. Saving didn’t finish in time." })
+        .filter({
+          hasText:
+            "Couldn’t save your changes, so nothing was copied. Saving didn’t finish in time.",
+        })
         .waitFor();
       assert.equal(
         await readClipboard(page),
@@ -3051,7 +3403,11 @@ const SCENES: readonly Scene[] = [
       await refuseNext("The disk is full.");
       await rowA.focus();
       await page.keyboard.press("Meta+C");
-      await refusal.getByText("Not copied. The disk is full.").waitFor();
+      await refusal
+        .getByText(
+          "Couldn’t save your changes, so nothing was copied. The disk is full."
+        )
+        .waitFor();
       assert.equal(
         await readClipboard(page),
         SENTINEL,
@@ -3073,7 +3429,10 @@ const SCENES: readonly Scene[] = [
       await page.getByRole("button", { name: "Copy image" }).click();
       await page
         .getByTestId("viewer-feedback")
-        .filter({ hasText: "Not copied. The disk is full." })
+        .filter({
+          hasText:
+            "Couldn’t save your changes, so nothing was copied. The disk is full.",
+        })
         .waitFor();
       assert.equal(
         await readClipboard(page),
@@ -3091,7 +3450,10 @@ const SCENES: readonly Scene[] = [
       await refuseNext("The disk is full.");
       await sendCommand(page, "copyNote");
       await header
-        .filter({ hasText: "Not copied. The disk is full." })
+        .filter({
+          hasText:
+            "Couldn’t save your changes, so nothing was copied. The disk is full.",
+        })
         .waitFor();
     },
     data: { captures: CAPTURES },

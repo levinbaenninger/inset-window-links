@@ -371,7 +371,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     const outcome = await drafts.retry(target.id);
 
     if (outcome.kind === "ok") {
-      say("Saved. Copy again.");
+      say("Saved. You can copy it now.");
     } else {
       setFeedback({
         failed: true,

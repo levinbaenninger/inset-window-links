@@ -271,11 +271,19 @@ if (page === "library") {
       onNavigate: none,
       platform,
       reportUnsaved: (count) => record("reportUnsaved", count),
+      // With failDiscards, main can't put the saved version back, as when another app holds the file.
       discard: (captureId, rev) => {
         epochs.set(captureId, epochOf(captureId) + 1);
         record("discard", captureId, rev);
 
-        return Promise.resolve({ kind: "ok" });
+        return Promise.resolve(
+          data.failDiscards === true && rev !== null
+            ? {
+                kind: "failed",
+                message: "Inset can’t write to its data folder.",
+              }
+            : { kind: "ok" }
+        );
       },
       updateText: (captureId, text) => {
         record("updateText", captureId, text);

@@ -356,12 +356,13 @@ const DiscardPrompt = ({ onKeep }: { onKeep: () => void }) => {
             Its windows and text are thrown away.
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {/* The footer stacks in reverse, so Keep, the safe default, shows first, as Save does when quitting. */}
         <AlertDialogFooter>
-          <Button onClick={onKeep} ref={keep} variant="outline">
-            Keep
-          </Button>
           <Button onClick={discard} variant="destructive">
             Discard
+          </Button>
+          <Button onClick={onKeep} ref={keep} variant="outline">
+            Keep
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

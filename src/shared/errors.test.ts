@@ -44,12 +44,12 @@ describe(couldNotSave, () => {
       couldNotSave("The disk is full."),
       couldNotSave("Couldn’t save (EIO)."),
       couldNotSave("Couldn’t save."),
-      couldNotSave("Couldn’t discard the changes. The disk is read-only."),
+      couldNotSave("Couldn’t discard your changes. The disk is read-only."),
     ]).toStrictEqual([
       "Couldn’t save. The disk is full.",
       "Couldn’t save (EIO).",
       "Couldn’t save.",
-      "Couldn’t discard the changes. The disk is read-only.",
+      "Couldn’t discard your changes. The disk is read-only.",
     ]);
   });
 });

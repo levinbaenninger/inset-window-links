@@ -74,7 +74,7 @@ import {
 import { retryLabel } from "./copy-gate";
 import { useEntryCopy } from "./copy-keys";
 import type { SaveError } from "./drafts";
-import { storedText } from "./drafts";
+import { reasonOf, storedText } from "./drafts";
 import { ImageViewer } from "./image-viewer";
 import { drafts } from "./page-drafts";
 import { PaneHeader } from "./pane-header";
@@ -319,15 +319,19 @@ const problem = (outcome: MutationOutcome): string => {
 
 /**
  * Words that could not be saved: why, then Retry and Discard changes. A deleted or unreadable
- * capture can't take them however often it is asked, so it offers only Discard changes.
+ * capture can't take them however often it is asked, so it offers only Discard changes. After a
+ * Discard that couldn't finish, Keep changes saves them (`onRetry`), and Discard again asks main
+ * again (`onDiscard`); Return keeps, whichever of the two has focus.
  */
 const SaveFailure = ({
   failure,
+  undiscarded,
   busy,
   onRetry,
   onDiscard,
 }: {
   failure: SaveError;
+  undiscarded: boolean;
   /**
    * A save is on its way: Retry waits for its answer, in place, so nothing moves. Discard changes
    * works at once; whatever that save does, the saved words stay on screen.
@@ -339,25 +343,60 @@ const SaveFailure = ({
   <div
     className="flex flex-wrap items-center gap-x-2 gap-y-1"
     data-testid="save-failure"
+    // Before the focused button sees it: Return keeps the changes, the safe answer, never discards.
+    onKeyDownCapture={(event) => {
+      if (
+        undiscarded &&
+        event.key === "Enter" &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        onRetry();
+      }
+    }}
   >
     <p className="text-destructive text-xs" role="alert">
-      {problem(failure)}
+      {undiscarded
+        ? `Couldn’t discard your changes. ${reasonOf(failure)}`
+        : problem(failure)}
     </p>
-    <span className="flex items-center gap-1">
-      {failure.kind === "failed" && (
-        <Button disabled={busy} onClick={onRetry} size="xs" variant="outline">
-          Retry
+    {undiscarded ? (
+      <span className="flex items-center gap-1">
+        <Button
+          onClick={onRetry}
+          size="xs"
+          title="Keep these words, and save them"
+          variant="outline"
+        >
+          Keep changes
         </Button>
-      )}
-      <Button
-        onClick={onDiscard}
-        size="xs"
-        title="Go back to the saved words"
-        variant="ghost"
-      >
-        Discard changes
-      </Button>
-    </span>
+        <Button
+          onClick={onDiscard}
+          size="xs"
+          title="Try again to go back to the saved words"
+          variant="ghost"
+        >
+          Discard again
+        </Button>
+      </span>
+    ) : (
+      <span className="flex items-center gap-1">
+        {failure.kind === "failed" && (
+          <Button disabled={busy} onClick={onRetry} size="xs" variant="outline">
+            Retry
+          </Button>
+        )}
+        <Button
+          onClick={onDiscard}
+          size="xs"
+          title="Go back to the saved words"
+          variant="ghost"
+        >
+          Discard changes
+        </Button>
+      </span>
+    )}
   </div>
 );
 
@@ -372,7 +411,7 @@ const HeaderFeedback = ({
   <>
     <output
       className={cn(
-        "mr-2 max-w-3/5 shrink-0 truncate text-xs",
+        "mr-2 line-clamp-2 max-w-1/2 min-w-0 text-xs leading-tight",
         feedback.failed ? "text-destructive" : "text-muted-foreground"
       )}
       data-testid="capture-feedback"
@@ -401,6 +440,7 @@ const Record = ({
   detail,
   text,
   failure,
+  undiscarded,
   saving,
   onText,
   onDue,
@@ -415,6 +455,8 @@ const Record = ({
   text: DraftText;
   /** Why the words on screen could not be saved; they stay until saved or discarded. */
   failure: SaveError | null;
+  /** The failure is a Discard that couldn't finish. */
+  undiscarded: boolean;
   /** Whether a save of them is on its way. */
   saving: boolean;
   onText: (text: DraftText) => void;
@@ -731,6 +773,7 @@ const Record = ({
                     onRetry();
                     title.current?.focus();
                   }}
+                  undiscarded={undiscarded}
                 />
               )}
               {showDescription && (
@@ -899,6 +942,7 @@ const CapturePane = ({
         (draft?.kind === "dirty" && draft.inFlight !== null)
       }
       text={text}
+      undiscarded={drafts.undiscarded(id)}
     />
   );
 };

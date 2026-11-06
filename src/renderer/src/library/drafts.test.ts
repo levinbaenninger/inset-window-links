@@ -686,13 +686,16 @@ describe(DraftStore, () => {
       discards,
       draft: drafts.draft(ID),
       shown: shown().relationship,
+      unsaved: drafts.count,
     }).toStrictEqual({
-      atDiscard: { error: undefined, shown: "A limits B", unsaved: 0 },
+      // The Discard is on its way: a close asks about it until main has answered.
+      atDiscard: { error: undefined, shown: "A limits B", unsaved: 1 },
       calls: ["text FAILED ONCE Call:false", "text FAILED ONCE Call:false"],
       copy: DISCARDED,
       discards: [1],
       draft: undefined,
       shown: "A limits B",
+      unsaved: 0,
     });
   });
 
@@ -802,6 +805,54 @@ describe(DraftStore, () => {
     ]);
   });
 
+  it("keeps edits after a Discard that couldn’t finish in that failed draft, sends nothing until Retry keeps them, and Discard asks main again", () => {
+    const failed: Draft = {
+      base: initial,
+      error: DISK_FULL,
+      kind: "failed",
+      landed: { rev: 1, words: sent("LANDED") },
+      rev: 1,
+      values: titled("LANDED"),
+    };
+
+    const edited = step(failed, edit(2, "LANDED AND MORE")).draft;
+    const flushed = step(edited, { kind: "flush" });
+    const again = step(flushed.draft, { kind: "discard" });
+    const kept = step(flushed.draft, { kind: "retry" });
+
+    expect({
+      again,
+      edited,
+      flushed: flushed.effects,
+      kept,
+    }).toStrictEqual({
+      again: {
+        draft: null,
+        effects: [
+          { kind: "settle", outcome: DISCARDED, upTo: 2 },
+          { kind: "discard", rev: 1 },
+        ],
+      },
+      edited: { ...failed, rev: 2, values: titled("LANDED AND MORE") },
+      flushed: [],
+      kept: {
+        draft: {
+          base: sent("LANDED"),
+          kind: "saving",
+          rev: 2,
+          values: titled("LANDED AND MORE"),
+        },
+        effects: [
+          {
+            call: { kind: "text", text: sent("LANDED AND MORE") },
+            kind: "send",
+            rev: 2,
+          },
+        ],
+      },
+    });
+  });
+
   it("brings discarded changes back as not saved when main can’t undo their landed save, and the next Discard asks again", async () => {
     const discards: (number | null)[] = [];
     const saved = Promise.withResolvers<MutationOutcome>();
@@ -809,7 +860,7 @@ describe(DraftStore, () => {
     const undone: MutationOutcome[] = [
       {
         kind: "failed",
-        message: "Couldn’t discard the changes. The disk is read-only.",
+        message: "The disk is read-only.",
       },
     ];
 
@@ -845,11 +896,12 @@ describe(DraftStore, () => {
     await vi.runAllTimersAsync();
 
     expect({ atOnce, back, discards, end: seen() }).toStrictEqual({
-      atOnce: { error: null, shown: initial.relationship, unsaved: 0 },
+      // Unsaved until main answers the Discard, which may not put the saved version back.
+      atOnce: { error: null, shown: initial.relationship, unsaved: 1 },
       back: {
         error: {
           kind: "failed",
-          message: "Couldn’t discard the changes. The disk is read-only.",
+          message: "The disk is read-only.",
         },
         shown: "DISCARDED",
         unsaved: 1,
@@ -935,7 +987,7 @@ describe(DraftStore, () => {
 
     expect([before, await now()]).toStrictEqual([
       "still waiting",
-      { count: 1, error: null, late: true },
+      { count: 1, error: null, late: true, undiscarded: false },
     ]);
   });
 

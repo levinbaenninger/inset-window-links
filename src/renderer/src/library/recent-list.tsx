@@ -528,7 +528,7 @@ const CurrentRow = ({
           data-testid="row-copy-refused"
         >
           <output
-            className="text-destructive min-w-0 flex-1 truncate text-xs"
+            className="text-destructive line-clamp-3 min-w-0 flex-1 text-xs leading-snug"
             title={refused.text}
           >
             {refused.text}

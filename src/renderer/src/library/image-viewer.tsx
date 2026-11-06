@@ -194,7 +194,7 @@ export const ImageViewer = ({
     const outcome = await drafts.retry(captureId);
 
     if (outcome.kind === "ok") {
-      setReopened("Saved. Copy again.");
+      setReopened("Saved. You can copy it now.");
       setTimeout(() => setReopened(null), FEEDBACK_MS);
     } else {
       setReopened(null);
@@ -246,7 +246,7 @@ export const ImageViewer = ({
         )}
         {refused !== null && (
           <output
-            className="text-destructive mr-1 max-w-1/2 min-w-0 truncate text-xs"
+            className="text-destructive mr-1 line-clamp-2 max-w-1/2 min-w-0 text-xs leading-tight"
             data-testid="viewer-feedback"
             title={refused.text}
           >

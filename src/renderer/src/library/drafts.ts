@@ -107,11 +107,17 @@ interface Common {
    * confirmed. A save the user discarded never becomes it.
    */
   base: DraftText;
-  /**
-   * A save of these changes main holds and can still undo, because a Discard of them couldn't put
-   * the saved version back: the next Discard asks again, until a save of newer words replaces it.
-   */
-  landed?: number;
+}
+
+/**
+ * A save main holds and can still undo, because a Discard of it couldn't put the saved version
+ * back. Until the user discards again or keeps the changes, nothing else is sent, so the version
+ * that Discard puts back stays on disk.
+ */
+export interface Landed {
+  rev: number;
+  /** The words it wrote, as main holds them: the baseline once the changes are kept. */
+  words: DraftText;
 }
 
 /** Words on their way to main. */
@@ -124,7 +130,9 @@ interface InFlight {
  * The unsaved words of one capture. A capture without one is clean: main holds what it shows.
  * - dirty: edited since the last send. An older rev may still be on its way.
  * - saving: the latest rev is on its way.
- * - failed: the latest rev could not be saved; it stays until saved or discarded.
+ * - failed: the latest rev could not be saved; it stays until saved or discarded. With `landed`,
+ *   a Discard of it could not finish: Retry keeps the changes and saves them (Keep changes), and
+ *   Discard asks main again (Discard again).
  */
 export type Draft =
   | (Common & {
@@ -134,16 +142,17 @@ export type Draft =
       flushWanted: boolean;
     })
   | (Common & { kind: "saving" })
-  | (Common & { kind: "failed"; error: SaveError });
+  | (Common & { kind: "failed"; error: SaveError; landed?: Landed });
 
 export type DraftEvent =
   | { kind: "edit"; rev: number; values: DraftText; base: DraftText }
   | { kind: "flush" }
   | { kind: "answered"; rev: number; outcome: MutationOutcome }
+  /** Save failed words again; after a Discard that couldn't finish, keep the changes and save them. */
   | { kind: "retry" }
   | { kind: "discard" }
-  /** Main couldn't put the saved version back after `draft` was discarded, with save `rev` landed. */
-  | { kind: "undiscarded"; draft: Draft; rev: number; error: SaveError };
+  /** Main couldn't put the saved version back after `draft` was discarded, with `landed` on disk. */
+  | { kind: "undiscarded"; draft: Draft; landed: Landed; error: SaveError };
 
 /**
  * What the store does after a step: send a save; tell main the draft was discarded, and which save
@@ -240,16 +249,25 @@ const inFlightOf = (draft: Draft): InFlight | null => {
   return draft.kind === "dirty" ? draft.inFlight : null;
 };
 
-const edited = (draft: Draft | null, event: DraftEvent & { kind: "edit" }) => {
+/** The save a Discard of this draft could not undo, if one could not be. */
+const landedOf = (draft: Draft): Landed | undefined =>
+  draft.kind === "failed" ? draft.landed : undefined;
+
+const edited = (
+  draft: Draft | null,
+  event: DraftEvent & { kind: "edit" }
+): Draft => {
+  if (draft?.kind === "failed" && draft.landed !== undefined) {
+    // Still undecided: the edit joins the changes, and nothing is sent, as a save would replace
+    // the version the Discard puts back.
+    return { ...draft, rev: event.rev, values: event.values };
+  }
+
   const common: Common = {
     base: draft?.base ?? event.base,
     rev: event.rev,
     values: event.values,
   };
-
-  if (draft?.landed !== undefined) {
-    common.landed = draft.landed;
-  }
 
   if (draft?.kind === "dirty") {
     return { ...draft, ...common };
@@ -260,6 +278,57 @@ const edited = (draft: Draft | null, event: DraftEvent & { kind: "edit" }) => {
     flushWanted: false,
     inFlight: draft === null ? null : inFlightOf(draft),
     kind: "dirty" as const,
+  };
+};
+
+/**
+ * Keep changes: the words main holds become the saved baseline, and the words on screen are sent,
+ * the same ones too, as any save tells main the Discard is given up. A blank title keeps main's.
+ */
+const kept = (draft: Draft, landed: Landed): Step => {
+  const values = isBlank(draft.values.relationship)
+    ? { ...draft.values, relationship: landed.words.relationship }
+    : draft.values;
+
+  return {
+    draft: { base: landed.words, kind: "saving", rev: draft.rev, values },
+    effects: [
+      {
+        call: { kind: "text", text: storedForm(values) },
+        kind: "send",
+        rev: draft.rev,
+      },
+    ],
+  };
+};
+
+/**
+ * The changes are back as not discarded, with whatever was typed since on top, as it shows: none
+ * of that was sent, and copies waiting for it are refused.
+ */
+const undiscarded = (
+  draft: Draft | null,
+  event: DraftEvent & { kind: "undiscarded" }
+): Step => {
+  if (draft !== null && landedOf(draft) !== undefined) {
+    return unchanged(draft);
+  }
+
+  const latest = draft ?? event.draft;
+
+  return {
+    draft: {
+      base: event.draft.base,
+      error: event.error,
+      kind: "failed",
+      landed: event.landed,
+      rev: latest.rev,
+      values: latest.values,
+    },
+    effects:
+      draft === null
+        ? []
+        : [{ kind: "settle", outcome: event.error, upTo: draft.rev }],
   };
 };
 
@@ -345,21 +414,17 @@ export const step = (draft: Draft | null, event: DraftEvent): Step => {
     }
 
     case "retry": {
-      return draft?.kind === "failed" ? sendLatest(draft) : unchanged(draft);
+      if (draft?.kind !== "failed") {
+        return unchanged(draft);
+      }
+
+      return draft.landed === undefined
+        ? sendLatest(draft)
+        : kept(draft, draft.landed);
     }
 
     case "undiscarded": {
-      // The changes are back as not saved, unless newer ones were typed since: their save replaces them.
-      return draft === null
-        ? unchanged({
-            base: event.draft.base,
-            error: event.error,
-            kind: "failed",
-            landed: event.rev,
-            rev: event.draft.rev,
-            values: event.draft.values,
-          })
-        : unchanged(draft);
+      return undiscarded(draft, event);
     }
 
     default: {
@@ -374,7 +439,7 @@ export const step = (draft: Draft | null, event: DraftEvent): Step => {
           { kind: "settle", outcome: DISCARDED, upTo: draft.rev },
           {
             kind: "discard",
-            rev: inFlightOf(draft)?.rev ?? draft.landed ?? null,
+            rev: inFlightOf(draft)?.rev ?? landedOf(draft)?.rev ?? null,
           },
         ],
       };
@@ -388,6 +453,8 @@ export type Snapshot =
   | { kind: "clean" }
   /** Unsaved words that could not be saved: nothing is copied. */
   | { kind: "failed"; error: SaveError }
+  /** A Discard that couldn't finish: what is on disk is not what the user chose, so nothing is copied. */
+  | { kind: "undiscarded"; error: SaveError }
   /** A blank title is never saved, so the words on screen can't be copied. */
   | { kind: "untitled" }
   /** These words, once main has saved their rev or a later one. */
@@ -398,13 +465,19 @@ export type Snapshot =
       saved: Promise<MutationOutcome>;
     };
 
-/** What closing the window would lose now: how many captures' words, and why. */
+/**
+ * What closing the window would lose now, or leave undecided: how many captures' words, and why.
+ * A capture counts while its words are unsaved, and while a Discard of a save main may hold is
+ * not yet answered or couldn't finish.
+ */
 export interface Unsaved {
   count: number;
-  /** Why the first of them that failed could not be saved, if any did. */
+  /** Why the first of them that failed could not be saved, or discarded, if any did. */
   error: SaveError | null;
   /** Some are still on their way, or waiting to be sent: their save didn't finish in time. */
   late: boolean;
+  /** Every one of them is a Discard that couldn't finish, or hasn't yet. */
+  undiscarded: boolean;
 }
 
 interface Waiter {
@@ -441,6 +514,11 @@ export class DraftStore {
   /** Why a capture's last save failed, kept while its words are unsaved, as more are typed too. */
   readonly #errors = new Map<CaptureId, SaveError>();
   readonly #waiters = new Map<CaptureId, Waiter[]>();
+  /**
+   * Each capture's latest Discard that asked main to undo a save, until main answers. No save of
+   * it is sent meanwhile: if the Discard fails, a save would replace the version it puts back.
+   */
+  readonly #discarding = new Map<CaptureId, Promise<MutationOutcome>>();
   readonly #timers = new Map<CaptureId, ReturnType<typeof setTimeout>>();
   readonly #listeners = new Set<() => void>();
   #rev = 0;
@@ -536,16 +614,22 @@ export class DraftStore {
     this.flush(id);
   }
 
+  /** Sends the words now, or once main has answered a Discard of the capture still on its way. */
   flush(id: CaptureId): void {
     clearTimeout(this.#timers.get(id));
     this.#timers.delete(id);
-    this.#apply(id, { kind: "flush" });
+
+    if (!this.#discarding.has(id)) {
+      this.#apply(id, { kind: "flush" });
+    }
   }
 
   /**
    * Sends failed words again; words typed since the failure go at once instead of after the pause.
-   * Settles with how that save went, ok at once when there is nothing to save, and LATE once
-   * SETTLE_MS pass without an answer.
+   * After a Discard that couldn't finish, it keeps the changes, those typed since too, and saves
+   * them (Keep changes): main then gives the Discard up, so a restart keeps them as well. Settles
+   * with how that went, ok at once when there is nothing to do, and LATE once SETTLE_MS pass
+   * without an answer.
    */
   retry(id: CaptureId): Promise<MutationOutcome> {
     const saved = this.#whenSaved(id);
@@ -563,7 +647,7 @@ export class DraftStore {
    * Gives the changes up: the saved baseline shows again at once, with no error, even while a save
    * of them is still on its way. Main drops that save, or puts the saved version back if it
    * landed; nothing is written, and the save's answer changes nothing here. If main can't put the
-   * saved version back, the changes come back as not saved, with why.
+   * saved version back, the changes come back as not discarded, with why, and this asks again.
    */
   discard(id: CaptureId): void {
     clearTimeout(this.#timers.get(id));
@@ -571,14 +655,16 @@ export class DraftStore {
     this.#apply(id, { kind: "discard" });
   }
 
-  /** A title left blank goes back to the saved one. */
+  /** A title left blank goes back to the saved one, which is main's after a Discard that couldn't finish. */
   restoreBlankTitle(id: CaptureId): void {
     const draft = this.draft(id);
 
     if (draft !== undefined && isBlank(draft.values.relationship)) {
+      const saved = landedOf(draft)?.words ?? draft.base;
+
       this.edit(
         id,
-        { ...draft.values, relationship: draft.base.relationship },
+        { ...draft.values, relationship: saved.relationship },
         draft.base
       );
     }
@@ -607,6 +693,12 @@ export class DraftStore {
     for (const [id, draft] of this.#drafts) {
       clearTimeout(this.#timers.get(id));
 
+      // A save now would replace the version a Discard, unanswered or failed, puts back, and keep
+      // words the user chose to discard: the Discard's marker finishes it at the next start.
+      if (landedOf(draft) !== undefined || this.#discarding.has(id)) {
+        continue;
+      }
+
       const inFlight =
         draft.kind === "saving" ||
         (draft.kind === "dirty" && draft.inFlight !== null);
@@ -624,17 +716,30 @@ export class DraftStore {
 
   /**
    * Takes what a copy copies, and sends the words it needs saved. A failed draft refuses at once,
-   * whether or not its capture is open; so does a blank title, which is never saved.
+   * whether or not its capture is open; so does a blank title, which is never saved. While a
+   * Discard is on its way, the saved words on screen are copied only once main has put them back.
    */
   snapshot(id: CaptureId): Snapshot {
     const draft = this.draft(id);
 
     if (draft === undefined) {
-      return { kind: "clean" };
+      const discarding = this.#discarding.get(id);
+      const baseline = this.confirmed(id);
+
+      return discarding === undefined || baseline === undefined
+        ? { kind: "clean" }
+        : {
+            kind: "pending",
+            rev: this.#rev,
+            saved: discarding,
+            text: storedForm(baseline),
+          };
     }
 
     if (draft.kind === "failed") {
-      return { error: draft.error, kind: "failed" };
+      return landedOf(draft) === undefined
+        ? { error: draft.error, kind: "failed" }
+        : { error: draft.error, kind: "undiscarded" };
     }
 
     if (isBlank(draft.values.relationship)) {
@@ -650,25 +755,42 @@ export class DraftStore {
     return { kind: "pending", rev: draft.rev, saved, text };
   }
 
-  /** How many captures hold words main does not have. */
-  get count(): number {
-    return this.#drafts.size;
+  /** Whether a Discard of the capture's changes couldn't finish, and is not yet retried or kept. */
+  undiscarded(id: CaptureId): boolean {
+    const draft = this.draft(id);
+
+    return draft !== undefined && landedOf(draft) !== undefined;
   }
 
-  /** What closing now would lose, or null when nothing. */
-  unsaved(): Unsaved | null {
-    const drafts = [...this.#drafts.values()];
+  /**
+   * How many captures a close must ask about: those holding words main does not have, and those
+   * whose Discard main hasn't answered, as it may not put the saved version back.
+   */
+  get count(): number {
+    return new Set([...this.#drafts.keys(), ...this.#discarding.keys()]).size;
+  }
 
-    if (drafts.length === 0) {
+  /** What closing now would lose or leave undecided, or null when nothing. */
+  unsaved(): Unsaved | null {
+    const { count } = this;
+
+    if (count === 0) {
       return null;
     }
 
+    const drafts = [...this.#drafts.values()];
     const failed = drafts.find((draft) => draft.kind === "failed");
 
     return {
-      count: drafts.length,
+      count,
       error: failed?.kind === "failed" ? failed.error : null,
-      late: drafts.some((draft) => draft.kind !== "failed"),
+      late:
+        this.#discarding.size > 0 ||
+        drafts.some((draft) => draft.kind !== "failed"),
+      undiscarded: [...this.#drafts].every(
+        ([id, draft]) =>
+          landedOf(draft) !== undefined || this.#discarding.has(id)
+      ),
     };
   }
 
@@ -695,7 +817,10 @@ export class DraftStore {
       this.flush(id);
     }
 
-    if ([...this.#drafts.values()].every(({ kind }) => kind === "failed")) {
+    if (
+      this.#discarding.size === 0 &&
+      [...this.#drafts.values()].every(({ kind }) => kind === "failed")
+    ) {
       return this.unsaved();
     }
 
@@ -778,7 +903,13 @@ export class DraftStore {
       this.#drafts.set(id, draft);
     }
 
-    if (draft === null || event.kind === "discard") {
+    // Kept changes are on their way as a save, not a failure.
+    const keeping =
+      draft?.kind === "saving" &&
+      before !== null &&
+      landedOf(before) !== undefined;
+
+    if (draft === null || event.kind === "discard" || keeping) {
       this.#errors.delete(id);
     } else if (draft.kind === "failed") {
       this.#errors.set(id, draft.error);
@@ -810,15 +941,40 @@ export class DraftStore {
     this.#changed();
   }
 
+  /**
+   * Tells main `draft` was discarded. When main can't put the saved version back, the changes
+   * come back as not discarded; once it has answered, words typed since are sent.
+   */
   async #discarded(
     id: CaptureId,
     rev: number | null,
     draft: Draft
   ): Promise<void> {
-    const outcome = await settle(() => this.#store().discard(id, rev));
+    const words = inFlightOf(draft)?.sent ?? landedOf(draft)?.words;
+    const call = settle(() => this.#store().discard(id, rev));
 
-    if (outcome.kind !== "ok" && rev !== null) {
-      this.#apply(id, { draft, error: outcome, kind: "undiscarded", rev });
+    if (rev !== null) {
+      this.#discarding.set(id, call);
+    }
+
+    const outcome = await call;
+
+    if (this.#discarding.get(id) === call) {
+      this.#discarding.delete(id);
+    }
+
+    if (outcome.kind !== "ok" && rev !== null && words !== undefined) {
+      this.#apply(id, {
+        draft,
+        error: outcome,
+        kind: "undiscarded",
+        landed: { rev, words },
+      });
+    }
+
+    if (rev !== null && !this.#discarding.has(id)) {
+      this.flush(id);
+      this.#changed();
     }
   }
 
