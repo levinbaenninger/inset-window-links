@@ -3,8 +3,8 @@ import type { DraftStore, Unsaved } from "./drafts";
 
 /**
  * Recent Captures being asked to let go, as its window closes or the app quits.
- * - waiting: the saves on their way are being waited for; nothing shows meanwhile.
- * - held: words could not be saved, and the prompt asks what to do with them.
+ * - waiting: the saves on their way are being waited for, at most SETTLE_MS; nothing shows.
+ * - held: words could not be saved, or not in time, and the prompt asks what to do with them.
  */
 export type LeaveState =
   | { kind: "idle" }
@@ -13,13 +13,13 @@ export type LeaveState =
       kind: "held";
       reason: LeaveReason;
       unsaved: Unsaved;
-      /** Retry is on its way: the buttons wait for its answer. */
+      /** Retry is on its way: Retry waits for its answer; Cancel and Discard still work. */
       retrying: boolean;
     };
 
 /** What the page tells main. */
 export interface LeaveMain {
-  reportUnsaved: (unsaved: boolean) => void;
+  reportUnsaved: (count: number) => void;
   answerLeave: (answer: LeaveAnswer) => void;
 }
 
@@ -27,28 +27,35 @@ export interface LeaveMain {
 const merged = (a: LeaveReason, b: LeaveReason): LeaveReason =>
   a === "quit" || b === "quit" ? "quit" : "close";
 
+const sameUnsaved = (a: Unsaved, b: Unsaved): boolean =>
+  a.count === b.count && a.error === b.error && a.late === b.late;
+
 /**
- * Holds a close or quit while the page has words that could not be saved. Main asks only while the
- * page reports unsaved words, and lets the window go only on `go`: so the page reports as soon as
- * its drafts empty, which is before it answers `go`.
+ * Holds a close or quit while the page has words that are not saved. Main asks only while the
+ * page reports some, and lets the window go only on `go`. Every wait is bounded by the draft
+ * store's settle, so a save that never answers ends in the prompt, never in a silent exit.
  */
 export class LeaveFlow {
   readonly #drafts: DraftStore;
   readonly #main: () => LeaveMain;
   readonly #listeners = new Set<() => void>();
   #state: LeaveState = { kind: "idle" };
+  /** Bumped by every wait and every final answer: a wait that ends after either changes nothing. */
+  #run = 0;
 
   constructor(drafts: DraftStore, main: () => LeaveMain) {
     this.#drafts = drafts;
     this.#main = main;
 
-    let reported = false;
+    let reported = 0;
 
     drafts.subscribe(() => {
-      if (drafts.unsaved !== reported) {
-        reported = drafts.unsaved;
+      if (drafts.count !== reported) {
+        reported = drafts.count;
         this.#main().reportUnsaved(reported);
       }
+
+      this.#follow();
     });
   }
 
@@ -61,25 +68,26 @@ export class LeaveFlow {
   /** The same object until it changes, for useSyncExternalStore. */
   readonly state = (): LeaveState => this.#state;
 
-  /** Main asks again when a quit meets a close in progress: the one answer covers both. */
+  /**
+   * Main asks again when a quit meets a close in progress, or when it asks a second time: the one
+   * answer covers both, and the page says at once that it heard.
+   */
   request(reason: LeaveReason): void {
     const state = this.#state;
 
     if (state.kind === "idle") {
       this.#set({ kind: "waiting", reason });
-      void this.#decide();
+      this.#main().answerLeave("waiting");
+      void this.#wait();
 
       return;
     }
 
     this.#set({ ...state, reason: merged(state.reason, reason) });
-
-    if (state.kind === "held") {
-      this.#main().answerLeave("held");
-    }
+    this.#main().answerLeave(state.kind === "held" ? "held" : "waiting");
   }
 
-  async retry(): Promise<void> {
+  retry(): void {
     const state = this.#state;
 
     if (state.kind !== "held" || state.retrying) {
@@ -88,26 +96,19 @@ export class LeaveFlow {
 
     this.#set({ ...state, retrying: true });
     this.#drafts.retryAll();
+    void this.#wait();
+  }
 
-    const unsaved = await this.#drafts.settle();
-    const now = this.#state;
-
-    if (now.kind !== "held") {
+  /** Gives every capture's words up and lets go, even while a save is still on its way. */
+  discard(): void {
+    if (this.#state.kind !== "held") {
       return;
     }
 
-    if (unsaved === null) {
-      this.#finish("go");
-    } else {
-      this.#set({ ...now, retrying: false, unsaved });
-    }
-  }
-
-  discard(): void {
-    if (this.#state.kind === "held" && !this.#state.retrying) {
-      this.#drafts.discardAll();
-      this.#finish("go");
-    }
+    this.#run += 1;
+    this.#set({ kind: "idle" });
+    this.#drafts.discardAll();
+    this.#main().answerLeave("go");
   }
 
   cancel(): void {
@@ -116,11 +117,22 @@ export class LeaveFlow {
     }
   }
 
-  async #decide(): Promise<void> {
+  /** Main stopped waiting for this page's answer: the request is gone, so the prompt is too. */
+  dismiss(): void {
+    if (this.#state.kind !== "idle") {
+      this.#run += 1;
+      this.#set({ kind: "idle" });
+    }
+  }
+
+  async #wait(): Promise<void> {
+    this.#run += 1;
+
+    const run = this.#run;
     const unsaved = await this.#drafts.settle();
     const state = this.#state;
 
-    if (state.kind !== "waiting") {
+    if (run !== this.#run || state.kind === "idle") {
       return;
     }
 
@@ -131,10 +143,34 @@ export class LeaveFlow {
     }
 
     this.#set({ kind: "held", reason: state.reason, retrying: false, unsaved });
-    this.#main().answerLeave("held");
+
+    if (state.kind === "waiting") {
+      this.#main().answerLeave("held");
+    }
+  }
+
+  /**
+   * While the prompt shows it follows the drafts: a save that ran late and lands takes its
+   * capture off the count, and once nothing is left the close or quit goes ahead.
+   */
+  #follow(): void {
+    const state = this.#state;
+
+    if (state.kind !== "held" || state.retrying) {
+      return;
+    }
+
+    const unsaved = this.#drafts.unsaved();
+
+    if (unsaved === null) {
+      this.#finish("go");
+    } else if (!sameUnsaved(unsaved, state.unsaved)) {
+      this.#set({ ...state, unsaved });
+    }
   }
 
   #finish(answer: "go" | "stay"): void {
+    this.#run += 1;
     this.#set({ kind: "idle" });
     this.#main().answerLeave(answer);
   }

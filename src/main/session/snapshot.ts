@@ -161,6 +161,14 @@ const activitySummary = (state: SessionState): ActivitySummary => {
       return { kind: "saving" };
     }
 
+    case "confirmingQuit": {
+      return { kind: "confirmingQuit", late: false };
+    }
+
+    case "saveLate": {
+      return { kind: "confirmingQuit", late: true };
+    }
+
     default: {
       return { kind: activity.kind };
     }

@@ -123,6 +123,70 @@ describe(CaptureStore, () => {
     expect(capture.record.views).toHaveLength(3);
   });
 
+  it("says why each kind of write failed in plain words, never the raw error", async () => {
+    let code: string | null = "ENOSPC";
+
+    const fail = () =>
+      code === null
+        ? null
+        : Object.assign(new Error(`${code}: write '/x/record.json.tmp'`), {
+            code,
+          });
+
+    const coded: StoreFs = {
+      ...nodeStoreFs,
+      rename: (from, to) => {
+        const error = fail();
+
+        return error === null
+          ? nodeStoreFs.rename(from, to)
+          : Promise.reject(error);
+      },
+      writeFileDurable: (file, data) => {
+        const error = fail();
+
+        return error === null
+          ? nodeStoreFs.writeFileDurable(file, data)
+          : Promise.reject(error);
+      },
+    };
+
+    const store = await CaptureStore.open(root, coded);
+    const now = new Date("2026-11-06T09:00:00.000Z");
+    const published = await store.publish(newCapture());
+
+    code = null;
+    await store.publish(newCapture());
+    code = "EROFS";
+
+    const due = await store.setDue(CAPTURE_ID, "2026-11-07", now);
+
+    code = "EIO";
+
+    const text = await store.updateText(
+      CAPTURE_ID,
+      {
+        description: "",
+        due: null,
+        relationship: "A new title",
+        todos: [],
+        viewDescriptions: {},
+      },
+      now
+    );
+
+    code = "EACCES";
+
+    const removed = await store.remove(CAPTURE_ID);
+
+    expect([published, due, text, removed]).toStrictEqual([
+      { kind: "failed", message: "The disk is full." },
+      { kind: "failed", message: "The disk is read-only." },
+      { kind: "failed", message: "Couldn't save (EIO)." },
+      { kind: "failed", message: "Inset can't write to its data folder." },
+    ]);
+  });
+
   it("succeeds when the same capture is retried after a failed write", async () => {
     let failing = true;
 

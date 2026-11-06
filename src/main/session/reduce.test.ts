@@ -8,10 +8,12 @@ import {
 } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
 import { hasTyped, saveability } from "../../shared/text";
+import type { PublishResult } from "../store/store";
 import type { IdSource } from "./reduce";
 import { initialSession, isMeaningful, reduce } from "./reduce";
 import type {
   CapturedView,
+  QuitChoice,
   SessionEffect,
   SessionEvent,
   SessionState,
@@ -943,6 +945,107 @@ describe("session lifecycle", () => {
     ).toStrictEqual([{ type: "exitApp" }]);
   });
 
+  it("asks again when a save at quit runs late, then quits once it lands, or stays and says why it failed", () => {
+    const source = ids();
+
+    const late = run(source, [
+      foreignPress,
+      captured("t1", view(1, "macos:1176")),
+      { text: text("A limits B"), type: "textChanged" },
+      { type: "quitRequested" },
+      { choice: "save", type: "quitChosen" },
+      { type: "saveWaitEnded" },
+    ]);
+
+    const finished = (result: PublishResult) =>
+      run(source, [{ draftId: D1, result, type: "saveFinished" }], late.state);
+
+    const failed = finished({ kind: "failed", message: "The disk is full." });
+
+    expect({
+      failed: [failed.state.activity, failed.effects],
+      landed: finished({ kind: "published" }).effects,
+      late: [late.state.activity, late.effects.at(-1)],
+      typed: run(
+        source,
+        [{ text: text("Typed after"), type: "textChanged" }],
+        late.state
+      ).state.draft.text.relationship,
+    }).toStrictEqual({
+      failed: [
+        { kind: "saveFailed", message: "The disk is full." },
+        [{ anchor: { kind: "keep" }, type: "showPopover" }],
+      ],
+      landed: [{ type: "exitApp" }],
+      late: [{ exit: "quit", kind: "saveLate" }, { type: "askQuit" }],
+      typed: "A limits B",
+    });
+  });
+
+  it("lets Cancel keep a late save going without quitting, Retry wait again, and Discard withdraw it and exit at once", () => {
+    const source = ids();
+
+    const late = run(source, [
+      foreignPress,
+      captured("t1", view(1, "macos:1176")),
+      { text: text("A limits B"), type: "textChanged" },
+      { relaunch: true, type: "quitRequested" },
+      { choice: "save", type: "quitChosen" },
+      { type: "saveWaitEnded" },
+    ]);
+
+    const chosen = (choice: QuitChoice) =>
+      run(source, [{ choice, type: "quitChosen" }], late.state);
+
+    const cancelled = chosen("cancel");
+    const retried = chosen("save");
+
+    expect({
+      cancelled: [cancelled.state.activity, cancelled.effects],
+      discarded: chosen("discard").effects,
+      landedAfterCancel: run(
+        source,
+        [{ draftId: D1, result: { kind: "published" }, type: "saveFinished" }],
+        cancelled.state
+      ).effects,
+      retried: [retried.state.activity, retried.effects],
+    }).toStrictEqual({
+      cancelled: [{ after: "stay", kind: "saving" }, []],
+      discarded: [
+        { draftId: D1, type: "withdraw" },
+        { relaunch: true, type: "exitApp" },
+      ],
+      landedAfterCancel: [{ type: "hidePopover" }],
+      retried: [
+        { after: "relaunch", kind: "saving" },
+        [{ type: "limitSaveWait" }],
+      ],
+    });
+  });
+
+  it("withdraws a save on its way when the panel's Discard is chosen, and a quit waiting for it goes ahead", () => {
+    const saving: readonly SessionEvent[] = [
+      foreignPress,
+      captured("t1", view(1, "macos:1176")),
+      { text: text("A limits B"), type: "saveRequested" },
+    ];
+
+    // Each run captures with a fresh token source, so its capture lands.
+    const plain = run(ids(), saving);
+    const quitting = run(ids(), [...saving, { type: "quitRequested" }]);
+    const discard: SessionEvent[] = [{ type: "discardRequested" }];
+
+    expect({
+      plain: run(ids(), discard, plain.state).effects,
+      quitWaits: quitting.effects.at(-1),
+      quitting: run(ids(), discard, quitting.state).effects,
+    }).toStrictEqual({
+      plain: [{ draftId: D1, type: "withdraw" }, { type: "hidePopover" }],
+      quitWaits: { type: "limitSaveWait" },
+      quitting: [{ draftId: D1, type: "withdraw" }, { type: "exitApp" }],
+    });
+  });
+
   it("keeps Retry after a cancelled quit following a failed save", () => {
     const source = ids();
 
@@ -1012,7 +1115,7 @@ describe("session lifecycle", () => {
           : null,
     }).toStrictEqual({
       activity: { after: "quit", kind: "saving" },
-      effects: ["previewPopover", "publish"],
+      effects: ["previewPopover", "publish", "limitSaveWait"],
       published: {
         text: "Typed while waiting",
         titles: ["Untitled 1", "Untitled 2"],

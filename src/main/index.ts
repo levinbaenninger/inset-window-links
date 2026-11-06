@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   app,
   BrowserWindow,
+  dialog,
   session as electronSession,
   globalShortcut,
   Menu,
@@ -35,6 +36,7 @@ import {
 } from "./ipc/register";
 import { wireMenuKeys } from "./menu-keys";
 import { OpenMenus } from "./menu-open";
+import { settleWrites, writesDialog } from "./quit-writes";
 import { SessionController } from "./session/controller";
 import { openSettingsStore } from "./settings-store";
 import { startSnoozeClock } from "./snooze-clock";
@@ -263,7 +265,7 @@ const start = async () => {
           menus.set(contents, open);
         }
       },
-      reportUnsaved: (unsaved) => library.reportUnsaved(unsaved),
+      reportUnsaved: (count) => library.reportUnsaved(count),
       newCapture: showDraft,
       openSettings,
       startDrag: (file, icon) =>
@@ -545,11 +547,39 @@ const start = async () => {
   // Opening the app again, from the Start menu or a shortcut, is how a lost tray icon gets found.
   app.on("second-instance", actions.openHome);
   app.on("before-quit", (event) => session.interceptQuit(event));
+  /** Set once the last writes are written, or the user chose to quit without them. */
+  let writesSettled = false;
+  let settlingWrites = false;
+
+  const quitOnceWritten = async () => {
+    await settleWrites({
+      ask: async () => {
+        const { choices, ...shown } = writesDialog(app.getName());
+
+        const { response } = await dialog.showMessageBox({
+          ...shown,
+          noLink: true,
+          type: "warning",
+        });
+
+        return choices[response] ?? "wait";
+      },
+      idle: () => store.idle(),
+    });
+    writesSettled = true;
+    app.quit();
+  };
+
   app.on("will-quit", (event) => {
-    // The library's last save arrives as its window closes; quitting waits for it to be written.
-    if (store.busy) {
+    // The library's last save arrives as its window closes; quitting waits for it to be written,
+    // and after a few seconds asks rather than wait for good.
+    if (store.busy && !writesSettled) {
       event.preventDefault();
-      void store.idle().then(() => app.quit());
+
+      if (!settlingWrites) {
+        settlingWrites = true;
+        void quitOnceWritten();
+      }
 
       return;
     }

@@ -10,7 +10,7 @@ import type {
   settingsChannels,
 } from "../../shared/channels";
 import { channelName } from "../../shared/channels";
-import { CopyRequestSchema } from "../../shared/copy";
+import { CopyRequestSchema, CopyTicketSchema } from "../../shared/copy";
 import type { CaptureDetail, CaptureListItem } from "../../shared/dto";
 import { DueDateSchema } from "../../shared/due";
 import {
@@ -19,7 +19,7 @@ import {
   ViewIdSchema,
 } from "../../shared/ids";
 import type { LeaveAnswer } from "../../shared/leave";
-import { LeaveAnswerSchema } from "../../shared/leave";
+import { LeaveAnswerSchema, UnsavedCountSchema } from "../../shared/leave";
 import { SettingsChangeSchema } from "../../shared/settings";
 import { StatusRequestSchema, statusFor } from "../../shared/status";
 import {
@@ -32,7 +32,7 @@ import { writeClip } from "../clipboard";
 import { reopenOrigin } from "../reopen";
 import type { SessionController } from "../session/controller";
 import { originSummary, summarizeViews } from "../session/snapshot";
-import { copyCapture } from "../store/copy";
+import { copyCapture, CopyStarts } from "../store/copy";
 import type { CaptureStore, StoreEntry } from "../store/store";
 import type { RendererPage } from "../windows/renderer-page";
 import { shortcutStatus } from "../windows/shortcut";
@@ -228,7 +228,7 @@ const detail = (entry: StoreEntry | undefined): CaptureDetail | null => {
 export interface LibraryActions {
   startDrag: (file: string, icon: Electron.NativeImage) => void;
   menuOpen: (open: boolean) => void;
-  reportUnsaved: (unsaved: boolean) => void;
+  reportUnsaved: (count: number) => void;
   answerLeave: (answer: LeaveAnswer) => void;
   newCapture: () => void;
   addWindows: () => void;
@@ -240,17 +240,36 @@ export const registerLibraryChannels = (
   actions: LibraryActions,
   trusted: TrustCheck
 ): void => {
+  const starts = new CopyStarts(store);
+
   const table: Table<typeof libraryChannels> = {
     addWindows: send(z.tuple([]), actions.addWindows),
     answerLeave: send(z.tuple([LeaveAnswerSchema]), actions.answerLeave),
+    beginCopy: send(z.tuple([CopyTicketSchema, DraftIdSchema]), (ticket, id) =>
+      starts.begin(ticket, id)
+    ),
     // The page's copy gate asks only once the words it copies are saved.
     copy: invoke(
-      z.tuple([DraftIdSchema, CopyRequestSchema, EditedTextSchema.nullable()]),
-      (captureId, request, text) =>
-        copyCapture(store, captureId, request, text, writeClip, {
-          locale: app.getLocale(),
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        })
+      z.tuple([
+        CopyTicketSchema,
+        DraftIdSchema,
+        CopyRequestSchema,
+        EditedTextSchema.nullable(),
+      ]),
+      (ticket, captureId, request, text) =>
+        copyCapture(
+          store,
+          starts,
+          ticket,
+          captureId,
+          request,
+          text,
+          writeClip,
+          {
+            locale: app.getLocale(),
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          }
+        )
     ),
     dragImage: send(
       z.tuple([DraftIdSchema, ViewIdSchema]),
@@ -272,7 +291,7 @@ export const registerLibraryChannels = (
     menuOpen: send(z.tuple([z.boolean()]), actions.menuOpen),
     newCapture: send(z.tuple([]), actions.newCapture),
     openSettings: send(z.tuple([]), actions.openSettings),
-    reportUnsaved: send(z.tuple([z.boolean()]), actions.reportUnsaved),
+    reportUnsaved: send(z.tuple([UnsavedCountSchema]), actions.reportUnsaved),
     remove: invoke(z.tuple([DraftIdSchema]), (captureId) =>
       store.remove(captureId)
     ),

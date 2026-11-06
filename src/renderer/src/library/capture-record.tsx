@@ -55,6 +55,7 @@ import type {
   ViewSummary,
 } from "../../../shared/dto";
 import type { DueDate } from "../../../shared/due";
+import { couldNotSave } from "../../../shared/errors";
 import type { CaptureId } from "../../../shared/ids";
 import { menuKeyLabel } from "../../../shared/shortcuts";
 import type { CaptureStatus } from "../../../shared/status";
@@ -70,6 +71,7 @@ import {
   reopenedMessage,
   useCaptureCommands,
 } from "./capture-commands";
+import { retryLabel } from "./copy-gate";
 import { useEntryCopy } from "./copy-keys";
 import type { SaveError } from "./drafts";
 import { ImageViewer } from "./image-viewer";
@@ -324,7 +326,7 @@ const problem = (outcome: MutationOutcome): string => {
     }
 
     default: {
-      return `Couldn't save. ${outcome.message}`;
+      return couldNotSave(outcome.message);
     }
   }
 };
@@ -340,7 +342,10 @@ const SaveFailure = ({
   onDiscard,
 }: {
   failure: SaveError;
-  /** A save is on its way: the buttons wait for its answer, in place, so nothing moves. */
+  /**
+   * A save is on its way: Retry waits for its answer, in place, so nothing moves. Discard changes
+   * works at once; whatever that save does, the saved words stay on screen.
+   */
   busy: boolean;
   onRetry: () => void;
   onDiscard: () => void;
@@ -359,7 +364,6 @@ const SaveFailure = ({
         </Button>
       )}
       <Button
-        disabled={busy}
         onClick={onDiscard}
         size="xs"
         title="Go back to the saved words"
@@ -369,6 +373,42 @@ const SaveFailure = ({
       </Button>
     </span>
   </div>
+);
+
+/** What the last action in the header said; a copy refused for unsaved words offers Retry. */
+const HeaderFeedback = ({
+  feedback,
+  onRetry,
+}: {
+  feedback: Feedback;
+  onRetry: () => void;
+}) => (
+  <>
+    <output
+      className={cn(
+        "mr-2 max-w-3/5 shrink-0 truncate text-xs",
+        feedback.failed ? "text-destructive" : "text-muted-foreground"
+      )}
+      data-testid="capture-feedback"
+      title={feedback.text}
+    >
+      {feedback.text}
+    </output>
+    {feedback.retry !== undefined && (
+      <Button
+        aria-label={retryLabel(feedback.retry.kind)}
+        className="mr-1.5"
+        onClick={() => {
+          onRetry();
+          feedback.retry?.run();
+        }}
+        size="xs"
+        variant="outline"
+      >
+        Retry
+      </Button>
+    )}
+  </>
 );
 
 const dueProblem = (outcome: MutationOutcome): string | null =>
@@ -613,16 +653,10 @@ const Record = ({
           <StatusNote status={detail.status} />
         </p>
         {shown !== null && (
-          <output
-            className={cn(
-              "mr-2 max-w-3/5 shrink-0 truncate text-xs",
-              shown.failed ? "text-destructive" : "text-muted-foreground"
-            )}
-            data-testid="capture-feedback"
-            title={shown.text}
-          >
-            {shown.text}
-          </output>
+          <HeaderFeedback
+            feedback={shown}
+            onRetry={() => title.current?.focus()}
+          />
         )}
         <IconButton
           icon={isDone ? Undo02Icon : CheckmarkCircle02Icon}

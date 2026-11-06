@@ -41,6 +41,42 @@ export const slowWrites = (inner: StoreFs, ms: number): StoreFs => ({
   },
 });
 
+/** A disk that hangs: while held, every durable write waits until `release` lets it finish. */
+export const heldWrites = (inner: StoreFs) => {
+  let holding = false;
+  const waiting: (() => void)[] = [];
+
+  const fs: StoreFs = {
+    ...inner,
+    writeFileDurable: async (path, data) => {
+      if (holding) {
+        const { promise, resolve } = Promise.withResolvers<undefined>();
+
+        waiting.push(() => resolve(undefined));
+        await promise;
+      }
+
+      await inner.writeFileDurable(path, data);
+    },
+  };
+
+  return {
+    fs,
+    hold: () => {
+      holding = true;
+    },
+    release: () => {
+      holding = false;
+
+      for (const resolve of waiting.splice(0)) {
+        resolve();
+      }
+    },
+    /** How many writes wait now. */
+    waiting: () => waiting.length,
+  };
+};
+
 export const failingWrites = (
   inner: StoreFs,
   shouldFail: (path: string) => boolean
@@ -48,6 +84,11 @@ export const failingWrites = (
   ...inner,
   writeFileDurable: (path, data) =>
     shouldFail(path)
-      ? Promise.reject(new Error(`Injected write failure: ${path}`))
+      ? Promise.reject(
+          Object.assign(
+            new Error(`Injected write failure: ENOSPC, write '${path}'`),
+            { code: "ENOSPC" }
+          )
+        )
       : inner.writeFileDurable(path, data),
 });

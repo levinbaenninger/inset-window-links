@@ -12,7 +12,7 @@ import {
 import type { Add01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { RefObject } from "react";
 
 import { DueOptions } from "@/components/due";
@@ -64,17 +64,25 @@ import type {
   StatusRequest,
 } from "../../../shared/status";
 import { ACTIVE, snoozePresets } from "../../../shared/status";
-import { copyCapture, notCopiedText } from "./copy-gate";
+import type { RetryKind } from "./copy-gate";
+import { copyCapture, notCopiedText, retryOf } from "./copy-gate";
+import { reasonOf } from "./drafts";
 import { drafts } from "./page-drafts";
 import { neighborRow, ROW_SELECTOR } from "./row-keys";
 
 const FEEDBACK_MS = 2000;
 const FAILURE_MS = 6000;
+const SAVING = "Saving…";
 
 /** A short answer to a command, shown beside the capture; failed ones in the destructive colour. */
 export interface Feedback {
   text: string;
   failed: boolean;
+  /**
+   * A refused copy's Retry. One that saves the capture's unsaved words lasts until they are saved
+   * or given up; one that copies again goes like any failure.
+   */
+  retry?: { run: () => void; kind: RetryKind } | undefined;
 }
 
 type Icon = typeof Add01Icon;
@@ -185,19 +193,34 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   /** The row that takes focus once this one is deleted. */
   const afterDelete = useRef<HTMLElement | null>(null);
 
-  // A failure stays longer, so it is read before it goes; a newer answer restarts the wait.
+  /** Whether the capture holds words main doesn't have yet. */
+  const unsavedWords = useSyncExternalStore(
+    drafts.subscribe,
+    () => drafts.draft(target.id) !== undefined
+  );
+
+  // A failure stays longer, so it is read before it goes; a newer answer restarts the wait. On a
+  // row, a refusal with Retry stays until the words are saved or given up: the row has no other
+  // Retry, and an action should not run away.
+  const lasting = feedback?.retry?.kind === "save" && target.from === "row";
+
   useEffect(() => {
-    if (feedback === null) {
+    if (feedback === null || lasting) {
       return;
     }
 
+    // Saving after a refused copy answers within SETTLE_MS, so its note stays until it does.
     const timer = setTimeout(
       () => setFeedback(null),
-      feedback.failed ? FAILURE_MS : FEEDBACK_MS
+      feedback.failed || feedback.text === SAVING ? FAILURE_MS : FEEDBACK_MS
     );
 
     return () => clearTimeout(timer);
-  }, [feedback]);
+  }, [feedback, lasting]);
+
+  if (feedback?.retry?.kind === "save" && !unsavedWords) {
+    setFeedback(null);
+  }
 
   const say = (text: string) => setFeedback({ failed: false, text });
 
@@ -336,7 +359,32 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     snoozed: [backToList, snooze, done],
   };
 
-  /** Copies through the gate; when what is typed could not be saved, copies nothing and says so. */
+  /** Saves the words a copy was refused for, and says how that went: the user then copies again. */
+  const retrySave = async () => {
+    setFeedback({ failed: false, text: SAVING });
+
+    const outcome = await drafts.retry(target.id);
+
+    if (outcome.kind === "ok") {
+      say("Saved. Copy again.");
+    } else {
+      setFeedback({
+        failed: true,
+        retry: {
+          kind: "save",
+          run: () => {
+            void retrySave();
+          },
+        },
+        text: `Still not saved. ${reasonOf(outcome)}`,
+      });
+    }
+  };
+
+  /**
+   * Copies through the gate; when what is typed could not be saved, copies nothing, says why, and
+   * offers Retry.
+   */
   const copy = async (request: CopyRequest): Promise<boolean> => {
     const result = await copyCapture(target.id, request, libraryApi(), drafts);
 
@@ -346,7 +394,21 @@ export const useCaptureCommands = (target: CaptureTarget) => {
       return true;
     }
 
-    setFeedback({ failed: true, text: notCopiedText(result, target.from) });
+    const retry = retryOf(result, target.id, drafts);
+
+    setFeedback({
+      failed: true,
+      retry:
+        retry === null
+          ? undefined
+          : {
+              kind: retry,
+              run: () => {
+                void (retry === "save" ? retrySave() : copy(request));
+              },
+            },
+      text: notCopiedText(result, target.from),
+    });
 
     return false;
   };

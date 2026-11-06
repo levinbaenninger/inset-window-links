@@ -47,9 +47,12 @@ import {
   parseQuery,
   withDueFilter,
 } from "../../../shared/due";
+import type { CaptureId } from "../../../shared/ids";
 import { matchesCapture, matchSource } from "../../../shared/search";
 import type { StatusKind } from "../../../shared/status";
+import { isBlank } from "../../../shared/text";
 import { MenuEntries, useCaptureCommands } from "./capture-commands";
+import { retryLabel } from "./copy-gate";
 import { useEntryCopy } from "./copy-keys";
 import { drafts } from "./page-drafts";
 import type { RowAction } from "./row-keys";
@@ -179,6 +182,21 @@ const useChipOwnLine = (
 };
 
 /**
+ * The title as the capture's page shows it: as typed, or as just saved, so words not saved yet,
+ * or put back by a discard, read the same in the row. A blank one shows the stored title.
+ */
+const useShownTitle = (id: CaptureId, stored: string): string => {
+  const shown = useSyncExternalStore(
+    drafts.subscribe,
+    () =>
+      drafts.draft(id)?.values.relationship ??
+      drafts.confirmed(id)?.relationship
+  );
+
+  return shown === undefined || isBlank(shown) ? stored : shown.trim();
+};
+
+/**
  * A capture in the list; right-click focuses it and opens what the capture's own "…" menu holds.
  * The row in focus takes the keys for a capture: ⌘C, the menu keys, Space to mark it done (or take
  * a done one back) and ⌫ to delete it. A row leaving the list hands focus on to the next row.
@@ -207,6 +225,14 @@ const CurrentRow = ({
   const menuHeld = useRef(false);
   const { platform } = libraryApi();
 
+  // Words typed in this capture that could not be saved: they wait in it, so the row says so.
+  const unsaved = useSyncExternalStore(
+    drafts.subscribe,
+    () => drafts.error(item.id) !== undefined
+  );
+
+  const title = useShownTitle(item.id, item.relationship);
+
   const commands = useCaptureCommands({
     due: item.due,
     from: "row",
@@ -214,16 +240,16 @@ const CurrentRow = ({
     reopenable: item.reopenable,
     row: link,
     status: item.status,
-    title: item.relationship,
+    title,
   });
 
   const { feedback } = commands;
 
-  // Words typed in this capture that could not be saved: they wait in it, so the row says so.
-  const unsaved = useSyncExternalStore(
-    drafts.subscribe,
-    () => drafts.error(item.id) !== undefined
-  );
+  /** A refused copy that offers Retry has a line of its own, under the row, outside its link. */
+  const refused =
+    feedback?.retry === undefined
+      ? null
+      : { retry: feedback.retry, text: feedback.text };
 
   const found = matchSource(item, needle);
   const dueShown = item.due !== null && item.status.kind !== "done";
@@ -396,7 +422,7 @@ const CurrentRow = ({
                 ref={column}
               >
                 <span className="line-clamp-2 text-sm leading-snug font-medium">
-                  <Highlight needle={needle} text={item.relationship} />
+                  <Highlight needle={needle} text={title} />
                 </span>
                 {found !== null && (
                   <span
@@ -416,7 +442,7 @@ const CurrentRow = ({
                   data-testid="row-meta"
                 >
                   {!chipOwnLine && badge}
-                  {feedback === null ? (
+                  {feedback === null || refused !== null ? (
                     <>
                       {unsaved && (
                         <span
@@ -480,6 +506,31 @@ const CurrentRow = ({
           <MenuEntries entries={commands.entries} kind="context" />
         </ContextMenuContent>
       </ContextMenu>
+      {refused !== null && (
+        <div
+          className="flex items-center gap-2 px-2 pt-0.5 pb-1.5"
+          data-testid="row-copy-refused"
+        >
+          <output
+            className="text-destructive min-w-0 flex-1 truncate text-xs"
+            title={refused.text}
+          >
+            {refused.text}
+          </output>
+          <Button
+            aria-label={`${retryLabel(refused.retry.kind)} “${title}”`}
+            onClick={() => {
+              // The row keeps focus, so ⌘C copies again once the words are saved.
+              link.current?.focus();
+              refused.retry.run();
+            }}
+            size="xs"
+            variant="outline"
+          >
+            Retry
+          </Button>
+        </div>
+      )}
       {commands.dialog}
     </li>
   );

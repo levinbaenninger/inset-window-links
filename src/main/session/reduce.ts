@@ -68,9 +68,22 @@ const exitApp = (exit: Exit): SessionEffect =>
     ? { relaunch: true, type: "exitApp" }
     : { type: "exitApp" };
 
+/** A save a quit or restart waits for is waited for SETTLE_MS at most, then the prompt asks again. */
 const startSave = (state: SessionState, after: "stay" | Exit): Transition => [
   { ...state, activity: { after, kind: "saving" }, notice: null },
-  [{ draft: state.draft, type: "publish" }],
+  after === "stay"
+    ? [{ draft: state.draft, type: "publish" }]
+    : [{ draft: state.draft, type: "publish" }, { type: "limitSaveWait" }],
+];
+
+/** Gives up a draft whose save is on its way: it never lands, and the panel or the app moves on. */
+const withdrawn = (
+  state: SessionState,
+  ids: IdSource,
+  then: SessionEffect
+): Transition => [
+  initialSession(ids.draftId()),
+  [{ draftId: state.draft.id, type: "withdraw" }, then],
 ];
 
 const restart = (ids: IdSource, effect: SessionEffect): Transition => [
@@ -291,14 +304,36 @@ const onCaptureFinished = (
   }
 };
 
+/** What happens once the save lands: stay, or the quit or restart it was waited for. */
+const afterSave = (activity: Activity): "stay" | Exit | null => {
+  switch (activity.kind) {
+    case "saving": {
+      return activity.after;
+    }
+
+    // The prompt asked again, but the user asked to quit and nothing is lost by now.
+    case "saveLate": {
+      return activity.exit;
+    }
+
+    default: {
+      return null;
+    }
+  }
+};
+
 const onSaveFinished = (
   state: SessionState,
   event: EventOf<"saveFinished">,
   ids: IdSource
 ): Transition => {
-  const { activity } = state;
+  const after = afterSave(state.activity);
 
-  if (activity.kind !== "saving" || event.draftId !== state.draft.id) {
+  if (
+    after === null ||
+    event.draftId !== state.draft.id ||
+    event.result.kind === "withdrawn"
+  ) {
     return unchanged(state);
   }
 
@@ -314,10 +349,20 @@ const onSaveFinished = (
 
   return restart(
     ids,
-    activity.after === "stay"
-      ? { type: "hidePopover" }
-      : exitApp(activity.after)
+    after === "stay" ? { type: "hidePopover" } : exitApp(after)
   );
+};
+
+/** The save a quit or restart waits for is late: the prompt asks again rather than exit. */
+const onSaveWaitEnded = (state: SessionState): Transition => {
+  const { activity } = state;
+
+  return activity.kind === "saving" && activity.after !== "stay"
+    ? [
+        { ...state, activity: { exit: activity.after, kind: "saveLate" } },
+        [{ type: "askQuit" }],
+      ]
+    : unchanged(state);
 };
 
 const onQuitRequested = (
@@ -329,11 +374,14 @@ const onQuitRequested = (
 
   if (activity.kind === "saving") {
     return activity.after === "stay"
-      ? [{ ...state, activity: { after: exit, kind: "saving" } }, []]
+      ? [
+          { ...state, activity: { after: exit, kind: "saving" } },
+          [{ type: "limitSaveWait" }],
+        ]
       : unchanged(state);
   }
 
-  if (activity.kind === "confirmingQuit") {
+  if (activity.kind === "confirmingQuit" || activity.kind === "saveLate") {
     return unchanged(state);
   }
 
@@ -354,12 +402,44 @@ const onQuitRequested = (
   ];
 };
 
+/** The prompt after a late save: Retry waits again, Cancel stays with the save going on. */
+const onLateChosen = (
+  state: SessionState,
+  exit: Exit,
+  event: EventOf<"quitChosen">,
+  ids: IdSource
+): Transition => {
+  switch (event.choice) {
+    case "discard": {
+      return withdrawn(state, ids, exitApp(exit));
+    }
+
+    case "cancel": {
+      return unchanged({
+        ...state,
+        activity: { after: "stay", kind: "saving" },
+      });
+    }
+
+    default: {
+      return [
+        { ...state, activity: { after: exit, kind: "saving" } },
+        [{ type: "limitSaveWait" }],
+      ];
+    }
+  }
+};
+
 const onQuitChosen = (
   state: SessionState,
   event: EventOf<"quitChosen">,
   ids: IdSource
 ): Transition => {
   const { activity } = state;
+
+  if (activity.kind === "saveLate") {
+    return onLateChosen(state, activity.exit, event, ids);
+  }
 
   if (activity.kind !== "confirmingQuit") {
     return unchanged(state);
@@ -593,7 +673,7 @@ const onTextChanged = (
   event: EventOf<"textChanged">
 ): Transition => {
   // While a quit save waits for a window, edits still count: the save has not been sent yet.
-  if (state.activity.kind === "saving") {
+  if (state.activity.kind === "saving" || state.activity.kind === "saveLate") {
     return unchanged(state);
   }
 
@@ -622,12 +702,25 @@ const onSaveRequested = (
     : [{ ...next, notice: { kind: check.reason } }, []];
 };
 
-/** Discard while a quit save waits for a window ends the quit there, without saving. */
+/**
+ * Discard while a quit save waits for a window ends the quit there, without saving. Discard while
+ * a save is on its way withdraws it, and a quit or restart it was waited for goes ahead.
+ */
 const onDiscard = (state: SessionState, ids: IdSource): Transition => {
   const { activity } = state;
 
   if (activity.kind === "savingWhenLanded") {
     return restart(ids, exitApp(activity.exit));
+  }
+
+  const after = afterSave(activity);
+
+  if (after !== null) {
+    return withdrawn(
+      state,
+      ids,
+      after === "stay" ? { type: "hidePopover" } : exitApp(after)
+    );
   }
 
   return canEditDraft(activity)
@@ -711,6 +804,10 @@ export const reduce = (
 
     case "quitChosen": {
       return onQuitChosen(state, event, ids);
+    }
+
+    case "saveWaitEnded": {
+      return onSaveWaitEnded(state);
     }
 
     case "permissionRechecked": {

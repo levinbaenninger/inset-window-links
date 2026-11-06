@@ -1,9 +1,10 @@
-import { app, BrowserWindow, nativeTheme } from "electron";
+import { app, BrowserWindow, dialog, nativeTheme } from "electron";
 
 import { pushChannels } from "../../shared/channels";
-import type { LeaveAnswer } from "../../shared/leave";
+import type { LeaveAnswer, LeaveReason } from "../../shared/leave";
 import type { PageCommand } from "../../shared/shortcuts";
-import { LeaveGate } from "../leave-gate";
+import type { LateChoice } from "../leave-gate";
+import { LeaveGate, lateDialog } from "../leave-gate";
 import { cursorWorkArea } from "./cursor-display";
 import { windowIcon } from "./icon";
 import { routeShowsCapture } from "./library-route";
@@ -41,6 +42,28 @@ const chrome = (): Electron.BrowserWindowConstructorOptions => {
     : {};
 };
 
+/** The page didn't answer in time: a native dialog asks, over its window when there is one. */
+const confirmLate = async (
+  contents: Electron.WebContents,
+  reason: LeaveReason,
+  count: number,
+  signal: AbortSignal
+): Promise<LateChoice> => {
+  const { choices, ...shown } = lateDialog(app.getName(), reason, count);
+  const options = { ...shown, noLink: true, signal, type: "warning" as const };
+
+  const win = contents.isDestroyed()
+    ? null
+    : BrowserWindow.fromWebContents(contents);
+
+  const { response } =
+    win === null
+      ? await dialog.showMessageBox(options)
+      : await dialog.showMessageBox(win, options);
+
+  return choices[response] ?? "cancel";
+};
+
 /** The secondary Recent Captures window. Created only on explicit request. */
 export class LibraryWindow {
   readonly #page: RendererPage;
@@ -63,6 +86,12 @@ export class LibraryWindow {
   /** Holds the window's close, and the app's quit, while the page has words that can't be saved. */
   readonly #leaving = new LeaveGate<Electron.WebContents>({
     ask: (contents, reason) => contents.send(pushChannels.leave, reason),
+    cancel: (contents) => {
+      if (!contents.isDestroyed()) {
+        contents.send(pushChannels.leave, "cancel");
+      }
+    },
+    confirm: confirmLate,
     show: () => this.open(),
   });
 
@@ -244,10 +273,10 @@ export class LibraryWindow {
     this.window()?.close();
   }
 
-  /** The page says whether it holds words main does not have. */
-  reportUnsaved(unsaved: boolean): void {
+  /** The page says how many captures hold words main does not have. */
+  reportUnsaved(count: number): void {
     if (this.#contents !== null) {
-      this.#leaving.report(this.#contents, unsaved);
+      this.#leaving.report(this.#contents, count);
     }
   }
 

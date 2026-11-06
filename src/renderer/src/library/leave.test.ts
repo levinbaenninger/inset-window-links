@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MutationOutcome } from "../../../shared/dto";
 import type { CaptureId } from "../../../shared/ids";
+import { SETTLE_MS } from "../../../shared/leave";
 import type { DraftText } from "../../../shared/text";
 import type { TextStore } from "./drafts";
-import { DraftStore } from "./drafts";
+import { DraftStore, SAVE_AFTER_MS } from "./drafts";
 import { LeaveFlow } from "./leave";
 
 // SAFETY: CaptureIds are branded UUID strings; the store only passes them through.
@@ -66,7 +67,7 @@ const setup = (outcomes: MutationOutcome[] = []) => {
 
   const flow = new LeaveFlow(drafts, () => ({
     answerLeave: (answer) => log.push(answer),
-    reportUnsaved: (unsaved) => log.push(`unsaved ${String(unsaved)}`),
+    reportUnsaved: (count) => log.push(`unsaved ${String(count)}`),
   }));
 
   /** Types a title into a capture and saves it now. */
@@ -95,7 +96,14 @@ const setup = (outcomes: MutationOutcome[] = []) => {
   };
 };
 
-const settled = () => vi.runAllTimersAsync();
+/** Past the pause before a save, well short of the wait's limit. */
+const settled = () => vi.advanceTimersByTimeAsync(SAVE_AFTER_MS + 10);
+
+const held = (
+  reason: "close" | "quit",
+  unsaved: { count: number; error: MutationOutcome | null; late: boolean },
+  retrying = false
+) => ({ kind: "held", reason, retrying, unsaved });
 
 describe(LeaveFlow, () => {
   beforeEach(() => {
@@ -112,7 +120,10 @@ describe(LeaveFlow, () => {
     flow.request("close");
     await settled();
 
-    expect([log, flow.state()]).toStrictEqual([["go"], { kind: "idle" }]);
+    expect([log, flow.state()]).toStrictEqual([
+      ["waiting", "go"],
+      { kind: "idle" },
+    ]);
   });
 
   it("waits for a save on its way, then goes without a prompt", async () => {
@@ -130,10 +141,10 @@ describe(LeaveFlow, () => {
 
     expect([waiting, log]).toStrictEqual([
       [
-        ["unsaved true", "save A limits C"],
+        ["unsaved 1", "save A limits C", "waiting"],
         { kind: "waiting", reason: "quit" },
       ],
-      ["unsaved true", "save A limits C", "unsaved false", "go"],
+      ["unsaved 1", "save A limits C", "waiting", "unsaved 0", "go"],
     ]);
   });
 
@@ -146,13 +157,8 @@ describe(LeaveFlow, () => {
     await settled();
 
     expect([log, flow.state()]).toStrictEqual([
-      ["unsaved true", "save A limits C", "held"],
-      {
-        kind: "held",
-        reason: "close",
-        retrying: false,
-        unsaved: { count: 1, error: DISK_FULL },
-      },
+      ["unsaved 1", "save A limits C", "waiting", "held"],
+      held("close", { count: 1, error: DISK_FULL, late: false }),
     ]);
   });
 
@@ -166,12 +172,150 @@ describe(LeaveFlow, () => {
     flow.request("quit");
     await settled();
 
-    expect(flow.state()).toStrictEqual({
-      kind: "held",
-      reason: "quit",
-      retrying: false,
-      unsaved: { count: 2, error: DISK_FULL },
-    });
+    expect(flow.state()).toStrictEqual(
+      held("quit", { count: 2, error: DISK_FULL, late: false })
+    );
+  });
+
+  it("holds after SETTLE_MS when a save never answers, saying it didn't finish in time, never going", async () => {
+    const { flow, hold, log, type } = setup();
+
+    hold();
+    type(A, "A limits C");
+    flow.request("close");
+    await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);
+
+    const before = flow.state();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const after = flow.state();
+
+    await vi.advanceTimersByTimeAsync(10 * SETTLE_MS);
+
+    expect([before, after, flow.state(), log]).toStrictEqual([
+      { kind: "waiting", reason: "close" },
+      held("close", { count: 1, error: null, late: true }),
+      after,
+      ["unsaved 1", "save A limits C", "waiting", "held"],
+    ]);
+  });
+
+  it("Retry that hangs holds again after SETTLE_MS", async () => {
+    const { flow, hold, log, type } = setup([DISK_FULL]);
+
+    type(A, "A limits C");
+    await settled();
+    flow.request("quit");
+    await settled();
+    hold();
+    flow.retry();
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+
+    expect([flow.state(), log.slice(-2)]).toStrictEqual([
+      held("quit", { count: 1, error: null, late: true }),
+      ["held", "save A limits C"],
+    ]);
+  });
+
+  it("Discard works at once while Retry is still saving, and the late answer brings nothing back", async () => {
+    const { drafts, flow, hold, log, release, type } = setup([DISK_FULL]);
+
+    type(A, "A limits C");
+    await settled();
+    flow.request("close");
+    await settled();
+    hold();
+    flow.retry();
+    flow.discard();
+
+    const atDiscard = [flow.state(), drafts.shown(A, stored), [...log]];
+
+    release();
+    await settled();
+
+    expect([
+      atDiscard,
+      drafts.shown(A, stored),
+      drafts.count,
+      log,
+    ]).toStrictEqual([
+      [
+        { kind: "idle" },
+        stored,
+        [
+          "unsaved 1",
+          "save A limits C",
+          "waiting",
+          "held",
+          "save A limits C",
+          "go",
+        ],
+      ],
+      stored,
+      0,
+      [
+        "unsaved 1",
+        "save A limits C",
+        "waiting",
+        "held",
+        "save A limits C",
+        "go",
+        "save A limits B",
+        "unsaved 0",
+      ],
+    ]);
+  });
+
+  it("Cancel works at once while Retry is still saving; that Retry's answer then changes nothing", async () => {
+    const { flow, hold, log, release, type } = setup([DISK_FULL]);
+
+    type(A, "A limits C");
+    await settled();
+    flow.request("close");
+    await settled();
+    hold();
+    flow.retry();
+    flow.cancel();
+    // A new close, while the cancelled Retry's save is still out.
+    flow.request("close");
+    release();
+    await settled();
+
+    expect([flow.state(), log]).toStrictEqual([
+      { kind: "idle" },
+      [
+        "unsaved 1",
+        "save A limits C",
+        "waiting",
+        "held",
+        "save A limits C",
+        "stay",
+        "waiting",
+        "unsaved 0",
+        "go",
+      ],
+    ]);
+  });
+
+  it("follows a save that lands late while the prompt shows, and goes once nothing is left", async () => {
+    const { flow, hold, log, release, type } = setup();
+
+    hold();
+    type(A, "A limits C");
+    flow.request("quit");
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+
+    const prompt = flow.state();
+
+    release();
+    await settled();
+
+    expect([prompt, flow.state(), log.slice(-3)]).toStrictEqual([
+      held("quit", { count: 1, error: null, late: true }),
+      { kind: "idle" },
+      ["held", "unsaved 0", "go"],
+    ]);
   });
 
   it("sends words still waiting for the pause, and waits again for an edit typed during the wait", async () => {
@@ -186,11 +330,14 @@ describe(LeaveFlow, () => {
     await settled();
 
     expect(log).toStrictEqual([
-      "unsaved true",
+      "unsaved 1",
       "save one",
+      "unsaved 2",
+      "waiting",
       "save pausing",
       "save two",
-      "unsaved false",
+      "unsaved 1",
+      "unsaved 0",
       "go",
     ]);
   });
@@ -207,9 +354,10 @@ describe(LeaveFlow, () => {
     await settled();
 
     expect(log).toStrictEqual([
-      "unsaved true",
+      "unsaved 1",
+      "waiting",
       "save A limits B / more",
-      "unsaved false",
+      "unsaved 0",
       "go",
     ]);
   });
@@ -221,7 +369,7 @@ describe(LeaveFlow, () => {
     await settled();
     flow.request("quit");
     await settled();
-    void flow.retry();
+    flow.retry();
 
     const retrying = flow.state();
 
@@ -229,30 +377,21 @@ describe(LeaveFlow, () => {
 
     const failedAgain = flow.state();
 
-    void flow.retry();
+    flow.retry();
     await settled();
 
     expect([retrying, failedAgain, flow.state(), log]).toStrictEqual([
-      {
-        kind: "held",
-        reason: "quit",
-        retrying: true,
-        unsaved: { count: 1, error: DISK_FULL },
-      },
-      {
-        kind: "held",
-        reason: "quit",
-        retrying: false,
-        unsaved: { count: 1, error: DISK_FULL },
-      },
+      held("quit", { count: 1, error: DISK_FULL, late: false }, true),
+      held("quit", { count: 1, error: DISK_FULL, late: false }),
       { kind: "idle" },
       [
-        "unsaved true",
+        "unsaved 1",
         "save A limits C",
+        "waiting",
         "held",
         "save A limits C",
         "save A limits C",
-        "unsaved false",
+        "unsaved 0",
         "go",
       ],
     ]);
@@ -269,10 +408,10 @@ describe(LeaveFlow, () => {
     flow.discard();
 
     expect([
-      log.slice(-3),
-      drafts.unsaved,
+      log.slice(-4),
+      drafts.count,
       drafts.shown(A, stored),
-    ]).toStrictEqual([["held", "unsaved false", "go"], false, stored]);
+    ]).toStrictEqual([["held", "unsaved 1", "unsaved 0", "go"], 0, stored]);
   });
 
   it("Cancel keeps the words and stays; the next close asks again", async () => {
@@ -293,9 +432,17 @@ describe(LeaveFlow, () => {
       [
         { kind: "idle" },
         "failed",
-        ["unsaved true", "save A limits C", "held", "stay"],
+        ["unsaved 1", "save A limits C", "waiting", "held", "stay"],
       ],
-      ["unsaved true", "save A limits C", "held", "stay", "held"],
+      [
+        "unsaved 1",
+        "save A limits C",
+        "waiting",
+        "held",
+        "stay",
+        "waiting",
+        "held",
+      ],
     ]);
   });
 
@@ -313,18 +460,14 @@ describe(LeaveFlow, () => {
     flow.discard();
 
     expect([shown, log]).toStrictEqual([
-      {
-        kind: "held",
-        reason: "quit",
-        retrying: false,
-        unsaved: { count: 1, error: DISK_FULL },
-      },
+      held("quit", { count: 1, error: DISK_FULL, late: false }),
       [
-        "unsaved true",
+        "unsaved 1",
         "save A limits C",
+        "waiting",
         "held",
         "held",
-        "unsaved false",
+        "unsaved 0",
         "go",
       ],
     ]);
@@ -341,10 +484,27 @@ describe(LeaveFlow, () => {
     await settled();
 
     expect(log).toStrictEqual([
-      "unsaved true",
+      "unsaved 1",
       "save A limits C",
-      "unsaved false",
+      "waiting",
+      "waiting",
+      "unsaved 0",
       "go",
+    ]);
+  });
+
+  it("drops the request without an answer once main stopped waiting for one", async () => {
+    const { flow, log, type } = setup([DISK_FULL]);
+
+    type(A, "A limits C");
+    await settled();
+    flow.request("close");
+    flow.dismiss();
+    await settled();
+
+    expect([flow.state(), log]).toStrictEqual([
+      { kind: "idle" },
+      ["unsaved 1", "save A limits C", "waiting"],
     ]);
   });
 });

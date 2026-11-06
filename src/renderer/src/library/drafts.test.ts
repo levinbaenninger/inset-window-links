@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MutationOutcome } from "../../../shared/dto";
 import type { CaptureId, ViewId } from "../../../shared/ids";
+import { SETTLE_MS } from "../../../shared/leave";
 import type { DraftText } from "../../../shared/text";
 import type { Draft, DraftEvent, Effect, TextStore } from "./drafts";
 import { DISCARDED, DraftStore, SAVE_AFTER_MS, step } from "./drafts";
@@ -145,6 +146,7 @@ describe("a capture's draft", () => {
       inFlight: null,
       kind: "dirty",
       rev: 2,
+      saved: sent("A limits C"),
       values: titled("A limits D"),
     });
   });
@@ -167,6 +169,7 @@ describe("a capture's draft", () => {
         error: DISK_FULL,
         kind: "failed",
         rev: 2,
+        saved: initial,
         values: titled("A limits D"),
       },
     ]);
@@ -223,7 +226,7 @@ describe("a capture's draft", () => {
         edit(1, "A limits C"),
         { kind: "flush" },
         { kind: "answered", outcome: DISK_FULL, rev: 1 },
-        { kind: "discard" },
+        { kind: "discard", rev: 2 },
       ]).log.at(-1)
     ).toStrictEqual({
       effects: [{ kind: "settle", outcome: DISCARDED, upTo: 1 }],
@@ -238,7 +241,7 @@ describe("a capture's draft", () => {
         { kind: "flush" },
         { kind: "answered", outcome: DISK_FULL, rev: 1 },
         edit(2, "A limits CD"),
-        { kind: "discard" },
+        { kind: "discard", rev: 3 },
       ]).log.at(-1)
     ).toStrictEqual({
       effects: [{ kind: "settle", outcome: DISCARDED, upTo: 2 }],
@@ -246,25 +249,136 @@ describe("a capture's draft", () => {
     });
   });
 
-  it("is not discarded while an older save is still on its way", () => {
-    expect(
-      run([
-        edit(1, "A limits C"),
-        { kind: "flush" },
-        edit(2, "A limits D"),
-        { kind: "discard" },
-      ]).log.at(-1)
-    ).toStrictEqual({ effects: [], state: "dirty 2" });
+  it("is discarded at once while an older save is on its way: the saved words show, and go after it", () => {
+    const { draft, log } = run([
+      edit(1, "A limits C"),
+      { kind: "flush" },
+      edit(2, "A limits D"),
+      { kind: "discard", rev: 3 },
+    ]);
+
+    expect([log.at(-1), draft]).toStrictEqual([
+      {
+        effects: [{ kind: "settle", outcome: DISCARDED, upTo: 2 }],
+        state: "dirty 3",
+      },
+      {
+        base: initial,
+        flushWanted: true,
+        inFlight: { discarded: true, rev: 1, sent: sent("A limits C") },
+        kind: "dirty",
+        rev: 3,
+        saved: initial,
+        values: initial,
+      },
+    ]);
   });
 
-  it("is never discarded while it may still be saving", () => {
+  it("puts the saved words back after discarded ones that land late, so they never stay on disk", () => {
     expect(
       run([
         edit(1, "A limits C"),
         { kind: "flush" },
-        { kind: "discard" },
+        { kind: "discard", rev: 2 },
+        { kind: "answered", outcome: { kind: "ok" }, rev: 1 },
+        { kind: "answered", outcome: { kind: "ok" }, rev: 2 },
+      ]).log
+    ).toStrictEqual([
+      { effects: [], state: "dirty 1" },
+      {
+        effects: [
+          {
+            call: { kind: "text", text: sent("A limits C") },
+            kind: "send",
+            rev: 1,
+          },
+        ],
+        state: "saving 1",
+      },
+      {
+        effects: [{ kind: "settle", outcome: DISCARDED, upTo: 1 }],
+        state: "dirty 2",
+      },
+      {
+        effects: [
+          { kind: "settle", outcome: { kind: "ok" }, upTo: 1 },
+          { call: { kind: "text", text: initial }, kind: "send", rev: 2 },
+        ],
+        state: "saving 2",
+      },
+      {
+        effects: [{ kind: "settle", outcome: { kind: "ok" }, upTo: 2 }],
+        state: "clean",
+      },
+    ]);
+  });
+
+  it("puts the saved words back again on a second Discard, once discarded words landed and putting them back failed", () => {
+    const { draft, log } = run([
+      edit(1, "A limits C"),
+      { kind: "flush" },
+      { kind: "discard", rev: 2 },
+      { kind: "answered", outcome: { kind: "ok" }, rev: 1 },
+      { kind: "answered", outcome: DISK_FULL, rev: 2 },
+      { kind: "discard", rev: 3 },
+    ]);
+
+    expect([log.slice(-2), draft]).toStrictEqual([
+      [
+        {
+          effects: [{ kind: "settle", outcome: DISK_FULL, upTo: 2 }],
+          state: "failed 2",
+        },
+        {
+          effects: [
+            { kind: "settle", outcome: DISCARDED, upTo: 2 },
+            { call: { kind: "text", text: initial }, kind: "send", rev: 3 },
+          ],
+          state: "saving 3",
+        },
+      ],
+      {
+        base: sent("A limits C"),
+        kind: "saving",
+        rev: 3,
+        saved: initial,
+        values: initial,
+      },
+    ]);
+  });
+
+  it("is clean when discarded words fail to save: main still holds the words on screen", () => {
+    expect(
+      run([
+        edit(1, "A limits C"),
+        { kind: "flush" },
+        { kind: "discard", rev: 2 },
+        { kind: "answered", outcome: DISK_FULL, rev: 1 },
       ]).log.at(-1)
-    ).toStrictEqual({ effects: [], state: "saving 1" });
+    ).toStrictEqual({
+      effects: [
+        { kind: "settle", outcome: DISK_FULL, upTo: 1 },
+        { kind: "settle", outcome: { kind: "ok" }, upTo: 2 },
+      ],
+      state: "clean",
+    });
+  });
+
+  it("is clean when words typed back to the saved ones meet a failed save of the others", () => {
+    expect(
+      run([
+        edit(1, "A limits C"),
+        { kind: "flush" },
+        edit(2, "A limits B"),
+        { kind: "answered", outcome: DISK_FULL, rev: 1 },
+      ]).log.at(-1)
+    ).toStrictEqual({
+      effects: [
+        { kind: "settle", outcome: DISK_FULL, upTo: 1 },
+        { kind: "settle", outcome: { kind: "ok" }, upTo: 2 },
+      ],
+      state: "clean",
+    });
   });
 
   it("is clean at once, with nothing sent, when its words are what main holds", () => {
@@ -558,6 +672,225 @@ describe(DraftStore, () => {
     });
   });
 
+  it("shows the saved words at once on Discard changes, even while their save hangs, and puts them back after it", async () => {
+    const { calls, drafts, hold, release, shown } = setup([DISK_FULL]);
+
+    drafts.edit(ID, titled("FAILED ONCE"), initial);
+    drafts.flush(ID);
+    await vi.runAllTimersAsync();
+    hold();
+    void drafts.retry(ID);
+
+    const copy = drafts.snapshot(ID);
+
+    drafts.discard(ID);
+
+    const atDiscard = {
+      error: drafts.error(ID),
+      shown: shown().relationship,
+    };
+
+    // The discarded words land late, and well: the saved words go after them.
+    release();
+    await vi.runAllTimersAsync();
+
+    expect({
+      atDiscard,
+      calls,
+      copy: copy.kind === "pending" ? await copy.saved : copy.kind,
+      draft: drafts.draft(ID),
+      shown: shown().relationship,
+    }).toStrictEqual({
+      atDiscard: { error: undefined, shown: "A limits B" },
+      calls: [
+        "text FAILED ONCE Call:false",
+        "text FAILED ONCE Call:false",
+        "text A limits B Call:false",
+      ],
+      copy: DISCARDED,
+      draft: undefined,
+      shown: "A limits B",
+    });
+  });
+
+  it("never shows discarded words again when their late save fails", async () => {
+    const { calls, drafts, hold, shown } = setup();
+    const answers: ((outcome: MutationOutcome) => void)[] = [];
+
+    const late = new DraftStore(() => ({
+      setTodoDone: () => Promise.resolve({ kind: "ok" }),
+      updateText: (_id, text) => {
+        calls.push(`text ${text.relationship}`);
+
+        const { promise, resolve } = Promise.withResolvers<MutationOutcome>();
+
+        answers.push(resolve);
+
+        return promise;
+      },
+    }));
+
+    hold();
+    late.edit(ID, titled("DISCARD ME"), initial);
+    late.flush(ID);
+    late.discard(ID);
+
+    const atDiscard = late.shown(ID, initial).relationship;
+
+    answers.shift()?.(DISK_FULL);
+    await vi.runAllTimersAsync();
+
+    expect({
+      atDiscard,
+      calls,
+      draft: late.draft(ID),
+      error: late.error(ID),
+      later: late.shown(ID, initial).relationship,
+      untouched: [drafts.draft(ID), shown().relationship],
+    }).toStrictEqual({
+      atDiscard: "A limits B",
+      calls: ["text DISCARD ME"],
+      draft: undefined,
+      error: undefined,
+      later: "A limits B",
+      untouched: [undefined, "A limits B"],
+    });
+  });
+
+  it("keeps putting the saved words back when discarded ones landed and the put-back failed", async () => {
+    const calls: string[] = [];
+    const answers: ((outcome: MutationOutcome) => void)[] = [];
+
+    const late = new DraftStore(() => ({
+      setTodoDone: () => Promise.resolve({ kind: "ok" }),
+      updateText: (_id, text) => {
+        calls.push(`text ${text.relationship}`);
+
+        const { promise, resolve } = Promise.withResolvers<MutationOutcome>();
+
+        answers.push(resolve);
+
+        return promise;
+      },
+    }));
+
+    // What main reads back once the discarded words landed.
+    const onDisk = titled("DISCARD ME");
+
+    const seen = () => [
+      late.shown(ID, onDisk).relationship,
+      late.error(ID)?.kind ?? "no error",
+    ];
+
+    late.edit(ID, titled("DISCARD ME"), initial);
+    late.flush(ID);
+    late.discard(ID);
+    answers.shift()?.({ kind: "ok" });
+    await vi.runAllTimersAsync();
+    answers.shift()?.(DISK_FULL);
+    await vi.runAllTimersAsync();
+
+    const afterFailedPutBack = seen();
+
+    late.discard(ID);
+
+    const afterSecondDiscard = seen();
+
+    answers.shift()?.({ kind: "ok" });
+    await vi.runAllTimersAsync();
+
+    expect({
+      afterFailedPutBack,
+      afterSecondDiscard,
+      calls,
+      draft: late.draft(ID),
+      settled: seen(),
+    }).toStrictEqual({
+      afterFailedPutBack: ["A limits B", "failed"],
+      afterSecondDiscard: ["A limits B", "no error"],
+      calls: ["text DISCARD ME", "text A limits B", "text A limits B"],
+      draft: undefined,
+      settled: ["A limits B", "no error"],
+    });
+  });
+
+  it("answers a Retry whose save hangs after SETTLE_MS, keeping the words", async () => {
+    const { drafts, hold } = setup([DISK_FULL]);
+
+    drafts.edit(ID, titled("A limits C"), initial);
+    drafts.flush(ID);
+    await vi.runAllTimersAsync();
+    hold();
+
+    const retried = drafts.retry(ID);
+    const now = () => Promise.race([retried, Promise.resolve("still waiting")]);
+
+    await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);
+
+    const before = await now();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect([
+      before,
+      await now(),
+      drafts.draft(ID)?.values.relationship,
+      drafts.error(ID),
+    ]).toStrictEqual([
+      "still waiting",
+      { kind: "failed", message: "Saving didn't finish in time." },
+      "A limits C",
+      DISK_FULL,
+    ]);
+  });
+
+  it("answers Retry with how its save went", async () => {
+    const { drafts } = setup([DISK_FULL, DISK_FULL]);
+
+    drafts.edit(ID, titled("A limits C"), initial);
+    drafts.flush(ID);
+    await vi.runAllTimersAsync();
+
+    const again = drafts.retry(ID);
+
+    await vi.runAllTimersAsync();
+
+    const saved = drafts.retry(ID);
+
+    await vi.runAllTimersAsync();
+
+    expect([await again, await saved, await drafts.retry(ID)]).toStrictEqual([
+      DISK_FULL,
+      { kind: "ok" },
+      { kind: "ok" },
+    ]);
+  });
+
+  it("stops waiting for a save that never answers after SETTLE_MS, and says so", async () => {
+    const drafts = new DraftStore(() => ({
+      setTodoDone: () => Promise.resolve({ kind: "ok" }),
+      updateText: () => Promise.withResolvers<MutationOutcome>().promise,
+    }));
+
+    drafts.edit(ID, titled("HUNG"), initial);
+
+    const settling = drafts.settle();
+
+    const now = () =>
+      Promise.race([settling, Promise.resolve("still waiting")]);
+
+    await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);
+
+    const before = await now();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect([before, await now()]).toStrictEqual([
+      "still waiting",
+      { count: 1, error: null, late: true },
+    ]);
+  });
+
   it("sends failed words again on Retry", async () => {
     const { calls, drafts } = setup([DISK_FULL]);
 
@@ -584,7 +917,7 @@ describe(DraftStore, () => {
     await vi.runAllTimersAsync();
 
     expect(drafts.draft(ID)).toMatchObject({
-      error: { kind: "failed", message: "Error: closed" },
+      error: { kind: "failed", message: "Couldn't save." },
       kind: "failed",
     });
   });

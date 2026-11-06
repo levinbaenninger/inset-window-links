@@ -11,31 +11,24 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 
-import type { SaveError } from "./drafts";
+import { SAVE_LATE } from "../../../shared/leave";
+import type { Unsaved } from "./drafts";
+import { reasonOf } from "./drafts";
 import type { LeaveState } from "./leave";
 import { leaving } from "./page-drafts";
 
-const reasonOf = (error: SaveError): string => {
-  switch (error.kind) {
-    case "missing": {
-      return "The capture was deleted.";
-    }
-
-    case "readOnly": {
-      return "The capture can't be changed.";
-    }
-
-    default: {
-      return error.message;
-    }
-  }
-};
+/** Why the words aren't saved: the first failure, and saves that didn't finish in time. */
+const why = ({ error, late }: Unsaved): string =>
+  [error === null ? null : reasonOf(error), late ? SAVE_LATE : null]
+    .filter((part) => part !== null)
+    .join(" ");
 
 type Held = LeaveState & { kind: "held" };
 
 /**
- * Shown when the window closes, or the app quits, with words that could not be saved. Return
- * retries, and closes once they are saved; Escape cancels.
+ * Shown when the window closes, or the app quits, with words that could not be saved, or not in
+ * time. Return always retries, whichever button has focus, and closes once they are saved;
+ * Escape cancels; Space presses the focused button, so Discard stays a deliberate choice.
  */
 export const LeavePrompt = () => {
   const state = useSyncExternalStore(leaving.subscribe, leaving.state);
@@ -50,10 +43,11 @@ export const LeavePrompt = () => {
 
   const ready = held !== null && !held.retrying;
 
-  // Disabled while it retries, the button loses focus; it gets it back for the next Return.
+  // Disabled while it retries, the button loses focus; it gets it back for the next Return. Its
+  // ring shows however focus got there, so it is clear what Return does.
   useEffect(() => {
     if (ready) {
-      retry.current?.focus();
+      retry.current?.focus({ focusVisible: true });
     }
   }, [ready]);
 
@@ -74,18 +68,17 @@ export const LeavePrompt = () => {
     >
       <AlertDialogContent
         data-testid="leave-prompt"
-        onKeyDown={(event) => {
-          if (
-            event.key === "Enter" &&
-            !(event.target instanceof HTMLButtonElement)
-          ) {
+        // Before the focused button sees it: Return must not press Discard or Cancel.
+        onKeyDownCapture={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
             event.preventDefault();
-            void leaving.retry();
+            event.stopPropagation();
+            leaving.retry();
           }
         }}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
-          retry.current?.focus();
+          retry.current?.focus({ focusVisible: true });
         }}
       >
         <AlertDialogHeader>
@@ -94,24 +87,16 @@ export const LeavePrompt = () => {
               ? "1 change couldn't be saved"
               : `${count} changes couldn't be saved`}
           </AlertDialogTitle>
-          <AlertDialogDescription>
-            {reasonOf(shown.unsaved.error)}
-          </AlertDialogDescription>
+          <AlertDialogDescription>{why(shown.unsaved)}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <Button
-            disabled={shown.retrying}
-            onClick={() => leaving.discard()}
-            variant="destructive"
-          >
+          <Button onClick={() => leaving.discard()} variant="destructive">
             {shown.reason === "quit" ? "Discard and quit" : "Discard and close"}
           </Button>
           <Button
             disabled={shown.retrying}
-            onClick={() => {
-              void leaving.retry();
-            }}
+            onClick={() => leaving.retry()}
             ref={retry}
           >
             Retry

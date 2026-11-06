@@ -64,7 +64,9 @@ export type Notice =
   | { kind: "needsRelationship" };
 
 export type ActivitySummary =
-  | { kind: "idle" | "saving" | "confirmingQuit" }
+  | { kind: "idle" | "saving" }
+  /** The quit prompt; `late` once a save it waits for didn't land within SETTLE_MS. */
+  | { kind: "confirmingQuit"; late: boolean }
   | {
       kind: "capturing";
       /** The window being captured, once identified. Shown only where capture is slow (Windows). */

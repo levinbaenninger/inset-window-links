@@ -70,4 +70,10 @@ describe("the copy gate", () => {
       callers.filter((file) => file.startsWith("src/renderer"))
     ).toStrictEqual(["src/renderer/src/library/copy-gate.ts"]);
   });
+
+  it("is the only place a copy begins, so main takes the capture before any wait", async () => {
+    await expect(filesMatching(/\.beginCopy\s*\(/u)).resolves.toStrictEqual([
+      "src/renderer/src/library/copy-gate.ts",
+    ]);
+  });
 });

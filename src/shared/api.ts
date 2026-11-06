@@ -1,4 +1,4 @@
-import type { CopyRequest } from "./copy";
+import type { CopyOutcome, CopyRequest, CopyTicket } from "./copy";
 import type {
   CaptureDetail,
   CapturePlatform,
@@ -9,7 +9,7 @@ import type {
 } from "./dto";
 import type { DueDate } from "./due";
 import type { CandidateId, CaptureId, ViewId } from "./ids";
-import type { LeaveAnswer, LeaveReason } from "./leave";
+import type { LeaveAnswer, LeavePush } from "./leave";
 import type { SettingsChange, SettingsView } from "./settings";
 import type { PageCommand } from "./shortcuts";
 import type { StatusRequest } from "./status";
@@ -54,15 +54,21 @@ export interface LibraryApi {
     due: DueDate | null
   ) => Promise<MutationOutcome>;
   /**
-   * Copies a capture; only the page's copy gate calls this, once its edits are saved. `text` is
-   * the words the copy was asked for, which main copies instead of reading them back; null copies
-   * the stored words.
+   * Starts a copy: main takes the capture as it stands once every write sent before this has
+   * landed, its due date and windows included, and keeps it under `ticket`.
+   */
+  beginCopy: (ticket: CopyTicket, captureId: CaptureId) => void;
+  /**
+   * Copies what `beginCopy` took; only the page's copy gate calls this, once its edits are saved.
+   * `text` is the words the copy was asked for, which main copies instead of reading them back;
+   * null copies the words main had when the copy began.
    */
   copy: (
+    ticket: CopyTicket,
     captureId: CaptureId,
     request: CopyRequest,
     text: DraftText | null
-  ) => Promise<MutationOutcome>;
+  ) => Promise<CopyOutcome>;
   shortcut: () => Promise<ShortcutStatus>;
   /** Starts a native file drag of the saved PNG, for dropping into another app. */
   dragImage: (captureId: CaptureId, viewId: ViewId) => void;
@@ -78,8 +84,8 @@ export interface LibraryApi {
   ) => Promise<{ failed: number }>;
   /** Says when the page's first menu opens and its last one closes: main leaves the keys to it meanwhile. */
   menuOpen: (open: boolean) => void;
-  /** Says when the page first holds words main does not have, and when it holds none: main holds a close meanwhile. */
-  reportUnsaved: (unsaved: boolean) => void;
+  /** Says how many captures hold words main does not have, whenever that changes: main holds a close meanwhile. */
+  reportUnsaved: (count: number) => void;
   /** Answers main's request to let the window go (onLeave). */
   answerLeave: (answer: LeaveAnswer) => void;
   /** Shows the capture panel, to start or continue a capture. */
@@ -118,7 +124,10 @@ export type LibraryBridge = LibraryApi & {
   onNavigate: (listener: (route: string) => void) => () => void;
   /** A menu key for the page: a field, the open capture, the sidebar, the sheet. */
   onCommand: (listener: (command: PageCommand) => void) => () => void;
-  /** Main asks the page to let its window close, or the app quit; it answers with answerLeave. */
-  onLeave: (listener: (reason: LeaveReason) => void) => () => void;
+  /**
+   * Main asks the page to let its window close, or the app quit, and the page answers with
+   * answerLeave; or main says it stopped waiting (`cancel`).
+   */
+  onLeave: (listener: (push: LeavePush) => void) => () => void;
   platform: CapturePlatform;
 };

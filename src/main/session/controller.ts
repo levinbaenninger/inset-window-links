@@ -3,6 +3,7 @@ import { app, BrowserWindow } from "electron";
 import type { DraftSnapshot } from "../../shared/dto";
 import type { CaptureId } from "../../shared/ids";
 import { newDraftId } from "../../shared/ids";
+import { SETTLE_MS } from "../../shared/leave";
 import type { WindowCapturer } from "../capture/capturer";
 import { capturePlatform, screenAccess } from "../capture/capturer";
 import type { ImageRef } from "../ipc/image-url";
@@ -45,6 +46,8 @@ export class SessionController {
   #waiting: Exit | null = null;
   /** Set while the quit is asked for again once Recent Captures let go, so it then exits at once. */
   #released = false;
+  /** Ends the wait of a quit or restart for its save; the latest wait replaces any before it. */
+  #saveWait: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     capturer: WindowCapturer,
@@ -59,7 +62,9 @@ export class SessionController {
 
     // Any way the quit prompt goes away other than its buttons counts as Cancel, so quitting never sticks.
     popover.onHidden(() => {
-      if (this.#state.activity.kind === "confirmingQuit") {
+      const { kind } = this.#state.activity;
+
+      if (kind === "confirmingQuit" || kind === "saveLate") {
         this.chooseQuit("cancel");
       }
     });
@@ -210,6 +215,20 @@ export class SessionController {
 
       case "publish": {
         void this.#publish(effect.draft);
+        break;
+      }
+
+      case "limitSaveWait": {
+        clearTimeout(this.#saveWait);
+        this.#saveWait = setTimeout(
+          () => this.dispatch({ type: "saveWaitEnded" }),
+          SETTLE_MS
+        );
+        break;
+      }
+
+      case "withdraw": {
+        this.#store.withdraw(effect.draftId);
         break;
       }
 

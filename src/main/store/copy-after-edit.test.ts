@@ -3,17 +3,22 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { copyCapture as copyThroughGate } from "../../renderer/src/library/copy-gate";
+import {
+  canRetry,
+  copyCapture as copyThroughGate,
+} from "../../renderer/src/library/copy-gate";
 import { DraftStore } from "../../renderer/src/library/drafts";
 import type { CopyRequest } from "../../shared/copy";
+import { newCopyTicket } from "../../shared/copy";
 import type { MutationOutcome } from "../../shared/dto";
 import { DraftIdSchema, ViewIdSchema } from "../../shared/ids";
+import { SETTLE_MS } from "../../shared/leave";
 import type { DraftText } from "../../shared/text";
 import type { Clip } from "./copy";
-import { copyCapture } from "./copy";
-import { failingWrites, nodeStoreFs, slowWrites } from "./fs";
+import { copyCapture, CopyStarts } from "./copy";
+import { failingWrites, heldWrites, nodeStoreFs, slowWrites } from "./fs";
 import { formatEntry } from "./note";
 import type { CaptureRecord } from "./schema";
 import { CaptureStore } from "./store";
@@ -70,10 +75,12 @@ const setup = async () => {
 
   let failing = false;
 
-  const store = await CaptureStore.open(
-    root,
+  // A held write fails as it is let go when the disk filled meanwhile.
+  const disk = heldWrites(
     failingWrites(slowWrites(nodeStoreFs, 30), () => failing)
   );
+
+  const store = await CaptureStore.open(root, disk.fs);
 
   await store.publish({
     images: new Map([[VIEW, new Uint8Array([1])]]),
@@ -103,6 +110,7 @@ const setup = async () => {
 
   /** The clipboard main writes, as plain text or as "PNG <bytes>" for an image. */
   const clipboard: string[] = [];
+  const starts = new CopyStarts(store);
 
   /** What the page's copy gate does, against the real store and main's copy. */
   const gate = (request: CopyRequest, id = ID) =>
@@ -110,9 +118,12 @@ const setup = async () => {
       id,
       request,
       {
-        copy: (captureId, asked, text) =>
+        beginCopy: (ticket, captureId) => starts.begin(ticket, captureId),
+        copy: (ticket, captureId, asked, text) =>
           copyCapture(
             store,
+            starts,
+            ticket,
             captureId,
             asked,
             text,
@@ -149,8 +160,10 @@ const setup = async () => {
   return {
     clipboard,
     copy,
+    disk,
     drafts,
     gate,
+    store,
     hold: () => {
       holding = true;
     },
@@ -222,16 +235,14 @@ describe("Copy as Text after an edit", () => {
 
     expect({
       clipboard,
-      reason:
-        result.kind === "notSaved" &&
-        result.outcome.kind === "failed" &&
-        result.outcome.message.includes("Injected write failure"),
-      result: result.kind,
+      result,
       shown: drafts.shown(ID, stored).description,
     }).toStrictEqual({
       clipboard: [],
-      reason: true,
-      result: "notSaved",
+      result: {
+        kind: "notSaved",
+        outcome: { kind: "failed", message: "The disk is full." },
+      },
       shown: "NEW UNSAVED WORDS",
     });
   });
@@ -436,6 +447,159 @@ describe("A copy during a held save", () => {
   });
 });
 
+/** Everything a copy outputs is taken when it starts: Due too, and on a capture with no edits. */
+describe("The due date in a copy", () => {
+  it("is the one from when the copy began, though Due changes during the held save", async () => {
+    const { clipboard, gate, hold, release, store, type } = await setup();
+
+    await store.setDue(ID, "2026-11-06", new Date());
+    hold();
+    type({ ...stored, relationship: "FIRST" });
+
+    const copying = gate({ kind: "note" });
+
+    await store.setDue(ID, "2026-12-20", new Date());
+    release();
+
+    expect([await copying, clipboard]).toStrictEqual([
+      { kind: "copied" },
+      [
+        [
+          "FIRST",
+          "",
+          "Old description",
+          "",
+          "Due: Friday, 6 November 2026",
+          "",
+          "Windows:",
+          "1. Budget (Numbers), captured 5 Nov 2026, 08:59",
+          "   OLD WINDOW DESCRIPTION",
+        ].join("\n"),
+      ],
+    ]);
+  });
+
+  it("is the one from when the copy began on a capture with nothing unsaved, behind a slow write", async () => {
+    const { clipboard, gate, store } = await setup();
+
+    // A write sent before the copy is still on its way; one sent after it changes Due again.
+    const before = store.setDue(ID, "2026-11-06", new Date());
+    const copying = gate({ kind: "note" });
+    const after = store.setDue(ID, "2026-12-20", new Date());
+
+    await Promise.all([before, after]);
+
+    const result = await copying;
+
+    expect([
+      result,
+      clipboard.map((note) =>
+        note.split("\n").find((line) => line.startsWith("Due:"))
+      ),
+    ]).toStrictEqual([{ kind: "copied" }, ["Due: Friday, 6 November 2026"]]);
+  });
+
+  it("is one picked a moment before the copy, still being written", async () => {
+    const { clipboard, gate, store } = await setup();
+
+    const picking = store.setDue(ID, "2026-11-09", new Date());
+    const result = await gate({ kind: "note" });
+
+    await picking;
+
+    expect([
+      result,
+      clipboard.map((note) =>
+        note.split("\n").find((line) => line.startsWith("Due:"))
+      ),
+    ]).toStrictEqual([{ kind: "copied" }, ["Due: Monday, 9 November 2026"]]);
+  });
+
+  it("refuses when a Due picked before the copy can't be written, rather than copy the old one", async () => {
+    const { clipboard, disk, gate, setFailing, store } = await setup();
+
+    await store.setDue(ID, "2026-11-06", new Date());
+    disk.hold();
+
+    const picking = store.setDue(ID, "2026-12-20", new Date());
+
+    await until(() => disk.waiting() > 0);
+
+    const copying = gate({ kind: "note" });
+
+    setFailing(true);
+    disk.release();
+
+    const result = await copying;
+
+    expect({
+      clipboard,
+      due: await picking,
+      result,
+      retry: canRetry(result),
+    }).toStrictEqual({
+      clipboard: [],
+      due: { kind: "failed", message: "The disk is full." },
+      result: {
+        kind: "notSaved",
+        outcome: { kind: "failed", message: "The disk is full." },
+      },
+      retry: true,
+    });
+  });
+});
+
+describe("A copy behind a write that hangs", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is refused once SETTLE_MS pass, with Retry, and never copies when the write lands later", async () => {
+    const { clipboard, disk, gate, store } = await setup();
+
+    disk.hold();
+
+    const picking = store.setDue(ID, "2026-12-20", new Date());
+
+    await until(() => disk.waiting() > 0);
+    vi.useFakeTimers();
+
+    const copying = gate({ kind: "note" });
+
+    const now = () =>
+      Promise.race([copying, Promise.resolve("still waiting" as const)]);
+
+    await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);
+
+    const before = await now();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const result = await now();
+
+    vi.useRealTimers();
+    disk.release();
+    await picking;
+    await store.idle();
+    await sleep(20);
+
+    expect({
+      before,
+      clipboard,
+      result,
+      retry: result === "still waiting" ? false : canRetry(result),
+    }).toStrictEqual({
+      before: "still waiting",
+      clipboard: [],
+      result: {
+        kind: "notSaved",
+        outcome: { kind: "failed", message: "Saving didn't finish in time." },
+      },
+      retry: true,
+    });
+  });
+});
+
 describe("Main's copy", () => {
   it("reports a capture that is gone instead of saying it copied", async () => {
     const { clipboard } = await setup();
@@ -446,9 +610,15 @@ describe("Main's copy", () => {
     );
 
     const empty = await CaptureStore.open(root, nodeStoreFs);
+    const starts = new CopyStarts(empty);
+    const ticket = newCopyTicket();
+
+    starts.begin(ticket, ID);
 
     const outcome = await copyCapture(
       empty,
+      starts,
+      ticket,
       ID,
       { kind: "entry" },
       null,
@@ -461,5 +631,49 @@ describe("Main's copy", () => {
     );
 
     expect([outcome, clipboard]).toStrictEqual([{ kind: "missing" }, []]);
+  });
+
+  it("copies nothing for a copy it never saw begin, or one begun for another capture", async () => {
+    const { clipboard, store } = await setup();
+    const starts = new CopyStarts(store);
+    const ticket = newCopyTicket();
+
+    starts.begin(ticket, OTHER);
+
+    const write = (clip: Clip) => {
+      clipboard.push(clip.kind);
+
+      return Promise.resolve();
+    };
+
+    const place = { locale: "en-GB", timeZone: "UTC" };
+
+    expect([
+      await copyCapture(
+        store,
+        starts,
+        ticket,
+        ID,
+        { kind: "entry" },
+        null,
+        write,
+        place
+      ),
+      await copyCapture(
+        store,
+        starts,
+        newCopyTicket(),
+        ID,
+        { kind: "entry" },
+        null,
+        write,
+        place
+      ),
+      clipboard,
+    ]).toStrictEqual([
+      { kind: "failed", message: "Couldn't copy. Try again." },
+      { kind: "failed", message: "Couldn't copy. Try again." },
+      [],
+    ]);
   });
 });

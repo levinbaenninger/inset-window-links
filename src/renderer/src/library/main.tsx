@@ -9,7 +9,7 @@ import { listenForCommands } from "@/lib/commands";
 import { announceMenus } from "@/lib/menu-keys";
 import { followSystemTheme } from "@/lib/theme";
 
-import { LeaveReasonSchema } from "../../../shared/leave";
+import { LeavePushSchema } from "../../../shared/leave";
 import { listenForCopy } from "./copy-keys";
 import { LeavePrompt } from "./leave-prompt";
 import { drafts, leaving } from "./page-drafts";
@@ -33,10 +33,16 @@ announceMenus((open) => libraryApi().menuOpen(open));
 // may not have been reported yet: this is the last chance to send them.
 window.addEventListener("pagehide", () => drafts.leave());
 
-libraryApi().onLeave((reason) => {
-  const parsed = LeaveReasonSchema.safeParse(reason);
+libraryApi().onLeave((push) => {
+  const parsed = LeavePushSchema.safeParse(push);
 
-  if (parsed.success) {
+  if (!parsed.success) {
+    return;
+  }
+
+  if (parsed.data === "cancel") {
+    leaving.dismiss();
+  } else {
     leaving.request(parsed.data);
   }
 });

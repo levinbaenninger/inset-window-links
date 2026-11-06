@@ -48,7 +48,9 @@ const clipText = (capture, request) => {
     }
 
     case "note": {
-      return `${entryText(capture)}\n\n(Copy as text)`;
+      const due = capture.due === null ? "" : `\n\nDue: ${capture.due}`;
+
+      return `${entryText(capture)}${due}\n\n(Copy as text)`;
     }
 
     default: {
@@ -92,6 +94,11 @@ if (page === "popover") {
 
         return nothing();
       },
+      chooseQuit: (choice) => {
+        record("chooseQuit", choice);
+
+        return nothing();
+      },
       dismiss: () => record("dismiss"),
     },
     nothing
@@ -104,6 +111,9 @@ if (page === "library") {
 
   /** Text saves a scene holds back until it calls __releaseSaves, as a slow disk would. */
   const heldSaves = [];
+
+  /** What each copy began with, by ticket, as main takes it: the capture as it stood then. */
+  const begun = new Map();
 
   globalThis.__releaseSaves = () => {
     for (const run of heldSaves.splice(0)) {
@@ -149,21 +159,46 @@ if (page === "library") {
   globalThis.inset = withFallback(
     {
       answerLeave: (answer) => record("answerLeave", answer),
-      // Main writes the clipboard once the page's edits are saved, from the words the page sent
-      // when there are any. The call is recorded after it, under the name of what was copied, so a
-      // scene can tell ⌘C, Copy as text and an image apart.
-      copy: async (captureId, request, text) => {
+      beginCopy: (ticket, captureId) => {
         const capture = captures.find((item) => item.id === captureId);
 
-        if (capture === undefined) {
+        begun.set(ticket, {
+          capture: capture === undefined ? undefined : structuredClone(capture),
+          captureId,
+        });
+        record("beginCopy", captureId);
+      },
+      // Main writes the clipboard once the page's edits are saved: the capture as it stood when the
+      // copy began, with the words the page sent when there are any. The call is recorded after
+      // it, under the name of what was copied, so a scene can tell ⌘C, Copy as text and an image
+      // apart.
+      copy: async (ticket, captureId, request, text) => {
+        const start = begun.get(ticket);
+
+        begun.delete(ticket);
+
+        if (start === undefined || start.captureId !== captureId) {
+          return { kind: "failed", message: "Couldn't copy. Try again." };
+        }
+
+        // Main's capture as the copy began was not on disk: a write before it failed or ran late.
+        const notSaved = data.copyNotSaved?.shift();
+
+        if (notSaved !== undefined) {
+          record("copyRefused", captureId);
+
+          return { kind: "notSaved", message: notSaved };
+        }
+
+        if (start.capture === undefined) {
           return { kind: "missing" };
         }
 
         const words =
           text === null || text === undefined
-            ? capture
+            ? start.capture
             : {
-                ...capture,
+                ...start.capture,
                 description: text.description,
                 relationship: text.relationship,
               };
@@ -204,7 +239,7 @@ if (page === "library") {
       onLeave: (listener) => subscribe("leave", listener),
       onNavigate: none,
       platform,
-      reportUnsaved: (unsaved) => record("reportUnsaved", unsaved),
+      reportUnsaved: (count) => record("reportUnsaved", count),
       setDue: (captureId, due) => {
         const found = captures.find((capture) => capture.id === captureId);
 

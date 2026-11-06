@@ -24,6 +24,7 @@ import { useCommands } from "@/lib/commands";
 import { useWindowFocus } from "@/lib/use-window-focus";
 
 import type { DraftSnapshot, PendingSummary } from "../../../shared/dto";
+import { SAVE_LATE } from "../../../shared/leave";
 import type { KeyPlatform } from "../../../shared/shortcuts";
 import { menuKeyLabel } from "../../../shared/shortcuts";
 import type { DraftText, Saveability } from "../../../shared/text";
@@ -176,14 +177,17 @@ const PromptRow = ({
   children,
   label,
   testId,
+  onKeyDownCapture,
 }: {
   children: React.ReactNode;
   label: React.ReactNode;
   testId: string;
+  onKeyDownCapture?: (event: React.KeyboardEvent) => void;
 }) => (
   <footer
     className="bg-muted flex items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-3"
     data-testid={testId}
+    onKeyDownCapture={onKeyDownCapture}
   >
     <div className="flex min-w-0 flex-1 flex-col text-xs">{label}</div>
     <span className="flex shrink-0 gap-1.5">{children}</span>
@@ -201,55 +205,97 @@ const landingName = (landing: DraftSnapshot["landing"]): string | null => {
   return only === undefined ? null : (only?.appName ?? "the window");
 };
 
+/** Why the quit prompt asks: a save it waited for ran late, a check blocks Save, or a window is landing. */
+const quitDetail = (
+  late: boolean,
+  check: Saveability,
+  landing: string | null
+): string | null => {
+  if (late) {
+    return SAVE_LATE;
+  }
+
+  if (check.kind === "blocked") {
+    return blockedReasons[check.reason];
+  }
+
+  return landing === null ? null : `Save waits for ${landing} to be added.`;
+};
+
 /**
- * Shown when Quit meets an unsaved draft. Escape cancels, like the Cancel button. With a window
- * still being added, it says that Save waits for it.
+ * Shown when Quit meets an unsaved draft, and again when the save it chose ran late; Save is
+ * then Retry, which waits once more. Return always saves or retries, whichever button has focus;
+ * Escape cancels, like the Cancel button; Space presses the focused button, so Discard stays a
+ * deliberate choice. Save has focus, with its ring, so it is clear what Return does.
  */
 const QuitPrompt = ({
   check,
   landing,
+  late,
+  primary,
 }: {
   check: Saveability;
   landing: string | null;
-}) => (
-  <PromptRow
-    label={
-      <>
-        <p className="font-medium">Save before quitting?</p>
-        {check.kind === "blocked" ? (
-          <p className="text-muted-foreground">
-            {blockedReasons[check.reason]}
-          </p>
-        ) : (
-          landing !== null && (
-            <p className="text-muted-foreground truncate">
-              Save waits for {landing} to be added.
+  late: boolean;
+  primary: RefObject<HTMLButtonElement | null>;
+}) => {
+  const detail = quitDetail(late, check, landing);
+
+  useEffect(() => {
+    primary.current?.focus({ focusVisible: true });
+  }, [primary]);
+
+  return (
+    <PromptRow
+      label={
+        <>
+          <p className="font-medium">Save before quitting?</p>
+          {detail !== null && (
+            <p
+              className={cn(
+                "text-muted-foreground",
+                check.kind !== "blocked" && "truncate"
+              )}
+            >
+              {detail}
             </p>
-          )
-        )}
-      </>
-    }
-    testId="quit-prompt"
-  >
-    <Button onClick={() => chooseQuit("cancel")} size="sm" variant="ghost">
-      Cancel
-    </Button>
-    <Button
-      onClick={() => chooseQuit("discard")}
-      size="sm"
-      variant="destructive"
+          )}
+        </>
+      }
+      // Before the focused button sees it: Return must not press Discard or Cancel.
+      onKeyDownCapture={(event) => {
+        if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+          event.preventDefault();
+          event.stopPropagation();
+
+          if (check.kind === "ok") {
+            void chooseQuit("save");
+          }
+        }
+      }}
+      testId="quit-prompt"
     >
-      Discard
-    </Button>
-    <Button
-      disabled={check.kind !== "ok"}
-      onClick={() => chooseQuit("save")}
-      size="sm"
-    >
-      Save
-    </Button>
-  </PromptRow>
-);
+      <Button onClick={() => chooseQuit("cancel")} size="sm" variant="ghost">
+        Cancel
+      </Button>
+      <Button
+        onClick={() => chooseQuit("discard")}
+        size="sm"
+        variant="destructive"
+      >
+        Discard
+      </Button>
+      <Button
+        disabled={check.kind !== "ok"}
+        onClick={() => chooseQuit("save")}
+        ref={primary}
+        size="sm"
+      >
+        {late ? "Retry" : "Save"}
+      </Button>
+    </PromptRow>
+  );
+};
 
 export interface TextBlockHandle {
   focusDescription: () => void;
@@ -494,6 +540,8 @@ const DraftForm = ({
   setText: (text: DraftText) => void;
 }) => {
   const relationship = useRef<HTMLTextAreaElement>(null);
+  /** The quit prompt's Save, while it shows: it takes focus over the text. */
+  const quitSave = useRef<HTMLButtonElement>(null);
   const block = useRef<TextBlockHandle>(null);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [sheet, setSheet] = useState(false);
@@ -541,7 +589,12 @@ const DraftForm = ({
     () =>
       popoverApi().onShown(() => {
         setConfirmingDiscard(false);
-        relationship.current?.focus();
+
+        if (quitSave.current === null || quitSave.current.disabled) {
+          relationship.current?.focus();
+        } else {
+          quitSave.current.focus({ focusVisible: true });
+        }
       }),
     []
   );
@@ -766,8 +819,13 @@ const DraftForm = ({
         </div>
       </PanelScroll>
       <div className="shrink-0 px-3.5 pt-3 pb-3.5">
-        {quitting && (
-          <QuitPrompt check={check} landing={landingName(snapshot.landing)} />
+        {snapshot.activity.kind === "confirmingQuit" && (
+          <QuitPrompt
+            check={check}
+            landing={landingName(snapshot.landing)}
+            late={snapshot.activity.late}
+            primary={quitSave}
+          />
         )}
         {!quitting && confirmingDiscard && (
           <PromptRow
