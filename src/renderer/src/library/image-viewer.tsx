@@ -16,8 +16,10 @@ import { libraryApi } from "@/lib/bridge";
 import { formatWhen, viewTitle } from "@/lib/format";
 
 import type { CaptureDetail, ViewSummary } from "../../../shared/dto";
+import { copyCapture, notCopiedText } from "./copy-gate";
 
 const FEEDBACK_MS = 2000;
+const FAILURE_MS = 6000;
 
 /** The capture's windows along the foot of the viewer; the open one is marked. */
 const Filmstrip = ({
@@ -73,6 +75,8 @@ export const ImageViewer = ({
 }) => {
   const navigate = useNavigate();
   const [copied, setCopied] = useState(false);
+  /** Why the last copy put nothing on the clipboard, such as an edit that could not be saved. */
+  const [refused, setRefused] = useState<string | null>(null);
   const [reopened, setReopened] = useState<string | null>(null);
   const [actualSize, setActualSize] = useState(false);
   const captureId = detail.id;
@@ -136,9 +140,20 @@ export const ImageViewer = ({
   const cssHeight = Math.round(view.height / window.devicePixelRatio);
 
   const copy = async () => {
-    await libraryApi().copyImage(captureId, view.id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), FEEDBACK_MS);
+    const result = await copyCapture(
+      captureId,
+      { kind: "image", viewId: view.id },
+      libraryApi()
+    );
+
+    if (result.kind === "copied") {
+      setRefused(null);
+      setCopied(true);
+      setTimeout(() => setCopied(false), FEEDBACK_MS);
+    } else {
+      setRefused(notCopiedText(result, "viewer"));
+      setTimeout(() => setRefused(null), FAILURE_MS);
+    }
   };
 
   const reopen = async () => {
@@ -178,6 +193,15 @@ export const ImageViewer = ({
         {reopened !== null && (
           <output className="text-muted-foreground mr-1 text-xs">
             {reopened}
+          </output>
+        )}
+        {refused !== null && (
+          <output
+            className="text-destructive mr-1 max-w-1/2 min-w-0 truncate text-xs"
+            data-testid="viewer-feedback"
+            title={refused}
+          >
+            {refused}
           </output>
         )}
         {view.origin !== null && (

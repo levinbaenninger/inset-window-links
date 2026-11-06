@@ -23,9 +23,7 @@ export const popoverChannels = {
 
 export const libraryChannels = {
   addWindows: "send",
-  copyEntry: "invoke",
-  copyImage: "invoke",
-  copyNote: "invoke",
+  copy: "invoke",
   dragImage: "send",
   get: "invoke",
   list: "invoke",

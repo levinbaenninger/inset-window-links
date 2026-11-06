@@ -132,6 +132,83 @@ export const keyLabel = (
   return mac ? [...shown, keyName].join("") : [...shown, keyName].join("+");
 };
 
+/** The parts of a keydown that pick a shortcut, as the page sees them. */
+export interface KeyPressLike {
+  key: string;
+  code: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}
+
+const ALNUM = /^[a-z0-9]$/u;
+
+/**
+ * The key pressed, as an accelerator names it. A typed ASCII character decides, so a Dvorak user
+ * presses the letter the menu names. ⌥ on a Mac types another character, such as "ç" for C, and
+ * other scripts type other letters, so the physical key decides then.
+ */
+const pressedKey = (press: KeyPressLike): string => {
+  const typed = press.key.toLowerCase();
+
+  if (/^[!-~]$/u.test(typed)) {
+    return typed;
+  }
+
+  const physical = /^(?:Key(?<letter>[A-Z])|Digit(?<digit>\d))$/u.exec(
+    press.code
+  );
+
+  return (
+    physical?.groups?.["letter"]?.toLowerCase() ??
+    physical?.groups?.["digit"] ??
+    typed
+  );
+};
+
+/**
+ * Whether a keydown is an accelerator on a platform: ⌘ on a Mac and Ctrl on Windows for
+ * CommandOrControl. A punctuation key such as "/" matches with or without Shift, because some
+ * layouts need Shift to type it.
+ */
+export const pressMatches = (
+  accelerator: string,
+  press: KeyPressLike,
+  platform: KeyPlatform
+): boolean => {
+  const parts = accelerator.split("+");
+  const key = (parts.at(-1) ?? "").toLowerCase();
+
+  const command =
+    parts.includes("CommandOrControl") || parts.includes("Command");
+
+  const control = parts.includes("Control");
+
+  const mac = platform === "macos";
+
+  return (
+    press.metaKey === (mac && command) &&
+    press.ctrlKey === (mac ? control : command || control) &&
+    press.altKey === parts.includes("Alt") &&
+    (!ALNUM.test(key) || press.shiftKey === parts.includes("Shift")) &&
+    pressedKey(press) === key
+  );
+};
+
+/** ⌘C on a capture copies its title and description. Not a menu key: the Edit menu's Copy runs it. */
+export const COPY_ACCELERATOR = "CommandOrControl+C";
+
+/** Whether a keydown is one of the app's own keys: a menu key or ⌘C. */
+export const isAppShortcut = (
+  press: KeyPressLike,
+  platform: KeyPlatform
+): boolean =>
+  pressMatches(COPY_ACCELERATOR, press, platform) ||
+  Object.values(MENU_KEYS).some((key: MenuKey) =>
+    pressMatches(acceleratorFor(key, platform), press, platform)
+  );
+
 /** The label of a menu key on a platform, such as ⌘D or Ctrl+D. */
 export const menuKeyLabel = (id: MenuKeyId, platform: KeyPlatform): string =>
   keyLabel(acceleratorFor(MENU_KEYS[id], platform), platform);

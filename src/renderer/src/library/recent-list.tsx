@@ -36,6 +36,7 @@ import {
 import { libraryApi } from "@/lib/bridge";
 import { useCommands } from "@/lib/commands";
 import { formatClock, formatDay } from "@/lib/format";
+import type { MenuKey } from "@/lib/menu-keys";
 
 import type { CaptureListItem, ListedView } from "../../../shared/dto";
 import type { DueFilter, SearchQuery } from "../../../shared/due";
@@ -180,8 +181,9 @@ const useChipOwnLine = (
  * A capture in the list; right-click focuses it and opens what the capture's own "…" menu holds.
  * The row in focus takes the keys for a capture: ⌘C, the menu keys, Space to mark it done (or take
  * a done one back) and ⌫ to delete it. A row leaving the list hands focus on to the next row.
- * While its menu is open, the keys the menu shows act on this row too: the menu closes, focus
- * comes back here, and the row does what the key says.
+ * While its menu is open, the keys the menu shows act on this row whatever is highlighted: the
+ * menu closes, focus comes back here, and the row does what the key says. Space and Return pick
+ * the highlighted item instead.
  */
 const CurrentRow = ({
   item,
@@ -200,6 +202,8 @@ const CurrentRow = ({
   const [menuOpen, setMenuOpen] = useState(false);
   /** A key pressed in the open menu, run once the menu has closed. */
   const afterMenu = useRef<RowAction | null>(null);
+  /** From the menu opening until it has given focus back. */
+  const menuHeld = useRef(false);
   const { platform } = libraryApi();
 
   const commands = useCaptureCommands({
@@ -230,7 +234,7 @@ const CurrentRow = ({
       }
 
       case "copyNote": {
-        void commands.copy.run();
+        void commands.copyNote.run();
         break;
       }
 
@@ -265,10 +269,60 @@ const CurrentRow = ({
     }
   };
 
+  /** A key the open menu shows: it runs for this row, whatever item is highlighted. */
+  const menuKey = (key: MenuKey): boolean => {
+    if (key === "reopen" && commands.reopen === null) {
+      return false;
+    }
+
+    act(key);
+
+    return true;
+  };
+
   useEntryCopy(link, () => act("copyEntry"));
 
+  /*
+   * A row leaving the list while it has focus, or while its menu has (or just had) it, hands
+   * focus on to the next row. A menu item such as Mark as done can take the row out before the
+   * closed menu gives focus back, and an open menu keeps focus inside it until it has gone, so
+   * focus moves on once the menu is gone and only when nothing else took it.
+   */
+  useLayoutEffect(() => {
+    const row = link.current;
+
+    return () => {
+      const focused = document.activeElement;
+      const lost = focused === null || focused === document.body;
+
+      const inMenu =
+        focused?.closest(`[data-row-menu="${item.id}"]`) !== null &&
+        focused !== null;
+
+      if (
+        row === null ||
+        !(focused === row || inMenu || (lost && menuHeld.current))
+      ) {
+        return;
+      }
+
+      const next = neighborRow(row);
+
+      setTimeout(() => {
+        const current = document.activeElement;
+
+        if (
+          next?.isConnected === true &&
+          (current === null || current === document.body)
+        ) {
+          next.focus();
+        }
+      }, 0);
+    };
+  }, [item.id]);
+
   useCommands((command) => {
-    if (!menuOpen && document.activeElement !== link.current) {
+    if (document.activeElement !== link.current) {
       return false;
     }
 
@@ -299,6 +353,7 @@ const CurrentRow = ({
           setMenuOpen(open);
 
           if (open) {
+            menuHeld.current = true;
             commands.onMenuOpen();
           }
         }}
@@ -379,12 +434,14 @@ const CurrentRow = ({
         </ContextMenuTrigger>
         <ContextMenuContent
           className="min-w-52"
+          data-row-menu={item.id}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
 
             const action = afterMenu.current;
 
             afterMenu.current = null;
+            menuHeld.current = false;
 
             const row = link.current;
 
@@ -401,15 +458,7 @@ const CurrentRow = ({
               run(action);
             }
           }}
-          onKeyDownCapture={(event) => {
-            const action = rowKey(event, platform);
-
-            if (action !== null) {
-              event.preventDefault();
-              event.stopPropagation();
-              act(action);
-            }
-          }}
+          onMenuKey={menuKey}
         >
           <MenuEntries entries={commands.entries} kind="context" />
         </ContextMenuContent>
@@ -533,6 +582,56 @@ export const DueSuggestions = ({
   );
 };
 
+const FULL_PLACEHOLDER = "Search or due:today";
+
+/** Air between the end of the placeholder and the filter button. */
+const PLACEHOLDER_AIR = 12;
+
+/**
+ * The search's placeholder: "Search or due:today" when it fits with some air, else "Search", so
+ * at the narrowest sidebar it never runs into the filter button.
+ */
+const useFittingPlaceholder = (
+  field: RefObject<HTMLInputElement | null>
+): string => {
+  const [fits, setFits] = useState(true);
+
+  useLayoutEffect(() => {
+    const input = field.current;
+    const context = document.createElement("canvas").getContext("2d");
+
+    if (input === null || context === null) {
+      return;
+    }
+
+    const check = () => {
+      const style = getComputedStyle(input);
+
+      context.font = style.font;
+
+      // Computed padding is always in px, such as "6px".
+      const room =
+        input.clientWidth -
+        Number(style.paddingLeft.slice(0, -2)) -
+        Number(style.paddingRight.slice(0, -2));
+
+      setFits(
+        context.measureText(FULL_PLACEHOLDER).width + PLACEHOLDER_AIR <= room
+      );
+    };
+
+    const observer = new ResizeObserver(check);
+
+    observer.observe(input);
+    // The width of the text changes once the font has loaded.
+    void document.fonts.ready.then(check);
+
+    return () => observer.disconnect();
+  }, [field]);
+
+  return fits ? FULL_PLACEHOLDER : "Search";
+};
+
 /**
  * The sidebar's search. Its filter menu adds a due filter to the words, which can also be typed;
  * Return finishes a due: word being typed, and Escape clears the search.
@@ -550,6 +649,7 @@ export const SearchField = ({
 }) => {
   const parsed = parseQuery(query);
   const active = parsed.due;
+  const placeholder = useFittingPlaceholder(field);
 
   const setFilter = (filter: DueFilter | null) => {
     onQuery(withDueFilter(query, filter === active ? null : filter));
@@ -579,7 +679,7 @@ export const SearchField = ({
             onQuery(withDueFilter(query, first));
           }
         }}
-        placeholder="Search or due:today"
+        placeholder={placeholder}
         ref={field}
         type="text"
         value={query}

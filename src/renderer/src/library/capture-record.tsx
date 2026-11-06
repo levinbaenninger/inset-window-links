@@ -46,6 +46,7 @@ import {
 import { libraryApi } from "@/lib/bridge";
 import { useCommands } from "@/lib/commands";
 import { formatWhen, viewTitle } from "@/lib/format";
+import type { MenuKey } from "@/lib/menu-keys";
 
 import type {
   CaptureDetail,
@@ -71,9 +72,9 @@ import {
 } from "./capture-commands";
 import { useEntryCopy } from "./copy-keys";
 import { ImageViewer } from "./image-viewer";
-import { InlineSaver, trackSaver } from "./inline-saver";
+import { saverFor, trackSaver } from "./inline-saver";
 import { PaneHeader } from "./pane-header";
-import { openMenuRow, ROW_SELECTOR } from "./row-keys";
+import { ROW_SELECTOR } from "./row-keys";
 
 const route = getRouteApi("/captures/$captureId");
 
@@ -128,19 +129,15 @@ const OriginButton = ({
   );
 };
 
-const CopyImage = ({
-  captureId,
-  view,
-}: {
-  captureId: CaptureId;
-  view: ViewSummary;
-}) => {
+/** Says Copied only once the image is on the clipboard; a refusal shows in the page header. */
+const CopyImage = ({ onCopy }: { onCopy: () => Promise<boolean> }) => {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
-    await libraryApi().copyImage(captureId, view.id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (await onCopy()) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), FEEDBACK_MS);
+    }
   };
 
   return (
@@ -180,6 +177,7 @@ const SourceCard = ({
   onDescribe,
   onLeave,
   onReopen,
+  onCopyImage,
 }: {
   captureId: CaptureId;
   view: ViewSummary;
@@ -188,6 +186,7 @@ const SourceCard = ({
   onDescribe: (description: string) => void;
   onLeave: () => void;
   onReopen: (view: ViewSummary) => void;
+  onCopyImage: () => Promise<boolean>;
 }) => {
   const field = useRef<HTMLTextAreaElement>(null);
   const [adding, setAdding] = useState(false);
@@ -220,7 +219,7 @@ const SourceCard = ({
             width={view.width}
           />
         </Link>
-        <CopyImage captureId={captureId} view={view} />
+        <CopyImage onCopy={onCopyImage} />
       </div>
       <div className="flex min-w-0 items-center gap-2 px-0.5">
         <p
@@ -364,6 +363,7 @@ const Record = ({
   } | null>(null);
 
   const [dueError, setDueError] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [reopened, setReopened] = useState<string | null>(null);
   const now = useToday();
   const { platform } = libraryApi();
@@ -390,6 +390,25 @@ const Record = ({
   useEntryCopy(page, () => {
     void commands.copyEntry.run();
   });
+
+  /** A key the ⋯ menu shows runs for the open capture, whatever item is highlighted. */
+  const moreKey = (key: MenuKey): boolean => {
+    const item = {
+      copyEntry: commands.copyEntry,
+      copyNote: commands.copyNote,
+      delete: null,
+      reopen: commands.reopen,
+    }[key];
+
+    if (item === null) {
+      return false;
+    }
+
+    setMoreOpen(false);
+    void item.run();
+
+    return true;
+  };
 
   const shown: Feedback | null =
     reopened === null ? commands.feedback : { failed: false, text: reopened };
@@ -435,9 +454,8 @@ const Record = ({
   };
 
   useCommands((command) => {
-    // A sidebar row in focus, or with its menu open, takes the keys for a capture itself.
-    const rowFocused =
-      (document.activeElement?.closest(ROW_SELECTOR) ?? openMenuRow()) !== null;
+    // A sidebar row in focus takes the keys for a capture itself.
+    const rowFocused = document.activeElement?.closest(ROW_SELECTOR) !== null;
 
     if (
       rowFocused &&
@@ -474,7 +492,7 @@ const Record = ({
       }
 
       case "copyNote": {
-        void commands.copy.run();
+        void commands.copyNote.run();
 
         return true;
       }
@@ -562,11 +580,24 @@ const Record = ({
             isDone ? commands.backToList.run() : commands.done.run()
           }
         />
-        <DropdownMenu onOpenChange={(open) => open && commands.onMenuOpen()}>
+        <DropdownMenu
+          onOpenChange={(open) => {
+            setMoreOpen(open);
+
+            if (open) {
+              commands.onMenuOpen();
+            }
+          }}
+          open={moreOpen}
+        >
           <DropdownMenuTrigger asChild>
             <IconButton icon={MoreHorizontalIcon} label="More" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-52">
+          <DropdownMenuContent
+            align="end"
+            className="min-w-52"
+            onMenuKey={moreKey}
+          >
             <MenuEntries entries={commands.entries} kind="dropdown" />
           </DropdownMenuContent>
         </DropdownMenu>
@@ -751,6 +782,7 @@ const Record = ({
                       },
                     })
                   }
+                  onCopyImage={() => commands.copyImage(item.id)}
                   onLeave={onLeave}
                   onReopen={(view) => reopen([view])}
                   view={item}
@@ -776,10 +808,7 @@ const CapturePane = ({
   detail: CaptureDetail;
   viewIndex: number;
 }) => {
-  const saver = useMemo(
-    () => new InlineSaver(detail.id, libraryApi()),
-    [detail.id]
-  );
+  const saver = useMemo(() => saverFor(detail.id, libraryApi()), [detail.id]);
 
   const { text, outcome } = useSyncExternalStore(saver.subscribe, saver.state);
 
@@ -788,14 +817,13 @@ const CapturePane = ({
     saver.adopt(textOf(detail));
   }, [saver, detail]);
 
-  // A copy from the sidebar or a menu key waits for what is typed here.
-  useEffect(() => trackSaver(detail.id, saver), [detail.id, saver]);
-
   /*
-   * Leaving the capture for another one unmounts the pane, which saves what is left. Closing the
-   * window runs no cleanup and, with ⌘W from the menu, no blur either, so pagehide saves then.
+   * A copy from the sidebar or a menu key waits for what is typed here. Leaving the capture for
+   * another one unmounts the pane, which saves what is left before the saver is let go. Closing
+   * the window runs no cleanup and, with ⌘W from the menu, no blur either, so pagehide saves then.
    */
   useEffect(() => {
+    const untrack = trackSaver(detail.id, saver);
     const flush = () => saver.flush({ leaving: true });
 
     window.addEventListener("pagehide", flush);
@@ -803,8 +831,9 @@ const CapturePane = ({
     return () => {
       window.removeEventListener("pagehide", flush);
       saver.flush();
+      untrack();
     };
-  }, [saver]);
+  }, [detail.id, saver]);
 
   if (detail.views[viewIndex] !== undefined) {
     return <ImageViewer detail={detail} index={viewIndex} />;

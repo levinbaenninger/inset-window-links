@@ -1,7 +1,9 @@
 import { useEffect, useEffectEvent } from "react";
 import type { RefObject } from "react";
 
-import { openMenuRow, ROW_SELECTOR } from "./row-keys";
+import { keyForMenu } from "@/lib/menu-keys";
+
+import { ROW_SELECTOR } from "./row-keys";
 
 /** What ⌘C runs for each sidebar row and for the open capture's page. */
 const copiers = new WeakMap<Element, () => void>();
@@ -34,10 +36,14 @@ const editable = (element: Element | null) =>
   (element instanceof HTMLElement && element.isContentEditable);
 
 /**
- * The copy ⌘C runs: the row whose menu is open, else the row in focus, else the open capture.
- * Nothing while a text field has focus or text is selected, so ⌘C there copies as it always does.
+ * The copy ⌘C runs: the open menu's, else the row in focus, else the open capture. Nothing while a
+ * text field has focus or text is selected, so ⌘C there copies as it always does.
  */
 const entryCopier = (): (() => void) | null => {
+  if (keyForMenu(null)) {
+    return () => keyForMenu("copyEntry");
+  }
+
   const active = document.activeElement;
 
   if (
@@ -48,7 +54,6 @@ const entryCopier = (): (() => void) | null => {
   }
 
   const holder =
-    openMenuRow() ??
     active?.closest(ROW_SELECTOR) ??
     // The open capture's page.
     document.querySelector("[data-copy-entry]");

@@ -6,6 +6,10 @@ import { cn } from "cn";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import * as React from "react";
 
+import { keyPlatform } from "@/lib/bridge";
+import type { MenuKeyHandler } from "@/lib/menu-keys";
+import { menuKeyDown, useMountedMenu } from "@/lib/menu-keys";
+
 function DropdownMenu({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
@@ -35,12 +39,32 @@ function DropdownMenuContent({
   className,
   align = "start",
   sideOffset = 4,
+  onMenuKey,
+  onKeyDownCapture,
+  onKeyDown,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
+  /** Runs the keys the menu shows for its owner; see menu-keys. */
+  onMenuKey?: MenuKeyHandler;
+}) {
+  const content = React.useRef<HTMLDivElement>(null);
+
+  useMountedMenu(content, onMenuKey);
+
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
+        ref={content}
+        onKeyDownCapture={(event) => {
+          onKeyDownCapture?.(event);
+          menuKeyDown(event, onMenuKey, keyPlatform());
+        }}
+        onKeyDown={(event) => {
+          onKeyDown?.(event);
+          // The menu has had the key; the page under it never gets it.
+          event.stopPropagation();
+        }}
         sideOffset={sideOffset}
         align={align}
         className={cn(

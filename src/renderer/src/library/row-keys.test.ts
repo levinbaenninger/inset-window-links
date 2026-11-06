@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { isAppShortcut } from "../../../shared/shortcuts";
+import { menuKeyOf } from "../lib/menu-keys";
 import type { RowKeyPress } from "./row-keys";
 import { rowKey } from "./row-keys";
 
@@ -104,5 +106,66 @@ describe(rowKey, () => {
 
   it("ignores letters typed without ⌘", () => {
     expect(rowKey(press({ code: "KeyC", key: "c" }), "macos")).toBeNull();
+  });
+});
+
+describe(menuKeyOf, () => {
+  it("leaves Space and Return to the menu, which picks the highlighted item", () => {
+    expect([
+      menuKeyOf(press({ code: "Space", key: " " }), "macos"),
+      menuKeyOf(press({ code: "Enter", key: "Enter" }), "macos"),
+      menuKeyOf(press({ code: "Enter", key: "Enter" }), "windows"),
+    ]).toStrictEqual([null, null, null]);
+  });
+
+  it("reads the keys a row menu shows: ⌘C, ⌥⌘C, ⌘O and ⌫", () => {
+    expect([
+      menuKeyOf(press({ code: "KeyC", key: "c", metaKey: true }), "macos"),
+      menuKeyOf(
+        press({ altKey: true, code: "KeyC", key: "ç", metaKey: true }),
+        "macos"
+      ),
+      menuKeyOf(press({ code: "KeyO", ctrlKey: true, key: "o" }), "windows"),
+      menuKeyOf(press({ code: "Backspace", key: "Backspace" }), "macos"),
+    ]).toStrictEqual(["copyEntry", "copyNote", "reopen", "delete"]);
+  });
+});
+
+describe(isAppShortcut, () => {
+  it("counts every other app key, so an open menu can swallow it", () => {
+    const mac = [
+      press({ code: "KeyD", key: "D", metaKey: true, shiftKey: true }),
+      press({ code: "KeyD", key: "d", metaKey: true }),
+      press({ code: "KeyS", key: "S", metaKey: true, shiftKey: true }),
+      press({ code: "KeyF", key: "f", metaKey: true }),
+      press({ code: "Digit1", key: "1", metaKey: true }),
+      press({ code: "Comma", key: ",", metaKey: true }),
+      press({ code: "KeyS", ctrlKey: true, key: "s", metaKey: true }),
+      // "/" is Shift+7 on a German keyboard.
+      press({ code: "Digit7", key: "/", metaKey: true, shiftKey: true }),
+    ];
+
+    expect([
+      ...mac.map((key) => isAppShortcut(key, "macos")),
+      isAppShortcut(
+        press({ code: "KeyB", ctrlKey: true, key: "b" }),
+        "windows"
+      ),
+    ]).toStrictEqual([...mac.map(() => true), true]);
+  });
+
+  it("leaves menu navigation, typing and system keys alone", () => {
+    const keys = [
+      press({ code: "Space", key: " " }),
+      press({ code: "Enter", key: "Enter" }),
+      press({ code: "ArrowDown", key: "ArrowDown" }),
+      press({ code: "KeyM", key: "m" }),
+      press({ code: "KeyQ", key: "q", metaKey: true }),
+      press({ code: "KeyD", ctrlKey: true, key: "d" }),
+    ];
+
+    expect(keys.map((key) => isAppShortcut(key, "macos"))).toStrictEqual(
+      keys.map(() => false)
+    );
   });
 });

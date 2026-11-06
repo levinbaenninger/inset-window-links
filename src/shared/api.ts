@@ -1,3 +1,4 @@
+import type { CopyRequest } from "./copy";
 import type {
   CaptureDetail,
   CapturePlatform,
@@ -51,11 +52,12 @@ export interface LibraryApi {
     captureId: CaptureId,
     due: DueDate | null
   ) => Promise<MutationOutcome>;
-  /** What ⌘C copies: the stored title and description. */
-  copyEntry: (captureId: CaptureId) => Promise<void>;
-  copyNote: (captureId: CaptureId) => Promise<void>;
+  /** Copies the stored capture; only the page's copy gate calls this, once its edits are saved. */
+  copy: (
+    captureId: CaptureId,
+    request: CopyRequest
+  ) => Promise<MutationOutcome>;
   shortcut: () => Promise<ShortcutStatus>;
-  copyImage: (captureId: CaptureId, viewId: ViewId) => Promise<void>;
   /** Starts a native file drag of the saved PNG, for dropping into another app. */
   dragImage: (captureId: CaptureId, viewId: ViewId) => void;
   setTodoDone: (

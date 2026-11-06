@@ -244,17 +244,53 @@ export class InlineSaver {
   }
 }
 
-/** The saver of each capture open for editing, so a copy from anywhere can wait for its edits. */
-const editing = new Map<CaptureId, InlineSaver>();
+/** A capture's saver while its page is open, and how many mounts of the page hold it. */
+interface Held {
+  saver: InlineSaver;
+  holds: number;
+}
 
-/** Makes `saver` the one savePending waits on for its capture, until the returned call. */
+/** The saver of each capture open for editing, so a copy from anywhere can wait for its edits. */
+const editing = new Map<CaptureId, Held>();
+
+/**
+ * The saver for a capture's page: the one it already has, holding whatever is typed and not yet
+ * saved, or a new one. The page can mount again, such as on the way to its image viewer, and must
+ * not lose that text to the stored copy.
+ */
+export const saverFor = (id: CaptureId, store: TextStore): InlineSaver =>
+  editing.get(id)?.saver ?? new InlineSaver(id, store);
+
+/**
+ * Makes `saver` the one savePending waits on for its capture. The returned call lets it go once
+ * everything it has sent so far has answered, so a copy made just after the capture was left
+ * still waits for its last save and learns whether it failed.
+ */
 export const trackSaver = (id: CaptureId, saver: InlineSaver): (() => void) => {
-  editing.set(id, saver);
+  const held = editing.get(id);
+
+  if (held?.saver === saver) {
+    held.holds += 1;
+  } else {
+    editing.set(id, { holds: 1, saver });
+  }
+
+  const release = async () => {
+    await saver.settled();
+
+    const now = editing.get(id);
+
+    if (now?.saver === saver) {
+      now.holds -= 1;
+
+      if (now.holds === 0) {
+        editing.delete(id);
+      }
+    }
+  };
 
   return () => {
-    if (editing.get(id) === saver) {
-      editing.delete(id);
-    }
+    void release();
   };
 };
 
@@ -265,7 +301,7 @@ const SAVED: MutationOutcome = { kind: "ok" };
  * means main holds older words than the screen shows.
  */
 export const savePending = async (id: CaptureId): Promise<MutationOutcome> => {
-  const saver = editing.get(id);
+  const saver = editing.get(id)?.saver;
 
   if (saver === undefined) {
     return SAVED;
@@ -275,21 +311,4 @@ export const savePending = async (id: CaptureId): Promise<MutationOutcome> => {
   await saver.settled();
 
   return saver.state().outcome ?? SAVED;
-};
-
-/**
- * Every copy of a capture's text goes through this, so the clipboard gets what the screen shows.
- * When the pending edits could not be saved, it copies nothing and returns why.
- */
-export const copyAfterSaving = async (
-  id: CaptureId,
-  copy: () => Promise<void>
-): Promise<MutationOutcome> => {
-  const saved = await savePending(id);
-
-  if (saved.kind === "ok") {
-    await copy();
-  }
-
-  return saved;
 };

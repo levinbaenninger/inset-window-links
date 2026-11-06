@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent } from "react";
 
 import type { PageCommand } from "../../../shared/shortcuts";
 import { PageCommandSchema } from "../../../shared/shortcuts";
+import { commandForMenu } from "./menu-keys";
 
 /** Takes a command by returning true, or passes it on to an older listener with false. */
 type Listener = (command: PageCommand) => boolean;
@@ -13,9 +14,14 @@ let waiting: PageCommand | null = null;
 
 /**
  * Hands a command to the listeners, newest first, until one takes it. Commands received before
- * the page mounts wait for its first listener.
+ * the page mounts wait for its first listener. While a menu is open the menu gets it instead:
+ * Windows sends some of a menu's keys this way, and no other key reaches the page under a menu.
  */
 export const runCommand = (command: PageCommand): void => {
+  if (commandForMenu(command)) {
+    return;
+  }
+
   for (const listener of [...listeners].toReversed()) {
     if (listener(command)) {
       return;

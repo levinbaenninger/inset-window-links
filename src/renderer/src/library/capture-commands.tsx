@@ -51,6 +51,7 @@ import {
 import { libraryApi } from "@/lib/bridge";
 import { formatClock, formatPickHint, plural } from "@/lib/format";
 
+import type { CopyRequest } from "../../../shared/copy";
 import type { MutationOutcome } from "../../../shared/dto";
 import type { DueDate } from "../../../shared/due";
 import { dueDay, duePresets } from "../../../shared/due";
@@ -63,7 +64,7 @@ import type {
   StatusRequest,
 } from "../../../shared/status";
 import { ACTIVE, snoozePresets } from "../../../shared/status";
-import { copyAfterSaving } from "./inline-saver";
+import { copyCapture, notCopiedText } from "./copy-gate";
 import { neighborRow, ROW_SELECTOR } from "./row-keys";
 
 const FEEDBACK_MS = 2000;
@@ -310,11 +311,9 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     label: status.kind === "snoozed" ? "Snooze again" : "Snooze",
   };
 
-  // Space on a row marks it done, or takes a done one back; a snoozed one it marks done.
-  const space = target.from === "page" ? undefined : "Space";
-
+  // Space marks a focused row done, but inside a menu Space picks the highlighted item, so no
+  // item shows it.
   const done: MenuItem = {
-    hint: status.kind === "done" ? undefined : space,
     icon: CheckmarkCircle02Icon,
     kind: "item",
     label: "Mark as done",
@@ -322,7 +321,6 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   };
 
   const backToList: MenuItem = {
-    hint: status.kind === "done" ? space : undefined,
     icon: Undo02Icon,
     kind: "item",
     label: status.kind === "done" ? "Not done" : "Unsnooze",
@@ -335,24 +333,19 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     snoozed: [backToList, snooze, done],
   };
 
-  /** Saves what is typed in the capture first; when that fails, copies nothing and says so. */
-  const copyAfterEdits = async (copyNow: () => Promise<void>) => {
-    const saved = await copyAfterSaving(target.id, copyNow);
+  /** Copies through the gate; when what is typed could not be saved, copies nothing and says so. */
+  const copy = async (request: CopyRequest): Promise<boolean> => {
+    const result = await copyCapture(target.id, request, libraryApi());
 
-    if (saved.kind === "ok") {
+    if (result.kind === "copied") {
       say("Copied");
-    } else if (saved.kind === "failed") {
-      // Short enough for the page header, shorter still in a row; the field that failed says why.
-      setFeedback({
-        failed: true,
-        text:
-          target.from === "row"
-            ? "Not copied: not saved"
-            : "Not copied: changes aren’t saved",
-      });
-    } else {
-      report(saved);
+
+      return true;
     }
+
+    setFeedback({ failed: true, text: notCopiedText(result, target.from) });
+
+    return false;
   };
 
   /** ⌘C: the title and description, as the Edit menu's Copy and the key copy them. */
@@ -361,15 +354,19 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     icon: Copy01Icon,
     kind: "item",
     label: "Copy",
-    run: () => copyAfterEdits(() => libraryApi().copyEntry(target.id)),
+    run: async () => {
+      await copy({ kind: "entry" });
+    },
   };
 
-  const copy: MenuItem = {
+  const copyNote: MenuItem = {
     hint: hint("copyNote"),
     icon: TextAlignLeftIcon,
     kind: "item",
     label: "Copy as text",
-    run: () => copyAfterEdits(() => libraryApi().copyNote(target.id)),
+    run: async () => {
+      await copy({ kind: "note" });
+    },
   };
 
   const reopen: MenuItem | null =
@@ -394,14 +391,14 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   const entries: readonly MenuEntry[] = [
     ...(reopen === null ? [] : [reopen]),
     copyEntry,
-    copy,
+    copyNote,
     { id: "status", kind: "separator" },
     dueMenu,
     ...byStatus[status.kind],
     { id: "delete", kind: "separator" },
     {
       destructive: true,
-      hint: space === undefined ? undefined : deleteKey(),
+      hint: target.from === "row" ? deleteKey() : undefined,
       icon: Delete02Icon,
       kind: "item",
       label: "Delete…",
@@ -460,8 +457,10 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   return {
     askDelete: () => setConfirming(true),
     backToList,
-    copy,
     copyEntry,
+    /** The image buttons' copy; true once it is on the clipboard. */
+    copyImage: (viewId: ViewId) => copy({ kind: "image", viewId }),
+    copyNote,
     dialog,
     done,
     entries,

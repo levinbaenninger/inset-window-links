@@ -38,6 +38,25 @@ const entryText = (capture) =>
     .filter((part) => part !== "")
     .join("\n\n");
 
+const COPY_CALLS = { entry: "copyEntry", image: "copyImage", note: "copyNote" };
+
+/** What main puts on the clipboard for each copy, plainly enough for a scene to tell them apart. */
+const clipText = (capture, request) => {
+  switch (request.kind) {
+    case "entry": {
+      return entryText(capture);
+    }
+
+    case "note": {
+      return `${entryText(capture)}\n\n(Copy as text)`;
+    }
+
+    default: {
+      return `(image ${request.viewId})`;
+    }
+  }
+};
+
 /** Answers every method the renderer calls that the scene does not name itself. */
 const withFallback = (api, fallback) =>
   new Proxy(api, { get: (target, key) => target[key] ?? fallback });
@@ -85,15 +104,19 @@ if (page === "library") {
 
   globalThis.inset = withFallback(
     {
-      // Main writes the clipboard once the page's edits are saved; the call is recorded after it.
-      copyEntry: async (captureId) => {
+      // Main writes the clipboard once the page's edits are saved; the call is recorded after it,
+      // under the name of what was copied, so a scene can tell ⌘C, Copy as text and an image apart.
+      copy: async (captureId, request) => {
         const capture = captures.find((item) => item.id === captureId);
 
-        if (capture !== undefined) {
-          await navigator.clipboard.writeText(entryText(capture));
+        if (capture === undefined) {
+          return { kind: "missing" };
         }
 
-        record("copyEntry", captureId);
+        await navigator.clipboard.writeText(clipText(capture, request));
+        record(COPY_CALLS[request.kind], captureId, request);
+
+        return { kind: "ok" };
       },
       remove: (captureId) => {
         for (const list of [captures, items]) {
@@ -116,11 +139,6 @@ if (page === "library") {
       },
       get: (id) =>
         Promise.resolve(captures.find((capture) => capture.id === id) ?? null),
-      copyNote: (captureId) => {
-        record("copyNote", captureId);
-
-        return nothing();
-      },
       list: () => Promise.resolve(items),
       onChanged: (listener) => subscribe("changed", listener),
       onCommand: (listener) => subscribe("command", listener),

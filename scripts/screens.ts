@@ -473,6 +473,78 @@ const seedClipboard = (page: Page) =>
 const readClipboard = (page: Page) =>
   page.evaluate<string>("navigator.clipboard.readText()");
 
+/** Runs `step` for each item, one after the other, as a user presses keys. */
+const inTurn = async <T>(
+  items: readonly T[],
+  step: (item: T) => Promise<void>
+): Promise<void> => {
+  const [first, ...rest] = items;
+
+  if (first === undefined) {
+    return;
+  }
+
+  await step(first);
+  await inTurn(rest, step);
+};
+
+/** The menu's plain Copy, whose name ends in its key, apart from Copy as text. */
+const COPY_ITEM = /^Copy\s*⌘C$/u;
+
+/** App keys no menu shows: each must do nothing while a menu is open. */
+const UNSHOWN_KEYS = [
+  "Meta+Shift+D",
+  "Meta+D",
+  "Meta+Shift+S",
+  "Meta+F",
+  "Meta+/",
+] as const;
+
+/** The same, as main sends them when a native menu key or Windows' key handling fires. */
+const UNSHOWN_COMMANDS = [
+  "setDue",
+  "focusDescription",
+  "focusSteps",
+  "find",
+  "showShortcuts",
+] as const;
+
+/** Notes whether each key pressed from now on was cancelled, which keeps the native menu from it too. */
+const recordKeys = (page: Page) =>
+  page.evaluate(`
+    globalThis.__keys = [];
+    window.addEventListener("keydown", (event) => {
+      if (!["Alt", "Control", "Meta", "Shift"].includes(event.key)) {
+        setTimeout(() => globalThis.__keys.push(event.defaultPrevented), 0);
+      }
+    }, { capture: true });
+  `);
+
+/** What a swallowed key could have changed: the menu, a popover or dialog (the Due picker, the sheet), a field. */
+const swallowedState = (page: Page) =>
+  page.evaluate<{
+    keys: boolean[];
+    menuOpen: boolean;
+    popovers: number;
+    typing: boolean;
+  }>(`({
+    keys: globalThis.__keys,
+    menuOpen: document.querySelector("[role=menu][data-state=open]") !== null,
+    popovers: document.querySelectorAll("[data-slot=popover-content], [role=dialog]").length,
+    typing: document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement,
+  })`);
+
+const callCount = (page: Page, method: string) =>
+  page.evaluate<number>(
+    `globalThis.__calls.filter((call) => call.method === ${JSON.stringify(method)}).length`
+  );
+
+/** How many things on screen say Copied, as text or as a button's label. */
+const copiedShown = (page: Page) =>
+  page.evaluate<number>(
+    `document.querySelectorAll('[aria-label="Copied"]').length + [...document.querySelectorAll("output, [role=status]")].filter((node) => node.textContent?.trim() === "Copied").length`
+  );
+
 /** Waits until the sidebar row of capture `id` has focus. */
 const waitForRowFocus = (page: Page, id: string) =>
   until(
@@ -942,6 +1014,11 @@ const SCENES: readonly Scene[] = [
   },
   {
     act: async (page) => {
+      await until(
+        page,
+        `document.querySelector("input[aria-label^='Search captures']")?.placeholder === "Search or due:today"`,
+        "the whole placeholder at the default width"
+      );
       await page
         .getByRole("button", { name: /Resize sidebar/u })
         .press("ArrowLeft");
@@ -964,6 +1041,24 @@ const SCENES: readonly Scene[] = [
         .getByRole("button", { name: /Resize sidebar/u })
         .press("ArrowLeft");
       await page.waitForTimeout(100);
+      await until(
+        page,
+        `document.querySelector("input[aria-label^='Search captures']")?.placeholder === "Search"`,
+        "the short placeholder at the narrowest sidebar"
+      );
+      assert.ok(
+        await page.evaluate<boolean>(`(() => {
+          const input = document.querySelector("input[aria-label^='Search captures']");
+          const style = getComputedStyle(input);
+          const context = document.createElement("canvas").getContext("2d");
+
+          context.font = style.font;
+
+          return context.measureText(input.placeholder).width + 12 <=
+            input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        })()`),
+        "the short placeholder fits, with air before the filter button"
+      );
       assert.deepEqual(
         await page.getByTestId("due-badge").evaluateAll((badges) =>
           badges
@@ -1265,6 +1360,21 @@ const SCENES: readonly Scene[] = [
 
       await row.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Copy as text" }).waitFor();
+
+      // Keys main takes for itself and the menu doesn't show, such as Ctrl+Shift+D, do nothing.
+      await inTurn(UNSHOWN_COMMANDS, async (command) => {
+        await sendCommand(page, command);
+      });
+
+      await page.waitForTimeout(150);
+      assert.deepEqual(
+        await page.evaluate(
+          `({ menuOpen: document.querySelector("[role=menu][data-state=open]") !== null, popovers: document.querySelectorAll("[data-slot=popover-content], [role=dialog]").length })`
+        ),
+        { menuOpen: true, popovers: 0 },
+        "commands the row menu doesn't show are dropped while it is open"
+      );
+
       await sendCommand(page, "copyNote");
       await menu.waitFor({ state: "detached" });
       await waitForRowFocus(page, uuid(2));
@@ -1291,6 +1401,18 @@ const SCENES: readonly Scene[] = [
       await waitForCalls(page, "remove", 1);
       await waitForRowFocus(page, uuid(3));
       assert.deepEqual(await callsTo(page, "remove"), [uuid(2)]);
+
+      // The ⋯ menu takes Ctrl+Alt+C from main too, for the open capture, and closes.
+      await page.getByRole("button", { name: "More" }).click();
+      await menu.waitFor();
+      await sendCommand(page, "copyNote");
+      await menu.waitFor({ state: "detached" });
+      await waitForCalls(page, "copyNote", 3);
+      assert.deepEqual(
+        await callsTo(page, "copyNote"),
+        [uuid(2), uuid(2), uuid(1)],
+        "Ctrl+Alt+C with the ⋯ menu open copies the open capture"
+      );
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
@@ -1312,7 +1434,12 @@ const SCENES: readonly Scene[] = [
 
       const closedOnB = async (after: string) => {
         try {
-          await menu.waitFor({ state: "detached" });
+          // A submenu counts as a second menu, so wait for every one to go.
+          await until(
+            page,
+            `document.querySelector("[role=menu]") === null`,
+            "the menus to close"
+          );
           await waitForRowFocus(page, uuid(2));
         } catch (error) {
           throw new Error(`after ${after}: ${String(error)}`, { cause: error });
@@ -1377,7 +1504,71 @@ const SCENES: readonly Scene[] = [
         "⌘C after a click outside copies B"
       );
 
+      // Keys the menu doesn't show are swallowed: nothing happens to A under the menu.
       await openMenu();
+      await recordKeys(page);
+
+      await inTurn(UNSHOWN_KEYS, (key) => page.keyboard.press(key));
+      await inTurn(UNSHOWN_COMMANDS, async (command) => {
+        await sendCommand(page, command);
+      });
+
+      await page.waitForTimeout(150);
+      assert.deepEqual(
+        await swallowedState(page),
+        {
+          keys: UNSHOWN_KEYS.map(() => true),
+          menuOpen: true,
+          popovers: 0,
+          typing: false,
+        },
+        "⇧⌘D, ⌘D, ⇧⌘S, ⌘F and ⌘/ in B's menu, pressed or sent by main, do nothing"
+      );
+
+      // Space with nothing highlighted picks nothing.
+      await page.keyboard.press("Space");
+      await page.waitForTimeout(150);
+      assert.deepEqual(
+        {
+          menuOpen: await menu.isVisible(),
+          setStatus: await callsTo(page, "setStatus"),
+        },
+        { menuOpen: true, setStatus: [] },
+        "Space with no item highlighted leaves the menu open and B as it is"
+      );
+
+      // Return and Space pick the highlighted item, for B.
+      await menu.getByRole("menuitem", { name: COPY_ITEM }).hover();
+      await seedClipboard(page);
+      await page.keyboard.press("Enter");
+      await closedOnB("Return on Copy");
+      await waitForCalls(page, "copyEntry", 4);
+      assert.equal(
+        await readClipboard(page),
+        "Movers need the lift on Monday, keys only come Thursday",
+        "Return on the highlighted Copy copies B"
+      );
+
+      await openMenu();
+      await menu.getByRole("menuitem", { name: "Copy as text" }).hover();
+      await page.keyboard.press("Space");
+      await closedOnB("Space on Copy as text");
+      await waitForCalls(page, "copyNote", 2);
+
+      // In a submenu, Space picks the highlighted option there.
+      await openMenu();
+      await menu.getByRole("menuitem", { name: "Due", exact: true }).hover();
+      await page.keyboard.press("ArrowRight");
+      await page
+        .getByRole("menuitem", { name: /^Today/u })
+        .and(page.locator(":focus"))
+        .waitFor();
+      await page.keyboard.press("Space");
+      await closedOnB("Space in the Due submenu");
+      await waitForCalls(page, "setDue", 1);
+
+      await openMenu();
+      await menu.getByRole("menuitem", { name: "Mark as done" }).hover();
       await page.keyboard.press("Space");
       await menu.waitFor({ state: "detached" });
       await until(
@@ -1393,13 +1584,15 @@ const SCENES: readonly Scene[] = [
           copyNote: await callsTo(page, "copyNote"),
           remove: await callsTo(page, "remove"),
           reopen: await callsTo(page, "reopen"),
+          setDue: await callsTo(page, "setDue"),
           setStatus: await callsTo(page, "setStatus"),
         },
         {
-          copyEntry: [uuid(2), uuid(2), uuid(2)],
-          copyNote: [uuid(2)],
+          copyEntry: [uuid(2), uuid(2), uuid(2), uuid(2)],
+          copyNote: [uuid(2), uuid(2)],
           remove: [],
           reopen: [uuid(2)],
+          setDue: [uuid(2)],
           setStatus: [uuid(2)],
         },
         "every key acts once, on B, never on the open capture"
@@ -1451,6 +1644,268 @@ const SCENES: readonly Scene[] = [
     data: { captures: CAPTURES, failSaves: true },
     hash: `/captures/${uuid(1)}`,
     name: "library-row-copy-refused",
+    page: "library",
+    platforms: ["macos"],
+  },
+
+  {
+    // The ⋯ menu answers the keys it shows itself, for the open capture, and swallows the rest.
+    act: async (page) => {
+      const more = page.getByRole("button", { name: "More" });
+      const menu = page.getByRole("menu");
+
+      const openMore = async () => {
+        await more.click();
+        await menu.waitFor();
+      };
+
+      await openMore();
+      await page.keyboard.press("Meta+Alt+C");
+      await menu.waitFor({ state: "detached" });
+      await waitForCalls(page, "copyNote", 1);
+
+      await openMore();
+      await seedClipboard(page);
+      await page.keyboard.press("Meta+C");
+      await menu.waitFor({ state: "detached" });
+      await waitForCalls(page, "copyEntry", 1);
+      assert.match(
+        await readClipboard(page),
+        /^Rieder's quote breaks the furniture cap and comes too late\n\nChairs/u,
+        "⌘C in the ⋯ menu copies the open capture"
+      );
+
+      await openMore();
+      await page.keyboard.press("Meta+O");
+      await menu.waitFor({ state: "detached" });
+      await waitForCalls(page, "reopen", 1);
+
+      await openMore();
+      await recordKeys(page);
+
+      await inTurn(UNSHOWN_KEYS, (key) => page.keyboard.press(key));
+      await inTurn(UNSHOWN_COMMANDS, async (command) => {
+        await sendCommand(page, command);
+      });
+
+      await page.waitForTimeout(150);
+      assert.deepEqual(
+        await swallowedState(page),
+        {
+          keys: UNSHOWN_KEYS.map(() => true),
+          menuOpen: true,
+          popovers: 0,
+          typing: false,
+        },
+        "keys the ⋯ menu doesn't show do nothing"
+      );
+      assert.deepEqual(
+        {
+          copyEntry: await callsTo(page, "copyEntry"),
+          copyNote: await callsTo(page, "copyNote"),
+          reopen: await callsTo(page, "reopen"),
+        },
+        { copyEntry: [uuid(1)], copyNote: [uuid(1)], reopen: [uuid(1)] },
+        "each key the ⋯ menu shows acts once, on the open capture"
+      );
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-more-menu-keys",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    // A's title can't be saved: no way of copying puts anything on the clipboard or says Copied.
+    act: async (page) => {
+      const title = page.getByTestId("record-relationship");
+      const rowA = page.getByTestId("recent-item").first();
+      const menu = page.getByRole("menu");
+      const more = page.getByRole("button", { name: "More" });
+
+      await title.fill("NEW UNSAVED TITLE");
+      await rowA.focus();
+      await page.getByText("Couldn't save. The disk is full.").waitFor();
+      await seedClipboard(page);
+
+      /** Each copy first sends the unsaved title again, which fails again: then nothing is copied. */
+      const refused = async (what: string, copy: () => Promise<void>) => {
+        const before = await callCount(page, "updateText");
+
+        await copy();
+
+        try {
+          await until(
+            page,
+            `globalThis.__calls.filter((call) => call.method === "updateText").length > ${before}`,
+            "the save to be tried again"
+          );
+        } catch (error) {
+          throw new Error(`${what}: ${String(error)}`, { cause: error });
+        }
+
+        await page.waitForTimeout(100);
+        assert.equal(await copiedShown(page), 0, `${what} says Copied`);
+      };
+
+      const inMore = async (act: () => Promise<void>) => {
+        await more.click();
+        await menu.waitFor();
+        await act();
+        await menu.waitFor({ state: "detached" });
+      };
+
+      const inRowMenu = async (act: () => Promise<void>) => {
+        await rowA.click({ button: "right" });
+        await menu.waitFor();
+        await act();
+        await menu.waitFor({ state: "detached" });
+      };
+
+      const item = (name: RegExp) =>
+        menu.getByRole("menuitem", { name }).click();
+
+      await refused("⌘C on the page", async () => {
+        await more.focus();
+        await page.keyboard.press("Meta+C");
+      });
+      await refused("⌘C on the row", async () => {
+        await rowA.focus();
+        await page.keyboard.press("Meta+C");
+      });
+      await refused("Copy as text sent by main, page", async () => {
+        await more.focus();
+        await sendCommand(page, "copyNote");
+      });
+      await refused("Copy as text sent by main, row", async () => {
+        await rowA.focus();
+        await sendCommand(page, "copyNote");
+      });
+      await refused("⋯ Copy", () => inMore(() => item(COPY_ITEM)));
+      await refused("⋯ Copy as text", () =>
+        inMore(() => item(/^Copy as text/u))
+      );
+      await refused("⌘C in the ⋯ menu", () =>
+        inMore(() => page.keyboard.press("Meta+C"))
+      );
+      await refused("⌥⌘C in the ⋯ menu", () =>
+        inMore(() => page.keyboard.press("Meta+Alt+C"))
+      );
+      await refused("the row menu's Copy", () =>
+        inRowMenu(() => item(COPY_ITEM))
+      );
+      await refused("the row menu's Copy as text", () =>
+        inRowMenu(() => item(/^Copy as text/u))
+      );
+      await refused("⌘C in the row menu", () =>
+        inRowMenu(() => page.keyboard.press("Meta+C"))
+      );
+      await refused("⌥⌘C in the row menu", () =>
+        inRowMenu(() => page.keyboard.press("Meta+Alt+C"))
+      );
+      await refused("a window's Copy image", () =>
+        page.getByRole("button", { name: "Copy image" }).first().click()
+      );
+      await page
+        .getByTestId("capture-feedback")
+        .filter({ hasText: "Not copied: changes aren’t saved" })
+        .waitFor();
+
+      await page
+        .getByRole("link", { name: /^Open window 1,/u })
+        .first()
+        .click();
+      await page.getByTestId("viewer-image").waitFor();
+      await refused("the viewer's Copy image", () =>
+        page.getByRole("button", { name: "Copy image" }).click()
+      );
+      await page
+        .getByTestId("viewer-feedback")
+        .filter({ hasText: "Not copied: couldn’t save. The disk is full." })
+        .waitFor();
+
+      assert.deepEqual(
+        {
+          clipboard: await readClipboard(page),
+          copyEntry: await callsTo(page, "copyEntry"),
+          copyImage: await callsTo(page, "copyImage"),
+          copyNote: await callsTo(page, "copyNote"),
+        },
+        { clipboard: SENTINEL, copyEntry: [], copyImage: [], copyNote: [] },
+        "no copy reached main"
+      );
+
+      // The viewer is the same capture: back from it, the unsaved title and its error are still there.
+      await page.getByRole("button", { name: "Back" }).click();
+      await page.getByText("Couldn't save. The disk is full.").waitFor();
+      assert.equal(await title.inputValue(), "NEW UNSAVED TITLE");
+      await page
+        .getByRole("link", { name: /^Open window 1,/u })
+        .first()
+        .click();
+      await page.getByTestId("viewer-image").waitFor();
+      await page.getByRole("button", { name: "Copy image" }).click();
+      await page.getByTestId("viewer-feedback").waitFor();
+    },
+    data: { captures: CAPTURES, failSaves: true },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-copy-gate",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    // Copy image waits for the title being typed to be saved, then says Copied.
+    act: async (page) => {
+      const title = page.getByTestId("record-relationship");
+
+      await title.fill("Rieder's quote breaks the cap, revised");
+      await seedClipboard(page);
+      await page.getByRole("button", { name: "Copy image" }).first().click();
+      await page.getByRole("button", { name: "Copied" }).waitFor();
+      assert.equal(await readClipboard(page), `(image ${uuid(101)})`);
+      assert.deepEqual(
+        await page.evaluate<string[]>(
+          "globalThis.__calls.map((call) => call.method).filter((method) => method === 'updateText' || method === 'copyImage')"
+        ),
+        ["updateText", "copyImage"],
+        "the edit is saved before the image is copied"
+      );
+
+      // Typed, then straight to the viewer: its Copy image saves that title first too.
+      await title.fill("Typed just before opening the viewer");
+      await page
+        .getByRole("link", { name: /^Open window 2,/u })
+        .first()
+        .click();
+      await page.getByTestId("viewer-image").waitFor();
+      await seedClipboard(page);
+      await page.getByRole("button", { name: "Copy image" }).click();
+      await page.getByRole("button", { name: "Copied" }).waitFor();
+      assert.equal(await readClipboard(page), `(image ${uuid(102)})`);
+      assert.deepEqual(
+        await page.evaluate<string[]>(
+          "globalThis.__calls.filter((call) => call.method === 'copyImage' || (call.method === 'updateText' && call.args[1].relationship === 'Typed just before opening the viewer')).map((call) => call.method)"
+        ),
+        ["copyImage", "updateText", "copyImage"],
+        "the title typed before the viewer is saved before the viewer's copy"
+      );
+
+      await page.getByRole("button", { name: "Back" }).click();
+      assert.equal(
+        await title.inputValue(),
+        "Typed just before opening the viewer",
+        "back from the viewer, the title typed before it is still there"
+      );
+      await page
+        .getByRole("link", { name: /^Open window 2,/u })
+        .first()
+        .click();
+      await page.getByRole("button", { name: "Copy image" }).click();
+      await page.getByRole("button", { name: "Copied" }).waitFor();
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-copy-image",
     page: "library",
     platforms: ["macos"],
   },

@@ -4,16 +4,19 @@ import path from "node:path";
 
 import { describe, expect, it, onTestFinished } from "vitest";
 
+import { copyCapture as copyThroughGate } from "../../renderer/src/library/copy-gate";
 import {
-  copyAfterSaving,
   InlineSaver,
   savePending,
   trackSaver,
 } from "../../renderer/src/library/inline-saver";
+import type { CopyRequest } from "../../shared/copy";
 import { DraftIdSchema, ViewIdSchema } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
+import type { Clip } from "./copy";
+import { copyCapture } from "./copy";
 import { failingWrites, nodeStoreFs, slowWrites } from "./fs";
-import { formatEntry, formatNote } from "./note";
+import { formatEntry } from "./note";
 import type { CaptureRecord } from "./schema";
 import { CaptureStore } from "./store";
 
@@ -84,15 +87,33 @@ const setup = async () => {
   saver.adopt(stored);
   onTestFinished(trackSaver(ID, saver));
 
+  /** The clipboard main writes, as plain text or as "PNG <bytes>" for an image. */
+  const clipboard: string[] = [];
+
+  /** What the page's copy gate does, against the real store and main's copy. */
+  const gate = (request: CopyRequest) =>
+    copyThroughGate(ID, request, {
+      copy: (id, asked) =>
+        copyCapture(
+          store,
+          id,
+          asked,
+          (clip: Clip) => {
+            clipboard.push(
+              clip.kind === "text" ? clip.text : `PNG ${clip.png.join(",")}`
+            );
+
+            return Promise.resolve();
+          },
+          { locale: "en-GB", timeZone: "UTC" }
+        ),
+    });
+
+  /** Copy as text through the gate; what landed on the clipboard, or "" when nothing did. */
   const copy = async () => {
-    await savePending(ID);
-    await store.idle();
+    await gate({ kind: "note" });
 
-    const entry = store.get(ID);
-
-    return entry?.kind === "current"
-      ? formatNote(entry.record, "en-GB", "UTC")
-      : "";
+    return clipboard.at(-1) ?? "";
   };
 
   const storedEntry = () => {
@@ -101,22 +122,15 @@ const setup = async () => {
     return entry?.kind === "current" ? formatEntry(entry.record) : "";
   };
 
-  const storedNote = () => {
-    const entry = store.get(ID);
-
-    return entry?.kind === "current"
-      ? formatNote(entry.record, "en-GB", "UTC")
-      : "";
-  };
-
   return {
+    clipboard,
     copy,
+    gate,
     saver,
     setFailing: (on: boolean) => {
       failing = on;
     },
     storedEntry,
-    storedNote,
   };
 };
 
@@ -157,101 +171,153 @@ describe("Copy as Text after an edit", () => {
   });
 
   it("copies nothing when the words on screen could not be saved, and says why", async () => {
-    const { saver, setFailing, storedNote } = await setup();
-    const copied: string[] = [];
+    const { clipboard, gate, saver, setFailing } = await setup();
 
     setFailing(true);
     saver.edit({ ...stored, description: "NEW UNSAVED WORDS" });
 
-    const outcome = await copyAfterSaving(ID, () => {
-      copied.push(storedNote());
-
-      return Promise.resolve();
-    });
+    const result = await gate({ kind: "note" });
 
     expect({
-      copied,
-      outcome: outcome.kind,
+      clipboard,
+      result: result.kind,
       reason:
-        outcome.kind === "failed" &&
-        outcome.message.includes("Injected write failure"),
+        result.kind === "notSaved" &&
+        result.outcome.kind === "failed" &&
+        result.outcome.message.includes("Injected write failure"),
       shown: saver.state().text?.description,
     }).toStrictEqual({
-      copied: [],
-      outcome: "failed",
+      clipboard: [],
       reason: true,
+      result: "notSaved",
       shown: "NEW UNSAVED WORDS",
     });
   });
 
   it("copies the new words once a failed save goes through on the next try", async () => {
-    const { saver, setFailing, storedNote } = await setup();
+    const { clipboard, gate, saver, setFailing } = await setup();
 
     setFailing(true);
     saver.edit({ ...stored, description: "Second try" });
     await savePending(ID);
     setFailing(false);
 
-    const copied: string[] = [];
-
-    const outcome = await copyAfterSaving(ID, () => {
-      copied.push(storedNote());
-
-      return Promise.resolve();
-    });
+    const result = await gate({ kind: "note" });
 
     expect([
-      outcome.kind,
-      copied.map((note) => note.includes("Second try")),
-    ]).toStrictEqual(["ok", [true]]);
+      result.kind,
+      clipboard.map((note) => note.includes("Second try")),
+    ]).toStrictEqual(["copied", [true]]);
   });
 });
 
 /** ⌘C, from a row or the page: the same wait, then main copies the stored title and description. */
 describe("Copy (⌘C) after an edit", () => {
   it("copies the title still being typed, not the one the list last showed", async () => {
-    const { saver, storedEntry } = await setup();
-    const copied: string[] = [];
+    const { clipboard, gate, saver } = await setup();
 
     saver.edit({ ...stored, relationship: "NEW TITLE" });
 
-    const outcome = await copyAfterSaving(ID, () => {
-      copied.push(storedEntry());
+    const result = await gate({ kind: "entry" });
 
-      return Promise.resolve();
-    });
-
-    expect([outcome.kind, copied]).toStrictEqual([
-      "ok",
+    expect([result.kind, clipboard]).toStrictEqual([
+      "copied",
       ["NEW TITLE\n\nOld description"],
     ]);
   });
 
   it("copies nothing when the title on screen could not be saved", async () => {
-    const { saver, setFailing, storedEntry } = await setup();
-    const copied: string[] = [];
+    const { clipboard, gate, saver, setFailing, storedEntry } = await setup();
 
     setFailing(true);
     saver.edit({ ...stored, relationship: "NEW UNSAVED TITLE" });
     saver.flush();
     await savePending(ID);
 
-    const outcome = await copyAfterSaving(ID, () => {
-      copied.push(storedEntry());
-
-      return Promise.resolve();
-    });
+    const result = await gate({ kind: "entry" });
 
     expect({
-      copied,
-      outcome: outcome.kind,
+      clipboard,
+      result: result.kind,
       shown: saver.state().text?.relationship,
       stored: storedEntry(),
     }).toStrictEqual({
-      copied: [],
-      outcome: "failed",
+      clipboard: [],
+      result: "notSaved",
       shown: "NEW UNSAVED TITLE",
       stored: "Old title\n\nOld description",
     });
+  });
+});
+
+/** The image buttons go through the same gate as the text copies. */
+describe("Copy image after an edit", () => {
+  it("copies the window's image once the edits are saved", async () => {
+    const { clipboard, gate, saver } = await setup();
+
+    saver.edit({ ...stored, relationship: "New title" });
+
+    const result = await gate({ kind: "image", viewId: VIEW });
+
+    expect([result.kind, clipboard]).toStrictEqual(["copied", ["PNG 1"]]);
+  });
+
+  it("copies nothing, by any copy, while the words on screen could not be saved", async () => {
+    const { clipboard, gate, saver, setFailing } = await setup();
+
+    setFailing(true);
+    saver.edit({ ...stored, relationship: "NEW UNSAVED TITLE" });
+
+    const results = [
+      await gate({ kind: "entry" }),
+      await gate({ kind: "note" }),
+      await gate({ kind: "image", viewId: VIEW }),
+    ];
+
+    expect([results.map((result) => result.kind), clipboard]).toStrictEqual([
+      ["notSaved", "notSaved", "notSaved"],
+      [],
+    ]);
+  });
+
+  it("still waits for the last save of a capture just left, and refuses when it failed", async () => {
+    const { clipboard, gate, saver, setFailing } = await setup();
+    const leave = trackSaver(ID, saver);
+
+    setFailing(true);
+    saver.edit({ ...stored, relationship: "TYPED THEN LEFT" });
+    saver.flush();
+    leave();
+
+    const result = await gate({ kind: "image", viewId: VIEW });
+
+    expect([result.kind, clipboard]).toStrictEqual(["notSaved", []]);
+  });
+});
+
+describe("Main's copy", () => {
+  it("reports a capture that is gone instead of saying it copied", async () => {
+    const { clipboard } = await setup();
+
+    const root = path.join(
+      await mkdtemp(path.join(tmpdir(), "iwl-copy-empty-")),
+      "captures"
+    );
+
+    const empty = await CaptureStore.open(root, nodeStoreFs);
+
+    const outcome = await copyCapture(
+      empty,
+      ID,
+      { kind: "entry" },
+      (clip) => {
+        clipboard.push(clip.kind);
+
+        return Promise.resolve();
+      },
+      { locale: "en-GB", timeZone: "UTC" }
+    );
+
+    expect([outcome, clipboard]).toStrictEqual([{ kind: "missing" }, []]);
   });
 });

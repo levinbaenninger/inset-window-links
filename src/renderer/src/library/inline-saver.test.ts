@@ -4,7 +4,13 @@ import type { MutationOutcome } from "../../../shared/dto";
 import type { CaptureId, ViewId } from "../../../shared/ids";
 import type { DraftText } from "../../../shared/text";
 import type { TextStore } from "./inline-saver";
-import { InlineSaver, SAVE_AFTER_MS } from "./inline-saver";
+import {
+  InlineSaver,
+  SAVE_AFTER_MS,
+  savePending,
+  saverFor,
+  trackSaver,
+} from "./inline-saver";
 
 // SAFETY: CaptureId and ViewId are branded UUID strings; the saver only passes them through.
 const ID = "00000000-0000-4000-8000-000000000001" as CaptureId;
@@ -283,5 +289,48 @@ describe(InlineSaver, () => {
       "text A limits C Call:true",
     ]);
     expect(calls).toStrictEqual(atLeaving);
+  });
+
+  it("keeps unsaved words when the page mounts again, as on the way to its viewer", async () => {
+    const failed: MutationOutcome = { kind: "failed", message: "Disk full" };
+
+    const store = {
+      setTodoDone: vi.fn<TextStore["setTodoDone"]>(() =>
+        Promise.resolve(failed)
+      ),
+      updateText: vi.fn<TextStore["updateText"]>(() => Promise.resolve(failed)),
+    };
+
+    const first = saverFor(ID, store);
+    const leave = trackSaver(ID, first);
+
+    first.adopt(initial);
+    first.edit({ ...initial, relationship: "TYPED, NOT SAVED" });
+    first.flush();
+
+    // The page mounts again before the old one has let its saver go.
+    const again = saverFor(ID, store);
+    const stay = trackSaver(ID, again);
+
+    leave();
+    again.adopt(initial);
+    await vi.runAllTimersAsync();
+
+    const outcome = await savePending(ID);
+
+    stay();
+    await vi.runAllTimersAsync();
+
+    expect({
+      outcome: outcome.kind,
+      same: again === first,
+      shown: again.state().text?.relationship,
+      thenLetGo: saverFor(ID, store) === first,
+    }).toStrictEqual({
+      outcome: "failed",
+      same: true,
+      shown: "TYPED, NOT SAVED",
+      thenLetGo: false,
+    });
   });
 });

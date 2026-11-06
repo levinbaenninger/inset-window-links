@@ -4,6 +4,10 @@ import { cn } from "cn";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import * as React from "react";
 
+import { keyPlatform } from "@/lib/bridge";
+import type { MenuKeyHandler } from "@/lib/menu-keys";
+import { menuKeyDown, useMountedMenu } from "@/lib/menu-keys";
+
 function ContextMenu({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
@@ -58,14 +62,33 @@ function ContextMenuRadioGroup({
 
 function ContextMenuContent({
   className,
+  onMenuKey,
+  onKeyDownCapture,
+  onKeyDown,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left";
+  /** Runs the keys the menu shows for its owner; see menu-keys. */
+  onMenuKey?: MenuKeyHandler;
 }) {
+  const content = React.useRef<HTMLDivElement>(null);
+
+  useMountedMenu(content, onMenuKey);
+
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
         data-slot="context-menu-content"
+        ref={content}
+        onKeyDownCapture={(event) => {
+          onKeyDownCapture?.(event);
+          menuKeyDown(event, onMenuKey, keyPlatform());
+        }}
+        onKeyDown={(event) => {
+          onKeyDown?.(event);
+          // The menu has had the key; the page under it never gets it.
+          event.stopPropagation();
+        }}
         className={cn(
           "bg-popover text-popover-foreground ring-foreground/10 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 z-50 max-h-(--radix-context-menu-content-available-height) min-w-36 origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg p-1 shadow-md ring-1 duration-100",
           className

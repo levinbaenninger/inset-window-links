@@ -1,7 +1,5 @@
-import { readFile } from "node:fs/promises";
-
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
-import { app, clipboard, ClipboardItem, ipcMain, nativeImage } from "electron";
+import { app, ipcMain, nativeImage } from "electron";
 import { z } from "zod";
 
 import type { SettingsApi } from "../../shared/api";
@@ -12,6 +10,7 @@ import type {
   settingsChannels,
 } from "../../shared/channels";
 import { channelName } from "../../shared/channels";
+import { CopyRequestSchema } from "../../shared/copy";
 import type { CaptureDetail, CaptureListItem } from "../../shared/dto";
 import { DueDateSchema } from "../../shared/due";
 import {
@@ -27,10 +26,11 @@ import {
   TodoIdSchema,
 } from "../../shared/text";
 import { openScreenSettings } from "../capture/capturer";
+import { writeClip } from "../clipboard";
 import { reopenOrigin } from "../reopen";
 import type { SessionController } from "../session/controller";
 import { originSummary, summarizeViews } from "../session/snapshot";
-import { formatEntry, formatNote } from "../store/note";
+import { copyCapture } from "../store/copy";
 import type { CaptureStore, StoreEntry } from "../store/store";
 import type { RendererPage } from "../windows/renderer-page";
 import { shortcutStatus } from "../windows/shortcut";
@@ -241,45 +241,15 @@ export const registerLibraryChannels = (
 ): void => {
   const table: Table<typeof libraryChannels> = {
     addWindows: send(z.tuple([]), actions.addWindows),
-    // The page saves what is typed first, and copies nothing when that fails.
-    copyEntry: invoke(z.tuple([DraftIdSchema]), async (captureId) => {
-      await store.idle();
-
-      const entry = store.get(captureId);
-
-      if (entry?.kind === "current") {
-        await clipboard.writeText(formatEntry(entry.record));
-      }
-    }),
-    copyImage: invoke(
-      z.tuple([DraftIdSchema, ViewIdSchema]),
-      async (captureId, viewId) => {
-        const file = store.imagePath(captureId, viewId);
-
-        if (file !== null) {
-          const png = new Blob([await readFile(file)], { type: "image/png" });
-
-          await clipboard.write([new ClipboardItem({ "image/png": png })]);
-        }
-      }
+    // The page's copy gate asks only once what is typed is saved.
+    copy: invoke(
+      z.tuple([DraftIdSchema, CopyRequestSchema]),
+      (captureId, request) =>
+        copyCapture(store, captureId, request, writeClip, {
+          locale: app.getLocale(),
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        })
     ),
-    copyNote: invoke(z.tuple([DraftIdSchema]), async (captureId) => {
-      // The page sends its pending edits first; a write still under way is waited for here.
-      await store.idle();
-
-      const entry = store.get(captureId);
-
-      // Electron's clipboard writes resolve later; the page says Copied only once this has.
-      if (entry?.kind === "current") {
-        await clipboard.writeText(
-          formatNote(
-            entry.record,
-            app.getLocale(),
-            Intl.DateTimeFormat().resolvedOptions().timeZone
-          )
-        );
-      }
-    }),
     dragImage: send(
       z.tuple([DraftIdSchema, ViewIdSchema]),
       (captureId, viewId) => {
