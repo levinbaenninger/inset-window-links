@@ -68,6 +68,15 @@ const listNames = async (dir: string) => {
 
 const reopen = (root: string) => CaptureStore.open(root, nodeStoreFs);
 
+/** A capture's words with a due date, as the page saves them. */
+const dueText = (due: string | null) => ({
+  description: "",
+  due,
+  relationship: "Typed with a due date",
+  todos: [],
+  viewDescriptions: {},
+});
+
 describe(CaptureStore, () => {
   let root = "";
 
@@ -159,7 +168,10 @@ describe(CaptureStore, () => {
     await store.publish(newCapture());
     code = "EROFS";
 
-    const due = await store.setDue(CAPTURE_ID, "2026-11-07", now);
+    const status = await store.setStatus(CAPTURE_ID, {
+      at: now.toISOString(),
+      kind: "done",
+    });
 
     code = "EIO";
 
@@ -172,18 +184,19 @@ describe(CaptureStore, () => {
         todos: [],
         viewDescriptions: {},
       },
-      now
+      now,
+      100
     );
 
     code = "EACCES";
 
     const removed = await store.remove(CAPTURE_ID);
 
-    expect([published, due, text, removed]).toStrictEqual([
+    expect([published, status, text, removed]).toStrictEqual([
       { kind: "failed", message: "The disk is full." },
       { kind: "failed", message: "The disk is read-only." },
-      { kind: "failed", message: "Couldn't save (EIO)." },
-      { kind: "failed", message: "Inset can't write to its data folder." },
+      { kind: "failed", message: "Couldn’t save (EIO)." },
+      { kind: "failed", message: "Inset can’t write to its data folder." },
     ]);
   });
 
@@ -229,7 +242,8 @@ describe(CaptureStore, () => {
         ],
         viewDescriptions: {},
       },
-      new Date("2026-10-22T08:00:00.000Z")
+      new Date("2026-10-22T08:00:00.000Z"),
+      101
     );
 
     const reopened = await reopen(root);
@@ -316,8 +330,8 @@ describe(CaptureStore, () => {
     await store.publish(newCapture());
 
     const outcomes = [
-      await store.setTodoDone(CAPTURE_ID, "t1", true),
-      await store.setTodoDone(CAPTURE_ID, "nope", true),
+      await store.setTodoDone(CAPTURE_ID, "t1", true, 102),
+      await store.setTodoDone(CAPTURE_ID, "nope", true, 103),
     ];
 
     const reopened = await reopen(root);
@@ -372,7 +386,7 @@ describe(CaptureStore, () => {
       ]
     ).toStrictEqual([null, ""]);
 
-    await store.setTodoDone(CAPTURE_ID, "v1-1", true);
+    await store.setTodoDone(CAPTURE_ID, "v1-1", true, 104);
 
     const written: unknown = JSON.parse(
       await readFile(path.join(root, CAPTURE_ID, "record.json"), "utf-8")
@@ -435,7 +449,8 @@ describe(CaptureStore, () => {
         todos: record.todos,
         viewDescriptions: {},
       },
-      new Date("2026-10-22T08:00:00.000Z")
+      new Date("2026-10-22T08:00:00.000Z"),
+      105
     );
 
     const written: unknown = JSON.parse(await readFile(file, "utf-8"));
@@ -521,12 +536,20 @@ describe(CaptureStore, () => {
         todos: record.todos,
         viewDescriptions: { [VIEW_IDS[1] ?? ""]: " Second window matters " },
       },
-      new Date("2026-10-22T08:00:00.000Z")
+      new Date("2026-10-22T08:00:00.000Z"),
+      106
     );
-    await store.setDue(
+    await store.updateText(
       CAPTURE_ID,
-      "2026-10-24",
-      new Date("2026-10-22T09:00:00.000Z")
+      {
+        description: "",
+        due: "2026-10-24",
+        relationship: record.relationship,
+        todos: record.todos,
+        viewDescriptions: { [VIEW_IDS[1] ?? ""]: " Second window matters " },
+      },
+      new Date("2026-10-22T09:00:00.000Z"),
+      2
     );
 
     // SAFETY: the store just wrote this file as a version 5 record, which has these fields.
@@ -550,38 +573,24 @@ describe(CaptureStore, () => {
     ]);
   });
 
-  it("keeps the due date when the text is saved, so the two can't undo each other", async () => {
+  it("saves the due date with the words, and clears it the same way, across a restart", async () => {
     const store = await CaptureStore.open(root, nodeStoreFs);
 
     await store.publish(newCapture());
-    await store.setDue(CAPTURE_ID, "2026-11-07", new Date());
-    await store.updateText(
-      CAPTURE_ID,
-      {
-        description: "",
-        due: null,
-        relationship: "Typed after the due date was set",
-        todos: [],
-        viewDescriptions: {},
-      },
-      new Date()
-    );
-    const beforeClear = store.get(CAPTURE_ID);
+    await store.updateText(CAPTURE_ID, dueText("2026-11-07"), new Date(), 1);
 
-    expect(beforeClear?.kind === "current" && beforeClear.record.due).toBe(
-      "2026-11-07"
-    );
-    await store.setDue(CAPTURE_ID, null, new Date());
+    const afterSet = await reopen(root);
+    const set = afterSet.get(CAPTURE_ID);
 
-    const entry = store.get(CAPTURE_ID);
-    const again = await reopen(root);
-    const reopened = again.get(CAPTURE_ID);
+    await store.updateText(CAPTURE_ID, dueText(null), new Date(), 2);
+
+    const afterClear = await reopen(root);
+    const cleared = afterClear.get(CAPTURE_ID);
 
     expect([
-      entry?.kind === "current" && entry.record.relationship,
-      entry?.kind === "current" && entry.record.due,
-      reopened?.kind === "current" && reopened.record.due,
-    ]).toStrictEqual(["Typed after the due date was set", null, null]);
+      set?.kind === "current" && [set.record.relationship, set.record.due],
+      cleared?.kind === "current" && cleared.record.due,
+    ]).toStrictEqual([["Typed with a due date", "2026-11-07"], null]);
   });
 
   it("wakes a snoozed capture only while it is still snoozed until that time", async () => {
@@ -623,7 +632,8 @@ describe(CaptureStore, () => {
         todos: [],
         viewDescriptions: {},
       },
-      new Date("2026-10-22T08:00:00.000Z")
+      new Date("2026-10-22T08:00:00.000Z"),
+      108
     );
 
     const busyWhileSaving = store.busy;
@@ -696,7 +706,8 @@ describe(CaptureStore, () => {
           todos: [],
           viewDescriptions: {},
         },
-        new Date()
+        new Date(),
+        109
       ),
       await store.remove(futureId),
     ];

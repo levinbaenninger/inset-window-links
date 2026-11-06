@@ -10,7 +10,13 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
 import type { ReactNode, RefObject } from "react";
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { DueBadge, useToday } from "@/components/due";
 import { Button } from "@/components/ui/button";
@@ -47,13 +53,14 @@ import {
   parseQuery,
   withDueFilter,
 } from "../../../shared/due";
-import type { CaptureId } from "../../../shared/ids";
 import { matchesCapture, matchSource } from "../../../shared/search";
 import type { StatusKind } from "../../../shared/status";
+import type { DraftText } from "../../../shared/text";
 import { isBlank } from "../../../shared/text";
 import { MenuEntries, useCaptureCommands } from "./capture-commands";
 import { retryLabel } from "./copy-gate";
 import { useEntryCopy } from "./copy-keys";
+import { storedText } from "./drafts";
 import { drafts } from "./page-drafts";
 import type { RowAction } from "./row-keys";
 import { neighborRow, rowKey } from "./row-keys";
@@ -182,18 +189,21 @@ const useChipOwnLine = (
 };
 
 /**
- * The title as the capture's page shows it: as typed, or as just saved, so words not saved yet,
- * or put back by a discard, read the same in the row. A blank one shows the stored title.
+ * The fields as the capture's page shows them: as typed, or as just saved, so words and a due date
+ * not saved yet, or put back by a discard, read the same in the row.
  */
-const useShownTitle = (id: CaptureId, stored: string): string => {
-  const shown = useSyncExternalStore(
-    drafts.subscribe,
-    () =>
-      drafts.draft(id)?.values.relationship ??
-      drafts.confirmed(id)?.relationship
+const useShownText = (item: CurrentItem): DraftText => {
+  const stored = useMemo(() => storedText(item), [item]);
+
+  const draft = useSyncExternalStore(drafts.subscribe, () =>
+    drafts.draft(item.id)
   );
 
-  return shown === undefined || isBlank(shown) ? stored : shown.trim();
+  const confirmed = useSyncExternalStore(drafts.subscribe, () =>
+    drafts.confirmed(item.id)
+  );
+
+  return draft?.values ?? confirmed ?? stored;
 };
 
 /**
@@ -231,15 +241,21 @@ const CurrentRow = ({
     () => drafts.error(item.id) !== undefined
   );
 
-  const title = useShownTitle(item.id, item.relationship);
+  const text = useShownText(item);
+  const { due } = text;
+
+  // A blank title shows the stored one.
+  const title = isBlank(text.relationship)
+    ? item.relationship
+    : text.relationship.trim();
 
   const commands = useCaptureCommands({
-    due: item.due,
     from: "row",
     id: item.id,
     reopenable: item.reopenable,
     row: link,
     status: item.status,
+    text,
     title,
   });
 
@@ -252,12 +268,12 @@ const CurrentRow = ({
       : { retry: feedback.retry, text: feedback.text };
 
   const found = matchSource(item, needle);
-  const dueShown = item.due !== null && item.status.kind !== "done";
+  const dueShown = due !== null && item.status.kind !== "done";
 
   const chipOwnLine = useChipOwnLine(
     column,
     chip,
-    dueShown ? `${item.due}@${now.toDateString()}` : null
+    dueShown ? `${due}@${now.toDateString()}` : null
   );
 
   const run = (action: RowAction) => {
@@ -376,8 +392,8 @@ const CurrentRow = ({
   });
 
   const badge =
-    dueShown && item.due !== null ? (
-      <DueBadge className="ml-auto" due={item.due} now={now} ref={chip} />
+    dueShown && due !== null ? (
+      <DueBadge className="ml-auto" due={due} now={now} ref={chip} />
     ) : null;
 
   return (
@@ -559,7 +575,7 @@ const Row = ({
     }
 
     case "unreadable": {
-      return <KeptRow>Can&apos;t be read</KeptRow>;
+      return <KeptRow>Can’t be read</KeptRow>;
     }
 
     default: {

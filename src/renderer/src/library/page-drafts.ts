@@ -7,3 +7,5 @@ export const drafts = new DraftStore(() => libraryApi());
 
 /** Holds the window's close, and the app's quit, while some of those words could not be saved. */
 export const leaving = new LeaveFlow(drafts, () => libraryApi());
+
+leaving.announce();

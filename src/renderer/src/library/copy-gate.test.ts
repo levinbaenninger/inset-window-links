@@ -23,6 +23,11 @@ const setup = (answer: () => Promise<MutationOutcome>) => {
   const main: string[] = [];
 
   const drafts = new DraftStore(() => ({
+    discard: (_id, rev) => {
+      main.push(`discard ${String(rev)}`);
+
+      return Promise.resolve({ kind: "ok" });
+    },
     setTodoDone: () => Promise.resolve({ kind: "ok" }),
     updateText: (_id, text) => {
       main.push(`save ${text.relationship}`);
@@ -87,10 +92,10 @@ describe(copyCapture, () => {
       main: ["save A limits C", "begin"],
       result: {
         kind: "notSaved",
-        outcome: { kind: "failed", message: "Saving didn't finish in time." },
+        outcome: { kind: "failed", message: "Saving didn’t finish in time." },
       },
       retry: true,
-      says: "Not copied. Saving didn't finish in time.",
+      says: "Not copied. Saving didn’t finish in time.",
     });
   });
 

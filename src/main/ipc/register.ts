@@ -12,7 +12,6 @@ import type {
 import { channelName } from "../../shared/channels";
 import { CopyRequestSchema, CopyTicketSchema } from "../../shared/copy";
 import type { CaptureDetail, CaptureListItem } from "../../shared/dto";
-import { DueDateSchema } from "../../shared/due";
 import {
   CandidateIdSchema,
   DraftIdSchema,
@@ -61,6 +60,9 @@ export const trustedSender =
       page.matches(frame.url)
     );
   };
+
+/** The page's number for one save of a capture's draft. */
+const RevSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 
 const invoke = <S extends z.ZodTuple, R>(
   schema: S,
@@ -271,6 +273,9 @@ export const registerLibraryChannels = (
           }
         )
     ),
+    discard: invoke(z.tuple([DraftIdSchema, RevSchema.nullable()]), (id, rev) =>
+      store.discard(id, rev)
+    ),
     dragImage: send(
       z.tuple([DraftIdSchema, ViewIdSchema]),
       (captureId, viewId) => {
@@ -294,10 +299,6 @@ export const registerLibraryChannels = (
     reportUnsaved: send(z.tuple([UnsavedCountSchema]), actions.reportUnsaved),
     remove: invoke(z.tuple([DraftIdSchema]), (captureId) =>
       store.remove(captureId)
-    ),
-    setDue: invoke(
-      z.tuple([DraftIdSchema, DueDateSchema.nullable()]),
-      (captureId, due) => store.setDue(captureId, due, new Date())
     ),
     setStatus: invoke(
       z.tuple([DraftIdSchema, StatusRequestSchema]),
@@ -329,13 +330,15 @@ export const registerLibraryChannels = (
       }
     ),
     setTodoDone: invoke(
-      z.tuple([DraftIdSchema, TodoIdSchema, z.boolean()]),
-      (captureId, todoId, done) => store.setTodoDone(captureId, todoId, done)
+      z.tuple([DraftIdSchema, TodoIdSchema, z.boolean(), RevSchema]),
+      (captureId, todoId, done, rev) =>
+        store.setTodoDone(captureId, todoId, done, rev)
     ),
     shortcut: invoke(z.tuple([]), () => shortcutStatus()),
     updateText: invoke(
-      z.tuple([DraftIdSchema, EditedTextSchema]),
-      (captureId, text) => store.updateText(captureId, text, new Date())
+      z.tuple([DraftIdSchema, EditedTextSchema, RevSchema]),
+      (captureId, text, rev) =>
+        store.updateText(captureId, text, new Date(), rev)
     ),
   };
 

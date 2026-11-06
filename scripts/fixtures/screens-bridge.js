@@ -89,8 +89,32 @@ if (page === "popover") {
         snapshot.text = text;
         record("setText", text);
       },
+      // Answers once main took the save; a scene that holds it answers on __releaseSave.
       save: (text) => {
         record("save", text);
+
+        if (data.holdSave !== true) {
+          return nothing();
+        }
+
+        const { promise, resolve } = Promise.withResolvers();
+
+        globalThis.__releaseSave = () => resolve();
+
+        return promise;
+      },
+      discard: () => {
+        record("discard");
+
+        return nothing();
+      },
+      removeView: (viewId) => {
+        record("removeView", viewId);
+
+        return nothing();
+      },
+      addWindows: () => {
+        record("addWindows");
 
         return nothing();
       },
@@ -115,6 +139,10 @@ if (page === "library") {
   /** What each copy began with, by ticket, as main takes it: the capture as it stood then. */
   const begun = new Map();
 
+  /** Each capture's epoch, as main keeps it: Discard bumps it, and a save sent before then never lands. */
+  const epochs = new Map();
+  const epochOf = (captureId) => epochs.get(captureId) ?? 0;
+
   globalThis.__releaseSaves = () => {
     for (const run of heldSaves.splice(0)) {
       run();
@@ -133,6 +161,7 @@ if (page === "library") {
       capture.relationship = text.relationship;
       capture.description = text.description;
       capture.todos = text.todos;
+      capture.due = text.due;
 
       for (const view of capture.views) {
         view.description = text.viewDescriptions[view.id] ?? view.description;
@@ -144,6 +173,7 @@ if (page === "library") {
         item.relationship = capture.relationship;
         item.description = capture.description;
         item.todos = capture.todos;
+        item.due = capture.due;
 
         for (const view of item.views) {
           view.description = text.viewDescriptions[view.id] ?? view.description;
@@ -178,7 +208,7 @@ if (page === "library") {
         begun.delete(ticket);
 
         if (start === undefined || start.captureId !== captureId) {
-          return { kind: "failed", message: "Couldn't copy. Try again." };
+          return { kind: "failed", message: "Couldn’t copy. Try again." };
         }
 
         // Main's capture as the copy began was not on disk: a write before it failed or ran late.
@@ -200,6 +230,7 @@ if (page === "library") {
             : {
                 ...start.capture,
                 description: text.description,
+                due: text.due,
                 relationship: text.relationship,
               };
 
@@ -240,35 +271,32 @@ if (page === "library") {
       onNavigate: none,
       platform,
       reportUnsaved: (count) => record("reportUnsaved", count),
-      setDue: (captureId, due) => {
-        const found = captures.find((capture) => capture.id === captureId);
-
-        if (found !== undefined) {
-          found.due = due;
-          const listed = items.find((item) => item.id === captureId);
-
-          if (listed !== undefined) {
-            listed.due = due;
-          }
-        }
-
-        record("setDue", captureId, due);
-        emit("changed");
+      discard: (captureId, rev) => {
+        epochs.set(captureId, epochOf(captureId) + 1);
+        record("discard", captureId, rev);
 
         return Promise.resolve({ kind: "ok" });
       },
       updateText: (captureId, text) => {
         record("updateText", captureId, text);
 
+        const epoch = epochOf(captureId);
+
+        // A save the page discarded meanwhile is dropped before it lands, as main drops it.
+        const write = () =>
+          epochOf(captureId) === epoch
+            ? saveText(captureId, text)
+            : { kind: "ok" };
+
         if (data.holdSaves === true) {
           const { promise, resolve } = Promise.withResolvers();
 
-          heldSaves.push(() => resolve(saveText(captureId, text)));
+          heldSaves.push(() => resolve(write()));
 
           return promise;
         }
 
-        return Promise.resolve(saveText(captureId, text));
+        return Promise.resolve(write());
       },
       setStatus: (captureId, status) => {
         for (const listed of [...captures, ...items]) {

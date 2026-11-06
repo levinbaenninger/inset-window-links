@@ -3,7 +3,7 @@ import { app, BrowserWindow, dialog, nativeTheme } from "electron";
 import { pushChannels } from "../../shared/channels";
 import type { LeaveAnswer, LeaveReason } from "../../shared/leave";
 import type { PageCommand } from "../../shared/shortcuts";
-import type { LateChoice } from "../leave-gate";
+import type { LateChoice, LateWhy } from "../leave-gate";
 import { LeaveGate, lateDialog } from "../leave-gate";
 import { cursorWorkArea } from "./cursor-display";
 import { windowIcon } from "./icon";
@@ -42,19 +42,21 @@ const chrome = (): Electron.BrowserWindowConstructorOptions => {
     : {};
 };
 
-/** The page didn't answer in time: a native dialog asks, over its window when there is one. */
+/** The page can't answer for its words: a native dialog asks, over its window when there is one. */
 const confirmLate = async (
-  contents: Electron.WebContents,
+  contents: Electron.WebContents | null,
   reason: LeaveReason,
   count: number,
+  why: LateWhy,
   signal: AbortSignal
 ): Promise<LateChoice> => {
-  const { choices, ...shown } = lateDialog(app.getName(), reason, count);
+  const { choices, ...shown } = lateDialog(app.getName(), reason, count, why);
   const options = { ...shown, noLink: true, signal, type: "warning" as const };
 
-  const win = contents.isDestroyed()
-    ? null
-    : BrowserWindow.fromWebContents(contents);
+  const win =
+    contents === null || contents.isDestroyed()
+      ? null
+      : BrowserWindow.fromWebContents(contents);
 
   const { response } =
     win === null
@@ -201,6 +203,7 @@ export class LibraryWindow {
     });
     this.#win = win;
     this.#contents = win.webContents;
+    this.#leaving.attach(win.webContents);
     void this.#page.load(win, route);
   }
 
@@ -286,9 +289,9 @@ export class LibraryWindow {
     }
   }
 
-  /** Before the app quits: `go` at once unless the page holds words it may not be able to save. */
+  /** Before the app quits: `go` at once unless the page holds, or last held, words it may not be able to save. */
   letQuit(): Promise<"go" | "stay"> {
-    return this.#leaving.request(this.#contents, "quit");
+    return this.#leaving.request("quit");
   }
 
   quitting(): void {

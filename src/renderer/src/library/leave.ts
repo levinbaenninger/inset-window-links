@@ -42,12 +42,15 @@ export class LeaveFlow {
   #state: LeaveState = { kind: "idle" };
   /** Bumped by every wait and every final answer: a wait that ends after either changes nothing. */
   #run = 0;
+  readonly #reported: () => number;
 
   constructor(drafts: DraftStore, main: () => LeaveMain) {
     this.#drafts = drafts;
     this.#main = main;
 
-    let reported = 0;
+    let reported = drafts.count;
+
+    this.#reported = () => reported;
 
     drafts.subscribe(() => {
       if (drafts.count !== reported) {
@@ -67,6 +70,14 @@ export class LeaveFlow {
 
   /** The same object until it changes, for useSyncExternalStore. */
   readonly state = (): LeaveState => this.#state;
+
+  /**
+   * Tells main the count as the page loads. Main keeps the count a crashed or reloaded page last
+   * reported until a fresh page reports its own.
+   */
+  announce(): void {
+    this.#main().reportUnsaved(this.#reported());
+  }
 
   /**
    * Main asks again when a quit meets a close in progress, or when it asks a second time: the one

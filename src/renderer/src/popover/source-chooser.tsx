@@ -12,12 +12,12 @@ import type { CandidateId } from "../../../shared/ids";
 
 /** Why the list opened instead of the window in front being added. Picking from the menu needs no reason. */
 const reasons = {
-  ambiguous: "Couldn't tell the window in front apart. Pick it here.",
-  captureFailed: "Couldn't capture the window in front. Pick it here.",
-  invalidId: "Couldn't identify the window in front. Pick it here.",
+  ambiguous: "Couldn’t tell the window in front apart. Pick it here.",
+  captureFailed: "Couldn’t capture the window in front. Pick it here.",
+  invalidId: "Couldn’t identify the window in front. Pick it here.",
   menu: null,
-  noMatch: "Couldn't find the window in front. Pick it here.",
-  probeUnavailable: "Couldn't read the window in front. Pick it here.",
+  noMatch: "Couldn’t find the window in front. Pick it here.",
+  probeUnavailable: "Couldn’t read the window in front. Pick it here.",
   vanished: "The window in front closed before it was added.",
 } satisfies { [K in FallbackReason]: string | null };
 

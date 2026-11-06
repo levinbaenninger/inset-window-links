@@ -95,8 +95,10 @@ const setup = async () => {
   let holding = false;
 
   const drafts = new DraftStore(() => ({
-    setTodoDone: (id, todoId, done) => store.setTodoDone(id, todoId, done),
-    updateText: async (id, text): Promise<MutationOutcome> => {
+    discard: (id, rev) => store.discard(id, rev),
+    setTodoDone: (id, todoId, done, rev) =>
+      store.setTodoDone(id, todoId, done, rev),
+    updateText: async (id, text, rev): Promise<MutationOutcome> => {
       if (holding) {
         const { promise, resolve } = Promise.withResolvers<undefined>();
 
@@ -104,7 +106,7 @@ const setup = async () => {
         await promise;
       }
 
-      return store.updateText(id, text, new Date());
+      return store.updateText(id, text, new Date(), rev);
     },
   }));
 
@@ -157,12 +159,17 @@ const setup = async () => {
   const type = (text: DraftText, id = ID) =>
     drafts.edit(id, text, drafts.shown(id, stored));
 
+  /** Picks a due date for capture `id`, as its page or its row's menu does. */
+  const pickDue = (due: DraftText["due"], id = ID) =>
+    drafts.setDue(id, due, stored);
+
   return {
     clipboard,
     copy,
     disk,
     drafts,
     gate,
+    pickDue,
     store,
     hold: () => {
       holding = true;
@@ -447,18 +454,21 @@ describe("A copy during a held save", () => {
   });
 });
 
-/** Everything a copy outputs is taken when it starts: Due too, and on a capture with no edits. */
+/** The due date goes with the words, in the capture's draft, so a copy takes it as it was when it started. */
 describe("The due date in a copy", () => {
   it("is the one from when the copy began, though Due changes during the held save", async () => {
-    const { clipboard, gate, hold, release, store, type } = await setup();
+    const { clipboard, drafts, gate, hold, pickDue, release, store, type } =
+      await setup();
 
-    await store.setDue(ID, "2026-11-06", new Date());
+    pickDue("2026-11-06");
+    await store.idle();
+    await until(() => drafts.count === 0);
     hold();
-    type({ ...stored, relationship: "FIRST" });
+    type({ ...drafts.shown(ID, stored), relationship: "FIRST" });
 
     const copying = gate({ kind: "note" });
 
-    await store.setDue(ID, "2026-12-20", new Date());
+    pickDue("2026-12-20");
     release();
 
     expect([await copying, clipboard]).toStrictEqual([
@@ -479,33 +489,18 @@ describe("The due date in a copy", () => {
     ]);
   });
 
-  it("is the one from when the copy began on a capture with nothing unsaved, behind a slow write", async () => {
-    const { clipboard, gate, store } = await setup();
+  it("is one picked a moment before the copy, still being written, and not one picked after it began", async () => {
+    const { clipboard, gate, pickDue, store } = await setup();
 
-    // A write sent before the copy is still on its way; one sent after it changes Due again.
-    const before = store.setDue(ID, "2026-11-06", new Date());
+    pickDue("2026-11-09");
+
     const copying = gate({ kind: "note" });
-    const after = store.setDue(ID, "2026-12-20", new Date());
 
-    await Promise.all([before, after]);
+    pickDue("2026-12-20");
 
     const result = await copying;
 
-    expect([
-      result,
-      clipboard.map((note) =>
-        note.split("\n").find((line) => line.startsWith("Due:"))
-      ),
-    ]).toStrictEqual([{ kind: "copied" }, ["Due: Friday, 6 November 2026"]]);
-  });
-
-  it("is one picked a moment before the copy, still being written", async () => {
-    const { clipboard, gate, store } = await setup();
-
-    const picking = store.setDue(ID, "2026-11-09", new Date());
-    const result = await gate({ kind: "note" });
-
-    await picking;
+    await store.idle();
 
     expect([
       result,
@@ -515,14 +510,12 @@ describe("The due date in a copy", () => {
     ]).toStrictEqual([{ kind: "copied" }, ["Due: Monday, 9 November 2026"]]);
   });
 
-  it("refuses when a Due picked before the copy can't be written, rather than copy the old one", async () => {
-    const { clipboard, disk, gate, setFailing, store } = await setup();
+  it("refuses while a Due that can't be written stays unsaved, and copies it once Retry saves it", async () => {
+    const { clipboard, disk, drafts, gate, pickDue, setFailing } =
+      await setup();
 
-    await store.setDue(ID, "2026-11-06", new Date());
     disk.hold();
-
-    const picking = store.setDue(ID, "2026-12-20", new Date());
-
+    pickDue("2026-12-20");
     await until(() => disk.waiting() > 0);
 
     const copying = gate({ kind: "note" });
@@ -530,22 +523,67 @@ describe("The due date in a copy", () => {
     setFailing(true);
     disk.release();
 
-    const result = await copying;
+    const first = await copying;
+
+    const failed = {
+      due: drafts.shown(ID, stored).due,
+      error: drafts.error(ID),
+      unsaved: drafts.count,
+    };
+
+    const again = await gate({ kind: "note" });
+
+    setFailing(false);
+
+    const retried = await drafts.retry(ID);
+    const copied = await gate({ kind: "note" });
 
     expect({
-      clipboard,
-      due: await picking,
-      result,
-      retry: canRetry(result),
+      again: again.kind,
+      clipboard: clipboard.map((note) =>
+        note.split("\n").find((line) => line.startsWith("Due:"))
+      ),
+      copied,
+      failed,
+      first,
+      retried,
+      retry: canRetry(first),
     }).toStrictEqual({
-      clipboard: [],
-      due: { kind: "failed", message: "The disk is full." },
-      result: {
+      again: "notSaved",
+      clipboard: ["Due: Sunday, 20 December 2026"],
+      copied: { kind: "copied" },
+      failed: {
+        due: "2026-12-20",
+        error: { kind: "failed", message: "The disk is full." },
+        unsaved: 1,
+      },
+      first: {
         kind: "notSaved",
         outcome: { kind: "failed", message: "The disk is full." },
       },
+      retried: { kind: "ok" },
       retry: true,
     });
+  });
+
+  it("goes back to the saved Due when a failed one is discarded, and copies that", async () => {
+    const { clipboard, drafts, gate, pickDue, setFailing } = await setup();
+
+    setFailing(true);
+    pickDue("2026-12-20");
+    await until(() => drafts.error(ID) !== undefined);
+    setFailing(false);
+    drafts.discard(ID);
+
+    const result = await gate({ kind: "note" });
+
+    expect([
+      drafts.shown(ID, stored).due,
+      result,
+      clipboard.map((note) =>
+        note.split("\n").find((line) => line.startsWith("Due:"))
+      ),
+    ]).toStrictEqual([null, { kind: "copied" }, [undefined]]);
   });
 });
 
@@ -559,7 +597,11 @@ describe("A copy behind a write that hangs", () => {
 
     disk.hold();
 
-    const picking = store.setDue(ID, "2026-12-20", new Date());
+    // A write sent before the copy, such as Mark as done, that the disk holds.
+    const picking = store.setStatus(ID, {
+      at: "2026-11-05T10:00:00.000Z",
+      kind: "done",
+    });
 
     await until(() => disk.waiting() > 0);
     vi.useFakeTimers();
@@ -593,7 +635,7 @@ describe("A copy behind a write that hangs", () => {
       clipboard: [],
       result: {
         kind: "notSaved",
-        outcome: { kind: "failed", message: "Saving didn't finish in time." },
+        outcome: { kind: "failed", message: "Saving didn’t finish in time." },
       },
       retry: true,
     });
@@ -671,8 +713,8 @@ describe("Main's copy", () => {
       ),
       clipboard,
     ]).toStrictEqual([
-      { kind: "failed", message: "Couldn't copy. Try again." },
-      { kind: "failed", message: "Couldn't copy. Try again." },
+      { kind: "failed", message: "Couldn’t copy. Try again." },
+      { kind: "failed", message: "Couldn’t copy. Try again." },
       [],
     ]);
   });

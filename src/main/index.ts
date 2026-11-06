@@ -412,7 +412,14 @@ const start = async () => {
     },
     openSettings,
     restartToUpdate,
-    saveCapture: () => session.saveDraft(),
+    // The panel saves what it shows and locks its fields at once, so no key typed after ⌘S is lost.
+    saveCapture: () => {
+      if (popover.isFocused()) {
+        popover.command("saveCapture");
+      } else {
+        session.saveDraft();
+      }
+    },
     setFloatOnTop: (on) => {
       void settings.update({ floatOnTop: on });
     },

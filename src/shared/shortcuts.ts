@@ -223,6 +223,7 @@ export const PageCommandSchema = z.enum([
   "focusDescription",
   "focusSteps",
   "reopen",
+  "saveCapture",
   "setDue",
   "showShortcuts",
   "toggleDone",

@@ -84,8 +84,8 @@ export const LeavePrompt = () => {
         <AlertDialogHeader>
           <AlertDialogTitle>
             {count === 1
-              ? "1 change couldn't be saved"
-              : `${count} changes couldn't be saved`}
+              ? "1 change couldn’t be saved"
+              : `${count} changes couldn’t be saved`}
           </AlertDialogTitle>
           <AlertDialogDescription>{why(shown.unsaved)}</AlertDialogDescription>
         </AlertDialogHeader>

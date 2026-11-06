@@ -406,6 +406,8 @@ interface SceneData {
   failSaves?: boolean;
   /** Text saves wait until the scene calls __releaseSaves, as a slow disk would. */
   holdSaves?: boolean;
+  /** The capture panel's Save waits for main's answer until the scene calls __releaseSave. */
+  holdSave?: boolean;
   /** The next copies main refuses as not saved, each with its reason; they copy nothing. */
   copyNotSaved?: string[];
   draft?: DraftState;
@@ -512,6 +514,33 @@ const UNSHOWN_COMMANDS = [
   "find",
   "showShortcuts",
 ] as const;
+
+/**
+ * What the capture panel's quit or discard prompt looks like to the keyboard: whether it is a
+ * modal over a backdrop, whether focus is in it, and whether the fields behind it take input.
+ */
+const promptState = (page: Page) =>
+  page.evaluate<{
+    focusInPrompt: boolean;
+    modal: boolean;
+    overlays: number;
+    titleDisabled: boolean;
+  }>(`({
+    focusInPrompt: document.querySelector("[data-slot=alert-dialog-content]")?.contains(document.activeElement) === true,
+    modal: document.querySelector("[data-slot=alert-dialog-content]")?.getAttribute("role") === "alertdialog",
+    overlays: document.querySelectorAll("[data-slot=alert-dialog-overlay]").length,
+    titleDisabled: document.querySelector("#relationship")?.matches(":disabled") === true,
+  })`);
+
+/** Tries to change the capture panel's text behind a lock: typing, the field keys, a click. */
+const tryToEdit = async (page: Page) => {
+  await page.locator("#relationship").click({ force: true, timeout: 1000 });
+  await page.keyboard.type(" TYPED");
+  await sendCommand(page, "focusSteps");
+  await sendCommand(page, "setDue");
+  await sendCommand(page, "focusDescription");
+  await page.waitForTimeout(150);
+};
 
 /** Notes whether each key pressed from now on was cancelled, which keeps the native menu from it too. */
 const recordKeys = (page: Page) =>
@@ -656,7 +685,30 @@ const SCENES: readonly Scene[] = [
       );
 
       await page.keyboard.press("Escape");
-      await waitForCalls(page, "dismiss", 1);
+      await waitForCalls(page, "chooseQuit", 6);
+      const answered = await callsTo(page, "chooseQuit");
+
+      assert.deepEqual(
+        [answered.at(-1), await callCount(page, "dismiss")],
+        ["cancel", 0],
+        "Escape cancels the quit, as the prompt's Cancel does"
+      );
+
+      // The fixture's main keeps asking: the prompt is still up, as a modal that keeps focus.
+      await button("Save").focus();
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+      assert.deepEqual(
+        await promptState(page),
+        {
+          focusInPrompt: true,
+          modal: true,
+          overlays: 1,
+          titleDisabled: true,
+        },
+        "the prompt is the shared modal: a backdrop, focus kept in it, the fields behind locked"
+      );
       await button("Save").evaluate((node) =>
         node.focus({ focusVisible: true })
       );
@@ -675,7 +727,7 @@ const SCENES: readonly Scene[] = [
     act: async (page) => {
       const prompt = page.getByTestId("quit-prompt");
 
-      await prompt.getByText("Saving didn't finish in time.").waitFor();
+      await prompt.getByText("Saving didn’t finish in time.").waitFor();
       await until(
         page,
         `document.activeElement?.textContent?.trim() === "Retry"`,
@@ -687,6 +739,36 @@ const SCENES: readonly Scene[] = [
       await page.keyboard.press("Enter");
       await waitForCalls(page, "chooseQuit", 1);
       assert.deepEqual(await callsTo(page, "chooseQuit"), ["save"]);
+
+      // Nothing behind the prompt takes input while the late save is on its way, and Return
+      // still retries after a click on the backdrop took focus out of the prompt.
+      const before = await page.locator("#relationship").inputValue();
+      const state = await promptState(page);
+
+      await page.mouse.click(40, 120);
+      await page.keyboard.type("TYPED");
+      await page.keyboard.press("Enter");
+      await waitForCalls(page, "chooseQuit", 2);
+      assert.deepEqual(
+        {
+          chosen: await callsTo(page, "chooseQuit"),
+          prompt: state,
+          sent: await callCount(page, "setText"),
+          title: await page.locator("#relationship").inputValue(),
+        },
+        {
+          chosen: ["save", "save"],
+          prompt: {
+            focusInPrompt: true,
+            modal: true,
+            overlays: 1,
+            titleDisabled: true,
+          },
+          sent: 0,
+          title: before,
+        },
+        "the panel behind the prompt takes nothing, and Return retries whatever has focus"
+      );
       await prompt
         .getByRole("button", { exact: true, name: "Retry" })
         .evaluate((node) => node.focus({ focusVisible: true }));
@@ -699,6 +781,127 @@ const SCENES: readonly Scene[] = [
     },
     name: "popover-quit-late",
     page: "popover",
+  },
+  {
+    /*
+     * While the panel's save is on its way, as after Save or after Cancel in the late-save prompt,
+     * the fields lock: nothing typed, no field key and no Due pick reaches text main would ignore.
+     * Discard still works, and withdraws the save.
+     */
+    act: async (page) => {
+      const title = page.locator("#relationship");
+
+      await until(
+        page,
+        `document.querySelector("[data-testid='draft-fields']")?.disabled === true`,
+        "the fields locked"
+      );
+
+      const before = {
+        steps: await page.getByRole("textbox", { name: /^Next step/u }).count(),
+        title: await title.inputValue(),
+      };
+
+      await tryToEdit(page);
+      assert.deepEqual(
+        {
+          discard: await page
+            .getByRole("button", { exact: true, name: "Discard" })
+            .isEnabled(),
+          duePicker: await page
+            .getByRole("button", { name: /^Tomorrow/u })
+            .count(),
+          sent: await callCount(page, "setText"),
+          steps: await page
+            .getByRole("textbox", { name: /^Next step/u })
+            .count(),
+          title: await title.inputValue(),
+          titleDisabled: await title.isDisabled(),
+        },
+        {
+          discard: true,
+          duePicker: 0,
+          sent: 0,
+          steps: before.steps,
+          title: before.title,
+          titleDisabled: true,
+        },
+        "the locked fields take no input, and Discard stays available"
+      );
+    },
+    data: {
+      draft: draft({ ...FULL_DRAFT, activity: { kind: "saving" } }),
+    },
+    name: "popover-saving-locked",
+    page: "popover",
+  },
+  {
+    /*
+     * From the moment Save is pressed until main answers, the fields lock too, so a key typed in
+     * that gap isn't lost. Once main answers, here with the panel still open as after a failed
+     * save, they unlock and the title has the keyboard again.
+     */
+    act: async (page) => {
+      const title = page.locator("#relationship");
+      const before = await title.inputValue();
+
+      await title.focus();
+      await page.keyboard.press(
+        (await page.evaluate<string>("globalThis.inset.platform")) === "macos"
+          ? "Meta+Enter"
+          : "Control+Enter"
+      );
+      await waitForCalls(page, "save", 1);
+      await page.keyboard.type(" TYPED");
+
+      const whileSaving = {
+        disabled: await title.isDisabled(),
+        sent: await callCount(page, "setText"),
+        title: await title.inputValue(),
+      };
+
+      await page.evaluate("globalThis.__releaseSave()");
+      await until(
+        page,
+        `document.querySelector("#relationship") === document.activeElement`,
+        "the title has the keyboard again"
+      );
+      await page.keyboard.type("!");
+      assert.deepEqual(
+        { after: await title.inputValue(), whileSaving },
+        {
+          after: `${before}!`,
+          whileSaving: { disabled: true, sent: 0, title: before },
+        },
+        "nothing typed between Save and main's answer is lost to it"
+      );
+
+      // File > Save Capture (⌘S) reaches the panel as a command, and locks the fields the same way.
+      await sendCommand(page, "saveCapture");
+      await waitForCalls(page, "save", 2);
+      await page.keyboard.type("?");
+
+      const viaMenu = {
+        disabled: await title.isDisabled(),
+        title: await title.inputValue(),
+      };
+
+      await page.evaluate("globalThis.__releaseSave()");
+      await until(
+        page,
+        `document.querySelector("#relationship") === document.activeElement`,
+        "the title has the keyboard again"
+      );
+      assert.deepEqual(
+        viaMenu,
+        { disabled: true, title: `${before}!` },
+        "⌘S from the menu saves through the panel, which locks its fields"
+      );
+    },
+    data: { draft: draft(FULL_DRAFT), holdSave: true },
+    name: "popover-save-pending",
+    page: "popover",
+    platforms: ["macos"],
   },
   {
     data: {
@@ -729,13 +932,140 @@ const SCENES: readonly Scene[] = [
   },
   {
     act: async (page) => {
-      await page
-        .getByRole("button", { exact: true, name: /^discard/iu })
-        .first()
-        .click();
+      const footerDiscard = page
+        .getByRole("button", { exact: true, name: "Discard" })
+        .first();
+
+      const prompt = page.getByTestId("discard-confirm");
+
+      await footerDiscard.click();
+      await until(
+        page,
+        `document.activeElement?.textContent?.trim() === "Keep"`,
+        "focus on Keep"
+      );
+      await prompt
+        .getByRole("button", { exact: true, name: "Discard" })
+        .focus();
+      await page.keyboard.press("Enter");
+      await prompt.waitFor({ state: "detached" });
+      assert.equal(
+        await callCount(page, "discard"),
+        0,
+        "Return keeps the capture, though Discard had focus"
+      );
+
+      await footerDiscard.click();
+      await prompt.waitFor();
+      assert.deepEqual(
+        await promptState(page),
+        {
+          focusInPrompt: true,
+          modal: true,
+          overlays: 1,
+          titleDisabled: false,
+        },
+        "the discard question is the shared modal"
+      );
     },
     data: { draft: draft(FULL_DRAFT) },
     name: "popover-discard",
+    page: "popover",
+    platforms: ["macos"],
+  },
+  {
+    /*
+     * Keyboard Shortcuts asked for from the menu while the late-save prompt is up leaves the
+     * prompt as it is: the modal, with focus kept in it, and Escape still cancels the quit.
+     */
+    act: async (page) => {
+      await page.getByTestId("quit-prompt").waitFor();
+      await sendCommand(page, "showShortcuts");
+      await page.waitForTimeout(150);
+      await page.keyboard.press("Tab");
+      assert.deepEqual(
+        {
+          prompt: await promptState(page),
+          sheet: await page
+            .getByRole("heading", { name: "Keyboard Shortcuts" })
+            .count(),
+        },
+        {
+          prompt: {
+            focusInPrompt: true,
+            modal: true,
+            overlays: 1,
+            titleDisabled: true,
+          },
+          sheet: 0,
+        },
+        "the quit prompt stays the modal, with no sheet over it"
+      );
+
+      await page.keyboard.press("Escape");
+      await waitForCalls(page, "chooseQuit", 1);
+      assert.deepEqual(
+        await callsTo(page, "chooseQuit"),
+        ["cancel"],
+        "Escape still cancels the quit"
+      );
+    },
+    data: {
+      draft: draft({
+        ...FULL_DRAFT,
+        activity: { kind: "confirmingQuit", late: true },
+      }),
+    },
+    name: "popover-quit-shortcuts",
+    page: "popover",
+    platforms: ["macos"],
+  },
+  {
+    // The same for “Discard this capture?”: the sheet waits, and Escape keeps the capture.
+    act: async (page) => {
+      const prompt = page.getByTestId("discard-confirm");
+
+      const ask = async () => {
+        await page
+          .getByRole("button", { exact: true, name: "Discard" })
+          .first()
+          .click();
+        await prompt.waitFor();
+        await sendCommand(page, "showShortcuts");
+        await page.waitForTimeout(150);
+      };
+
+      await ask();
+      assert.deepEqual(
+        {
+          prompt: await promptState(page),
+          sheet: await page
+            .getByRole("heading", { name: "Keyboard Shortcuts" })
+            .count(),
+        },
+        {
+          prompt: {
+            focusInPrompt: true,
+            modal: true,
+            overlays: 1,
+            titleDisabled: false,
+          },
+          sheet: 0,
+        },
+        "the discard question stays the modal, with no sheet over it"
+      );
+
+      await page.keyboard.press("Escape");
+      await prompt.waitFor({ state: "detached" });
+      assert.equal(
+        await callCount(page, "discard"),
+        0,
+        "Escape keeps the capture"
+      );
+      await ask();
+    },
+    data: { draft: draft(FULL_DRAFT) },
+    name: "popover-discard-shortcuts",
     page: "popover",
     platforms: ["macos"],
   },
@@ -1673,7 +2003,7 @@ const SCENES: readonly Scene[] = [
         .waitFor();
       await page.keyboard.press("Space");
       await closedOnB("Space in the Due submenu");
-      await waitForCalls(page, "setDue", 1);
+      await waitForCalls(page, "updateText", 1);
 
       await openMenu();
       await menu.getByRole("menuitem", { name: "Mark as done" }).hover();
@@ -1692,16 +2022,17 @@ const SCENES: readonly Scene[] = [
           copyNote: await callsTo(page, "copyNote"),
           remove: await callsTo(page, "remove"),
           reopen: await callsTo(page, "reopen"),
-          setDue: await callsTo(page, "setDue"),
           setStatus: await callsTo(page, "setStatus"),
+          // The Due joins B's draft and is saved with its words.
+          updateText: await callsTo(page, "updateText"),
         },
         {
           copyEntry: [uuid(2), uuid(2), uuid(2), uuid(2)],
           copyNote: [uuid(2), uuid(2)],
           remove: [],
           reopen: [uuid(2)],
-          setDue: [uuid(2)],
           setStatus: [uuid(2)],
+          updateText: [uuid(2)],
         },
         "every key acts once, on B, never on the open capture"
       );
@@ -1729,7 +2060,7 @@ const SCENES: readonly Scene[] = [
 
       await title.fill("NEW UNSAVED TITLE");
       await row.focus();
-      await page.getByText("Couldn't save. The disk is full.").waitFor();
+      await page.getByText("Couldn’t save. The disk is full.").waitFor();
       await seedClipboard(page);
       await page.keyboard.press("ControlOrMeta+C");
       const saves = await callCount(page, "updateText");
@@ -1857,7 +2188,7 @@ const SCENES: readonly Scene[] = [
 
       await title.fill("NEW UNSAVED TITLE");
       await rowA.focus();
-      await failure.getByText("Couldn't save. The disk is full.").waitFor();
+      await failure.getByText("Couldn’t save. The disk is full.").waitFor();
       await failure.getByRole("button", { name: "Retry" }).waitFor();
       await failure.getByRole("button", { name: "Discard changes" }).waitFor();
       await seedClipboard(page);
@@ -1977,7 +2308,7 @@ const SCENES: readonly Scene[] = [
 
       // The viewer is the same capture: back from it, the unsaved title and its error are still there.
       await page.getByRole("button", { name: "Back" }).click();
-      await failure.getByText("Couldn't save. The disk is full.").waitFor();
+      await failure.getByText("Couldn’t save. The disk is full.").waitFor();
       assert.equal(await title.inputValue(), "NEW UNSAVED TITLE");
 
       // Leaving A, its words stay. Long after their save failed, A's row still refuses, and says why.
@@ -2027,7 +2358,7 @@ const SCENES: readonly Scene[] = [
       assert.ok(await failure.isVisible(), "the error stays while typing");
       assert.equal(await gap(), at, "nothing moves while typing");
       await waitForCalls(page, "updateText", saves + 1);
-      await failure.getByText("Couldn't save. The disk is full.").waitFor();
+      await failure.getByText("Couldn’t save. The disk is full.").waitFor();
       assert.equal(await gap(), at, "nothing moves once it fails again");
 
       const sent = await callCount(page, "updateText");
@@ -2136,7 +2467,7 @@ const SCENES: readonly Scene[] = [
       await held("close");
       assert.equal(
         await prompt.getByRole("heading").textContent(),
-        "1 change couldn't be saved"
+        "1 change couldn’t be saved"
       );
       assert.equal(
         await prompt
@@ -2225,7 +2556,7 @@ const SCENES: readonly Scene[] = [
       await held("close");
       assert.equal(
         await prompt.getByRole("heading").textContent(),
-        "2 changes couldn't be saved"
+        "2 changes couldn’t be saved"
       );
 
       // The round 6 reviewer's probe: Return on a focused Discard and close retries both.
@@ -2301,13 +2632,13 @@ const SCENES: readonly Scene[] = [
         await page.waitForTimeout(2500);
         assert.equal(await prompt.count(), 0, "it waits before it asks");
         await prompt
-          .getByText("Saving didn't finish in time.")
+          .getByText("Saving didn’t finish in time.")
           .waitFor({ timeout: 3500 });
         // Bounded, with room for a loaded machine: main itself gives up waiting at 6 s.
         assert.ok(Date.now() - started < 6000, "it asks within the bound");
         assert.equal(
           await prompt.getByRole("heading").textContent(),
-          "1 change couldn't be saved"
+          "1 change couldn’t be saved"
         );
       };
 
@@ -2336,28 +2667,33 @@ const SCENES: readonly Scene[] = [
       ]);
       assert.deepEqual(await fields(), saved, "Discard shows the saved words");
 
-      // The discarded words land late: the saved ones are sent after them, and stay on screen.
+      // Discard tells main to drop the save on its way. Nothing is written to put the saved words
+      // back: the discarded save never lands, and its answer brings nothing back.
       const sent = await callCount(page, "updateText");
 
+      await waitForCalls(page, "discard", 1);
       await release();
-      await waitForCalls(page, "updateText", sent + 1);
       await page.waitForTimeout(200);
+      assert.deepEqual(
+        {
+          discards: await callsTo(page, "discard"),
+          onDisk: await page.evaluate<string>(
+            "globalThis.__screens.data.captures[0].relationship"
+          ),
+          saves: await callCount(page, "updateText"),
+        },
+        { discards: [uuid(1)], onDisk: stored?.relationship, saves: sent },
+        "Discard writes nothing, and the discarded save never lands"
+      );
       assert.deepEqual(
         await fields(),
         saved,
-        "the late save brings nothing back, in the row either"
+        "the late answer brings nothing back, in the row either"
       );
-      await release();
-      await until(
-        page,
-        `globalThis.__screens.data.captures[0].relationship === ${JSON.stringify(stored?.relationship)} && globalThis.__screens.data.captures[0].description === ${JSON.stringify(stored?.description)}`,
-        "the saved words back on disk"
-      );
-      assert.deepEqual(await fields(), saved, "still the saved words");
 
       // As it looks: words typed while the disk hangs, and a close that waited for them.
       await typeAll("Waiting for the disk:");
-      await waitForCalls(page, "updateText", sent + 2);
+      await waitForCalls(page, "updateText", sent + 1);
       await heldLate();
     },
     data: { captures: CAPTURES, holdSaves: true },
@@ -2412,15 +2748,19 @@ const SCENES: readonly Scene[] = [
         "Discard changes shows the saved words at once"
       );
 
+      await waitForCalls(page, "discard", 1);
       await release();
-      await waitForCalls(page, "updateText", sent + 2);
       await page.waitForTimeout(200);
-      assert.equal(
-        await page.evaluate<string>(
-          "globalThis.__screens.data.captures[0].relationship"
-        ),
-        "DISCARD ME",
-        "the discarded words landed late"
+      assert.deepEqual(
+        {
+          discards: await callsTo(page, "discard"),
+          onDisk: await page.evaluate<string>(
+            "globalThis.__screens.data.captures[0].relationship"
+          ),
+          saves: await callCount(page, "updateText"),
+        },
+        { discards: [uuid(1)], onDisk: stored, saves: sent + 1 },
+        "Discard writes nothing, and the discarded Retry never lands"
       );
       assert.deepEqual(
         [
@@ -2430,16 +2770,6 @@ const SCENES: readonly Scene[] = [
         ],
         [stored, stored, 0],
         "they never show again"
-      );
-      await release();
-      await until(
-        page,
-        `globalThis.__screens.data.captures[0].relationship === ${JSON.stringify(stored)}`,
-        "the saved words back on disk"
-      );
-      assert.deepEqual(
-        [await title.inputValue(), await rowTitle.textContent()],
-        [stored, stored]
       );
     },
     data: { captures: CAPTURES, failSaves: true },
@@ -2556,7 +2886,7 @@ const SCENES: readonly Scene[] = [
       await pageRetry.click();
       await header.filter({ hasText: "Saving…" }).waitFor();
       await header
-        .filter({ hasText: "Still not saved. Saving didn't finish in time." })
+        .filter({ hasText: "Still not saved. Saving didn’t finish in time." })
         .waitFor({ timeout: 4000 });
       await pageRetry.waitFor();
       await page.evaluate(
@@ -2598,6 +2928,90 @@ const SCENES: readonly Scene[] = [
   },
   {
     /*
+     * A Due that can't be saved is a failed draft like any other edit: it stays on the page and
+     * the row with "Not saved", Retry and Discard changes; a copy is refused and offers Retry
+     * saving. Once Retry saves it, the copy carries the new date.
+     */
+    act: async (page) => {
+      const failure = page.getByTestId("save-failure");
+      const header = page.getByTestId("capture-feedback");
+      const rowA = page.getByTestId("recent-item").first();
+      const chip = page.locator("main").getByTestId("due-chip");
+
+      const failSaves = (on: boolean) =>
+        page.evaluate(`globalThis.__screens.data.failSaves = ${String(on)}`);
+
+      // The picker can still be moving into place under its chip, so the click doesn't wait for it to settle.
+      const pick = async (name: RegExp) => {
+        await sendCommand(page, "setDue");
+
+        const option = page.getByRole("button", { name });
+
+        await option.waitFor();
+        await option.click({ force: true });
+      };
+
+      await pick(/^Tomorrow/u);
+      await failure.getByText(/The disk is full/u).waitFor();
+
+      const chipText = await chip.textContent();
+      const rowText = await rowA.textContent();
+
+      assert.deepEqual(
+        {
+          chip: chipText?.includes("Tomorrow"),
+          row: await rowA.getByText("Not saved").count(),
+          rowChip: rowText?.includes("Tomorrow"),
+          stored: await page.evaluate<string | null>(
+            "globalThis.__screens.data.captures[0].due"
+          ),
+        },
+        {
+          chip: true,
+          row: 1,
+          rowChip: true,
+          stored: CAPTURES[0]?.due ?? null,
+        },
+        "the failed Due stays on the page and the row, marked Not saved"
+      );
+
+      await seedClipboard(page);
+      await sendCommand(page, "copyNote");
+      await header.getByText("Not copied. The disk is full.").waitFor();
+      assert.equal(await readClipboard(page), SENTINEL, "nothing copied");
+      await page.getByRole("button", { name: /^Retry saving/u }).waitFor();
+
+      await failSaves(false);
+      await failure.getByRole("button", { name: "Retry" }).click();
+      await failure.waitFor({ state: "detached" });
+      await sendCommand(page, "copyNote");
+      await waitForCalls(page, "copyNote", 1);
+
+      const saved = await page.evaluate<string | null>(
+        "globalThis.__screens.data.captures[0].due"
+      );
+
+      const clip = await readClipboard(page);
+
+      assert.ok(
+        saved !== null && clip.includes(`Due: ${saved}`),
+        "Retry saved the Due, and the copy carries it"
+      );
+
+      // As it looks: another Due that can't be saved, once the copy's note is gone.
+      await header.waitFor({ state: "detached", timeout: 4000 });
+      await failSaves(true);
+      await pick(/^Next week/u);
+      await failure.getByText(/The disk is full/u).waitFor();
+    },
+    data: { captures: CAPTURES, failSaves: true },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-due-failed",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    /*
      * Main refuses a copy when the capture as it began is not on disk: a due date that couldn't be
      * written, or a write that didn't land within SETTLE_MS. The page, the row and the viewer say
      * why and copy nothing, and their Retry copies again.
@@ -2617,10 +3031,10 @@ const SCENES: readonly Scene[] = [
       };
 
       // The page: Copy as text is refused, Retry copies.
-      await refuseNext("Saving didn't finish in time.");
+      await refuseNext("Saving didn’t finish in time.");
       await sendCommand(page, "copyNote");
       await header
-        .filter({ hasText: "Not copied. Saving didn't finish in time." })
+        .filter({ hasText: "Not copied. Saving didn’t finish in time." })
         .waitFor();
       assert.equal(
         await readClipboard(page),

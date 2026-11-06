@@ -7,7 +7,6 @@ import type {
   MutationOutcome,
   ShortcutStatus,
 } from "./dto";
-import type { DueDate } from "./due";
 import type { CandidateId, CaptureId, ViewId } from "./ids";
 import type { LeaveAnswer, LeavePush } from "./leave";
 import type { SettingsChange, SettingsView } from "./settings";
@@ -39,19 +38,25 @@ export interface PopoverApi {
 export interface LibraryApi {
   list: () => Promise<readonly CaptureListItem[]>;
   get: (captureId: string) => Promise<CaptureDetail | null>;
+  /** Saves a capture's words and due date as the draft's save `rev`. */
   updateText: (
     captureId: CaptureId,
-    text: DraftText
+    text: DraftText,
+    rev: number
+  ) => Promise<MutationOutcome>;
+  /**
+   * The page gave up its unsaved changes to a capture: saves of them still on their way are
+   * dropped, and `rev`, sent but not answered yet, is undone if it landed already. Writes no
+   * content. Answers failed when the saved version couldn't be put back.
+   */
+  discard: (
+    captureId: CaptureId,
+    rev: number | null
   ) => Promise<MutationOutcome>;
   remove: (captureId: CaptureId) => Promise<MutationOutcome>;
   setStatus: (
     captureId: CaptureId,
     status: StatusRequest
-  ) => Promise<MutationOutcome>;
-  /** Sets or clears the due date, apart from the text. */
-  setDue: (
-    captureId: CaptureId,
-    due: DueDate | null
   ) => Promise<MutationOutcome>;
   /**
    * Starts a copy: main takes the capture as it stands once every write sent before this has
@@ -72,10 +77,12 @@ export interface LibraryApi {
   shortcut: () => Promise<ShortcutStatus>;
   /** Starts a native file drag of the saved PNG, for dropping into another app. */
   dragImage: (captureId: CaptureId, viewId: ViewId) => void;
+  /** Checks a step off or on, as the draft's save `rev`. */
   setTodoDone: (
     captureId: CaptureId,
     todoId: string,
-    done: boolean
+    done: boolean,
+    rev: number
   ) => Promise<MutationOutcome>;
   /** Opens the page, file or app each view came from. Resolves to how many could not be opened. */
   reopen: (

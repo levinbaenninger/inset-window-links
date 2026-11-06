@@ -43,6 +43,11 @@ const setup = (outcomes: MutationOutcome[] = []) => {
   let holding = false;
 
   const store: TextStore = {
+    discard: (_id, rev) => {
+      log.push(`discard ${rev === null ? "none" : "sent"}`);
+
+      return Promise.resolve(OK);
+    },
     setTodoDone: () => Promise.resolve(OK),
     updateText: (_id, text) => {
       log.push(
@@ -148,7 +153,7 @@ describe(LeaveFlow, () => {
     ]);
   });
 
-  it("holds for words that couldn't be saved, with how many and why, and sends nothing again", async () => {
+  it("holds for words that couldn’t be saved, with how many and why, and sends nothing again", async () => {
     const { flow, log, type } = setup([DISK_FULL]);
 
     type(A, "A limits C");
@@ -162,7 +167,7 @@ describe(LeaveFlow, () => {
     ]);
   });
 
-  it("counts each capture whose words couldn't be saved, not the ones that were", async () => {
+  it("counts each capture whose words couldn’t be saved, not the ones that were", async () => {
     const { flow, type } = setup([DISK_FULL, DISK_FULL, OK]);
 
     type(A, "A limits C");
@@ -177,7 +182,7 @@ describe(LeaveFlow, () => {
     );
   });
 
-  it("holds after SETTLE_MS when a save never answers, saying it didn't finish in time, never going", async () => {
+  it("holds after SETTLE_MS when a save never answers, saying it didn’t finish in time, never going", async () => {
     const { flow, hold, log, type } = setup();
 
     hold();
@@ -249,20 +254,23 @@ describe(LeaveFlow, () => {
           "waiting",
           "held",
           "save A limits C",
+          "discard sent",
+          "unsaved 0",
           "go",
         ],
       ],
       stored,
       0,
+      // Nothing is sent to put the saved words back: main drops or undoes the discarded save.
       [
         "unsaved 1",
         "save A limits C",
         "waiting",
         "held",
         "save A limits C",
-        "go",
-        "save A limits B",
+        "discard sent",
         "unsaved 0",
+        "go",
       ],
     ]);
   });
@@ -397,6 +405,16 @@ describe(LeaveFlow, () => {
     ]);
   });
 
+  it("tells main its count as the page loads, 0 included, so a count left by a crashed page is cleared only then", () => {
+    const { drafts, flow, log } = setup();
+
+    flow.announce();
+    drafts.edit(A, titled("A limits C"), stored);
+    flow.announce();
+
+    expect(log).toStrictEqual(["unsaved 0", "unsaved 1", "unsaved 1"]);
+  });
+
   it("Discard gives up every capture's words, reports that, then lets go", async () => {
     const { drafts, flow, log, type } = setup([DISK_FULL, DISK_FULL]);
 
@@ -408,10 +426,14 @@ describe(LeaveFlow, () => {
     flow.discard();
 
     expect([
-      log.slice(-4),
+      log.slice(-6),
       drafts.count,
       drafts.shown(A, stored),
-    ]).toStrictEqual([["held", "unsaved 1", "unsaved 0", "go"], 0, stored]);
+    ]).toStrictEqual([
+      ["held", "discard none", "unsaved 1", "discard none", "unsaved 0", "go"],
+      0,
+      stored,
+    ]);
   });
 
   it("Cancel keeps the words and stays; the next close asks again", async () => {
@@ -467,6 +489,7 @@ describe(LeaveFlow, () => {
         "waiting",
         "held",
         "held",
+        "discard none",
         "unsaved 0",
         "go",
       ],

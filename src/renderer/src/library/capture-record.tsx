@@ -59,7 +59,7 @@ import { couldNotSave } from "../../../shared/errors";
 import type { CaptureId } from "../../../shared/ids";
 import { menuKeyLabel } from "../../../shared/shortcuts";
 import type { CaptureStatus } from "../../../shared/status";
-import type { DraftText, Todo, ViewDescriptions } from "../../../shared/text";
+import type { DraftText, Todo } from "../../../shared/text";
 import {
   MAX_DESCRIPTION,
   MAX_RELATIONSHIP,
@@ -74,6 +74,7 @@ import {
 import { retryLabel } from "./copy-gate";
 import { useEntryCopy } from "./copy-keys";
 import type { SaveError } from "./drafts";
+import { storedText } from "./drafts";
 import { ImageViewer } from "./image-viewer";
 import { drafts } from "./page-drafts";
 import { PaneHeader } from "./pane-header";
@@ -296,21 +297,6 @@ const StatusNote = ({ status }: { status: CaptureStatus }) => {
   }
 };
 
-const viewDescriptionsOf = (detail: CaptureDetail): ViewDescriptions =>
-  // SAFETY: the keys are the views' own ids.
-  Object.fromEntries(
-    detail.views.map((view) => [view.id, view.description])
-  ) as ViewDescriptions;
-
-/** The editable text. The due date is shown from the stored copy and saved on its own. */
-const textOf = (detail: CaptureDetail): DraftText => ({
-  description: detail.description,
-  due: detail.due,
-  relationship: detail.relationship,
-  todos: [...detail.todos],
-  viewDescriptions: viewDescriptionsOf(detail),
-});
-
 const problem = (outcome: MutationOutcome): string => {
   switch (outcome.kind) {
     case "ok": {
@@ -322,7 +308,7 @@ const problem = (outcome: MutationOutcome): string => {
     }
 
     case "readOnly": {
-      return "This capture can't be changed.";
+      return "This capture can’t be changed.";
     }
 
     default: {
@@ -411,15 +397,13 @@ const HeaderFeedback = ({
   </>
 );
 
-const dueProblem = (outcome: MutationOutcome): string | null =>
-  outcome.kind === "ok" ? null : problem(outcome);
-
 const Record = ({
   detail,
   text,
   failure,
   saving,
   onText,
+  onDue,
   onToggle,
   onTitleBlur,
   onLeave,
@@ -427,12 +411,15 @@ const Record = ({
   onDiscard,
 }: {
   detail: CaptureDetail;
+  /** The fields on screen, the due date too: the draft's, else the saved ones. */
   text: DraftText;
   /** Why the words on screen could not be saved; they stay until saved or discarded. */
   failure: SaveError | null;
   /** Whether a save of them is on its way. */
   saving: boolean;
   onText: (text: DraftText) => void;
+  /** Sets or clears the due date, saved at once as part of the draft. */
+  onDue: (due: DueDate | null) => void;
   onToggle: (todo: Todo, done: boolean) => void;
   onTitleBlur: () => void;
   onLeave: () => void;
@@ -446,34 +433,23 @@ const Record = ({
   const page = useRef<HTMLElement>(null);
   const [describing, setDescribing] = useState(false);
   const [dueOpen, setDueOpen] = useState(false);
-
-  /** The due date just picked, shown until the stored copy it was picked over changes. */
-  const [pickedDue, setPickedDue] = useState<{
-    due: DueDate | null;
-    over: DueDate | null;
-  } | null>(null);
-
-  const [dueError, setDueError] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [reopened, setReopened] = useState<string | null>(null);
   const now = useToday();
   const { platform } = libraryApi();
   const reopenable = detail.views.filter((view) => view.origin !== null);
 
-  const due =
-    pickedDue !== null && pickedDue.over === detail.due
-      ? pickedDue.due
-      : detail.due;
+  const { due } = text;
 
   const showDescription = describing || text.description !== "";
   const showSteps = text.todos.length > 0;
 
   const commands = useCaptureCommands({
-    due,
     from: "page",
     id: detail.id,
     reopenable: reopenable.map((view) => view.id),
     status: detail.status,
+    text,
     title: text.relationship,
   });
 
@@ -514,18 +490,6 @@ const Record = ({
 
     setReopened(reopenedMessage(views.length, failed));
     setTimeout(() => setReopened(null), FEEDBACK_MS);
-  };
-
-  const setDue = async (next: DueDate | null) => {
-    setPickedDue({ due: next, over: detail.due });
-
-    const failed = dueProblem(await libraryApi().setDue(detail.id, next));
-
-    setDueError(failed);
-
-    if (failed !== null) {
-      setPickedDue(null);
-    }
   };
 
   const focusDescription = () => {
@@ -817,7 +781,7 @@ const Record = ({
                       due={due}
                       keys={menuKeyLabel("setDue", platform)}
                       now={now}
-                      onClear={() => setDue(null)}
+                      onClear={() => onDue(null)}
                       onClick={() => setDueOpen((open) => !open)}
                     />
                   )}
@@ -845,16 +809,11 @@ const Record = ({
                   onClose={() => setDueOpen(false)}
                   onPick={(next) => {
                     setDueOpen(false);
-                    void setDue(next);
+                    onDue(next);
                   }}
                 />
               </PopoverContent>
             </Popover>
-            {dueError !== null && (
-              <p className="text-destructive text-xs" role="alert">
-                {dueError}
-              </p>
-            )}
           </div>
           <section aria-label="Windows" className="flex flex-col gap-2">
             <h2 className="text-muted-foreground text-xs font-medium">
@@ -903,7 +862,7 @@ const CapturePane = ({
   viewIndex: number;
 }) => {
   const { id } = detail;
-  const stored = useMemo(() => textOf(detail), [detail]);
+  const stored = useMemo(() => storedText(detail), [detail]);
   const draft = useSyncExternalStore(drafts.subscribe, () => drafts.draft(id));
 
   const confirmed = useSyncExternalStore(drafts.subscribe, () =>
@@ -929,6 +888,7 @@ const CapturePane = ({
       detail={detail}
       failure={error ?? null}
       onDiscard={() => drafts.discard(id)}
+      onDue={(due) => drafts.setDue(id, due, text)}
       onLeave={() => drafts.flush(id)}
       onRetry={() => drafts.retry(id)}
       onText={(next) => drafts.edit(id, next, text)}

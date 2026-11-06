@@ -64,6 +64,7 @@ import type {
   StatusRequest,
 } from "../../../shared/status";
 import { ACTIVE, snoozePresets } from "../../../shared/status";
+import type { DraftText } from "../../../shared/text";
 import type { RetryKind } from "./copy-gate";
 import { copyCapture, notCopiedText, retryOf } from "./copy-gate";
 import { reasonOf } from "./drafts";
@@ -118,7 +119,11 @@ export interface CaptureTarget {
   /** The words on screen, which the Delete confirm names. */
   title: string;
   status: CaptureStatus;
-  due: DueDate | null;
+  /**
+   * The capture's fields as shown, its due date too: the draft's, else the saved ones. A Due
+   * picked from the menu joins the capture's draft, so one that can't be saved stays unsaved.
+   */
+  text: DraftText;
   /** The windows Reopen can bring back. */
   reopenable: readonly ViewId[];
   /** Where the menu opens: on a row of the list, where Space and ⌫ work too, or on the capture's page. */
@@ -149,7 +154,7 @@ const outcomeMessage = (outcome: MutationOutcome): string | null => {
     }
 
     case "readOnly": {
-      return "This capture can't be changed.";
+      return "This capture can’t be changed.";
     }
 
     default: {
@@ -283,8 +288,8 @@ export const useCaptureCommands = (target: CaptureTarget) => {
 
   const { status } = target;
 
-  const setDue = async (due: DueDate | null) => {
-    report(await libraryApi().setDue(target.id, due));
+  const setDue = (due: DueDate | null) => {
+    drafts.setDue(target.id, due, target.text);
   };
 
   // A row's keys act on that row once it has focus, which a right-click gives it, and the page's
@@ -308,7 +313,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
         label: "Pick a date…",
         run: () => setPickingDue(true),
       },
-      ...(target.due === null
+      ...(target.text.due === null
         ? []
         : [
             {
@@ -481,13 +486,13 @@ export const useCaptureCommands = (target: CaptureTarget) => {
               When should this capture be done by?
             </DialogDescription>
             <DueOptions
-              due={target.due}
+              due={target.text.due}
               keys={keys("setDue")}
               now={now}
               onClose={() => setPickingDue(false)}
               onPick={(due) => {
                 setPickingDue(false);
-                void setDue(due);
+                setDue(due);
               }}
             />
           </div>

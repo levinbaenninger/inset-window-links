@@ -136,7 +136,7 @@ export const copyCapture = async (
   const begun = starts.take(ticket, id);
 
   if (begun === null) {
-    return { kind: "failed", message: "Couldn't copy. Try again." };
+    return { kind: "failed", message: "Couldn’t copy. Try again." };
   }
 
   const taken = await inTime(begun);

@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import type { ReactNode, RefObject } from "react";
+import { flushSync } from "react-dom";
 
 import { AddChips } from "@/components/add-chips";
 import type { AddField } from "@/components/add-chips";
@@ -16,6 +17,14 @@ import { IconButton } from "@/components/icon-button";
 import { SHORTCUTS_ICON, ShortcutList } from "@/components/shortcut-sheet";
 import { TodoEditor } from "@/components/todo-editor";
 import type { TodoEditorHandle } from "@/components/todo-editor";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -59,15 +68,49 @@ const chooseQuit = async (choice: "save" | "discard" | "cancel") => {
   await popoverApi().chooseQuit(choice);
 };
 
+/** Edits made while the fields are locked go nowhere: main would ignore them. */
+const ignoreEdit = (_text: DraftText): null => null;
+
+/** Room kept above and below a prompt, which the panel grows to fit when it is shorter. */
+const DIALOG_MARGIN = 16;
+
 const reportPanelHeight = (element: HTMLElement) => {
   const scroll = element.querySelector<HTMLElement>("[data-panel-scroll]");
 
   const overflow =
     scroll === null ? 0 : scroll.scrollHeight - scroll.clientHeight;
 
-  popoverApi().reportHeight(
-    Math.ceil(element.getBoundingClientRect().height + overflow)
+  const dialog = document.querySelector<HTMLElement>(
+    "[data-slot='alert-dialog-content'][data-state='open']"
   );
+
+  const prompt = dialog === null ? 0 : dialog.offsetHeight + DIALOG_MARGIN * 2;
+
+  popoverApi().reportHeight(
+    Math.ceil(
+      Math.max(element.getBoundingClientRect().height + overflow, prompt)
+    )
+  );
+};
+
+/** A prompt that opens or closes changes what the panel must fit, though the panel itself doesn't change. */
+const usePromptFit = () => {
+  useEffect(() => {
+    const report = () => {
+      const panel = document.querySelector("main");
+
+      if (panel !== null) {
+        reportPanelHeight(panel);
+      }
+    };
+
+    const frame = requestAnimationFrame(report);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      requestAnimationFrame(report);
+    };
+  }, []);
 };
 
 const PanelScroll = ({
@@ -172,28 +215,6 @@ const PanelHeader = ({
   );
 };
 
-/** A quiet row for a question that replaces the footer until it is answered. */
-const PromptRow = ({
-  children,
-  label,
-  testId,
-  onKeyDownCapture,
-}: {
-  children: React.ReactNode;
-  label: React.ReactNode;
-  testId: string;
-  onKeyDownCapture?: (event: React.KeyboardEvent) => void;
-}) => (
-  <footer
-    className="bg-muted flex items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-3"
-    data-testid={testId}
-    onKeyDownCapture={onKeyDownCapture}
-  >
-    <div className="flex min-w-0 flex-1 flex-col text-xs">{label}</div>
-    <span className="flex shrink-0 gap-1.5">{children}</span>
-  </footer>
-);
-
 /** What the quit prompt calls the windows still being added: "Calendar", or "2 windows". */
 const landingName = (landing: DraftSnapshot["landing"]): string | null => {
   if (landing.length > 1) {
@@ -222,11 +243,23 @@ const quitDetail = (
   return landing === null ? null : `Save waits for ${landing} to be added.`;
 };
 
+/** Return in a prompt runs `run`, whichever button has focus, before the button sees it. */
+const returnRuns =
+  (run: () => void) =>
+  (event: React.KeyboardEvent): void => {
+    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      run();
+    }
+  };
+
 /**
  * Shown when Quit meets an unsaved draft, and again when the save it chose ran late; Save is
- * then Retry, which waits once more. Return always saves or retries, whichever button has focus;
- * Escape cancels, like the Cancel button; Space presses the focused button, so Discard stays a
- * deliberate choice. Save has focus, with its ring, so it is clear what Return does.
+ * then Retry, which waits once more. The same blurred modal as every prompt: the panel behind it
+ * can't be reached, and its fields are locked. Return always saves or retries, whichever button
+ * has focus; Escape cancels, like the Cancel button; Space presses the focused button, so Discard
+ * stays a deliberate choice. Save has focus, with its ring, so it is clear what Return does.
  */
 const QuitPrompt = ({
   check,
@@ -241,59 +274,98 @@ const QuitPrompt = ({
 }) => {
   const detail = quitDetail(late, check, landing);
 
-  useEffect(() => {
-    primary.current?.focus({ focusVisible: true });
-  }, [primary]);
+  usePromptFit();
 
   return (
-    <PromptRow
-      label={
-        <>
-          <p className="font-medium">Save before quitting?</p>
-          {detail !== null && (
-            <p
-              className={cn(
-                "text-muted-foreground",
-                check.kind !== "blocked" && "truncate"
-              )}
-            >
-              {detail}
-            </p>
-          )}
-        </>
-      }
-      // Before the focused button sees it: Return must not press Discard or Cancel.
-      onKeyDownCapture={(event) => {
-        if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-          event.preventDefault();
-          event.stopPropagation();
-
+    <AlertDialog
+      onOpenChange={(open) => {
+        if (!open) {
+          void chooseQuit("cancel");
+        }
+      }}
+      open
+    >
+      <AlertDialogContent
+        data-testid="quit-prompt"
+        onKeyDownCapture={returnRuns(() => {
           if (check.kind === "ok") {
             void chooseQuit("save");
           }
+        })}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          primary.current?.focus({ focusVisible: true });
+        }}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle>Save before quitting?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {detail ?? "This capture isn’t saved yet."}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <Button onClick={() => chooseQuit("cancel")} variant="outline">
+            Cancel
+          </Button>
+          <Button onClick={() => chooseQuit("discard")} variant="destructive">
+            Discard
+          </Button>
+          <Button
+            disabled={check.kind !== "ok"}
+            onClick={() => chooseQuit("save")}
+            ref={primary}
+          >
+            {late ? "Retry" : "Save"}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+};
+
+/**
+ * Discard this capture? Keep has focus, and Return keeps it whichever button has focus, so only a
+ * deliberate click or Space on Discard throws the capture away. Escape keeps it too.
+ */
+const DiscardPrompt = ({ onKeep }: { onKeep: () => void }) => {
+  const keep = useRef<HTMLButtonElement>(null);
+
+  usePromptFit();
+
+  return (
+    <AlertDialog
+      onOpenChange={(open) => {
+        if (!open) {
+          onKeep();
         }
       }}
-      testId="quit-prompt"
+      open
     >
-      <Button onClick={() => chooseQuit("cancel")} size="sm" variant="ghost">
-        Cancel
-      </Button>
-      <Button
-        onClick={() => chooseQuit("discard")}
-        size="sm"
-        variant="destructive"
+      <AlertDialogContent
+        data-testid="discard-confirm"
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onKeyDownCapture={returnRuns(onKeep)}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          keep.current?.focus({ focusVisible: true });
+        }}
       >
-        Discard
-      </Button>
-      <Button
-        disabled={check.kind !== "ok"}
-        onClick={() => chooseQuit("save")}
-        ref={primary}
-        size="sm"
-      >
-        {late ? "Retry" : "Save"}
-      </Button>
-    </PromptRow>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Discard this capture?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Its windows and text are thrown away.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <Button onClick={onKeep} ref={keep} variant="outline">
+            Keep
+          </Button>
+          <Button onClick={discard} variant="destructive">
+            Discard
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 };
 
@@ -529,6 +601,72 @@ const saveLabel = (
   return landing ? "Adding…" : "Save";
 };
 
+/** Discard, and Save with its key while the key works. */
+const PanelFooter = ({
+  canSave,
+  label,
+  landing,
+  mac,
+  onDiscard,
+  onSave,
+}: {
+  canSave: boolean;
+  label: string;
+  landing: boolean;
+  mac: boolean;
+  onDiscard: () => void;
+  onSave: () => void;
+}) => (
+  <footer className="flex items-center justify-between gap-2">
+    <Button onClick={onDiscard} size="sm" variant="destructive-ghost">
+      Discard
+    </Button>
+    <Button
+      disabled={!canSave}
+      onClick={onSave}
+      size="sm"
+      title={landing ? "Waits for the window being added" : undefined}
+    >
+      {label}
+      {canSave && <Kbd>{mac ? "⌘↵" : "Ctrl+Enter"}</Kbd>}
+    </Button>
+  </footer>
+);
+
+/** Keyboard Shortcuts, in place of the panel until Done or Escape. */
+const ShortcutsSheet = ({
+  onDone,
+  platform,
+  shortcut,
+}: {
+  onDone: () => void;
+  platform: DraftSnapshot["platform"];
+  shortcut: DraftSnapshot["shortcut"];
+}) => (
+  <>
+    <PanelHeader
+      onShortcuts={onDone}
+      platform={platform}
+      title="Keyboard Shortcuts"
+    />
+    <PanelScroll fade>
+      <div className="px-3.5">
+        <ShortcutList
+          columns={1}
+          globalLabel={shortcut.kind === "registered" ? shortcut.label : null}
+          platform={platform}
+        />
+      </div>
+    </PanelScroll>
+    <footer className="flex shrink-0 items-center justify-end p-3.5">
+      <Button autoFocus onClick={onDone} size="sm" variant="outline">
+        Done
+        <Kbd>Esc</Kbd>
+      </Button>
+    </footer>
+  </>
+);
+
 /** Keyed by draft id, so local UI state such as the discard question resets with each new draft. */
 const DraftForm = ({
   snapshot,
@@ -545,6 +683,8 @@ const DraftForm = ({
   const block = useRef<TextBlockHandle>(null);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [sheet, setSheet] = useState(false);
+  /** From Save until main has answered that it is saving, so nothing typed in between is lost. */
+  const [submitting, setSubmitting] = useState(false);
   const viewCount = snapshot.views.length;
   const activity = snapshot.activity.kind;
   const quitting = activity === "confirmingQuit";
@@ -562,7 +702,14 @@ const DraftForm = ({
   // A blocked draft is still sent: main answers with the notice that says what is missing. A
   // window still landing would be lost, so Save waits for it.
   const canSave =
-    (activity === "idle" || activity === "saveFailed") && !landing;
+    (activity === "idle" || activity === "saveFailed") &&
+    !landing &&
+    !submitting;
+
+  // Main takes no edits while a save is on its way or the quit prompt asks, so the fields lock,
+  // as in Context Pin's capture panel: nothing can be typed that would be thrown away.
+  const locked = activity === "saving" || quitting || submitting;
+  const edit = locked ? ignoreEdit : setText;
 
   const requestDiscard = async () => {
     if (hasContent) {
@@ -572,18 +719,36 @@ const DraftForm = ({
     }
   };
 
-  /** The confirmation replaced the footer that had focus, so focus goes back to the text. */
+  /** The confirmation took focus from the footer, so focus goes back to the text. */
   const keepDraft = useCallback(() => {
     setConfirmingDiscard(false);
-    relationship.current?.focus();
+    requestAnimationFrame(() => relationship.current?.focus());
   }, []);
 
   const save = useCallback(async () => {
-    if (canSave) {
-      // Blank next steps are left out of what is saved.
-      await popoverApi().save({ ...text, todos: keptTodos(text.todos) });
+    if (!canSave) {
+      return;
     }
+
+    // Locked before the call goes out, also when ⌘S arrives as a menu command, which React would
+    // otherwise render a moment later, after a key typed meanwhile.
+    flushSync(() => setSubmitting(true));
+    // Blank next steps are left out of what is saved. A failed call unlocks the fields too.
+    await Promise.allSettled([
+      popoverApi().save({ ...text, todos: keptTodos(text.todos) }),
+    ]);
+    setSubmitting(false);
   }, [canSave, text]);
+
+  // Fields unlocked after a failed save: the keyboard goes back to the end of the title.
+  useEffect(() => {
+    const title = relationship.current;
+
+    if (!locked && title !== null && document.activeElement === document.body) {
+      title.focus();
+      title.setSelectionRange(title.value.length, title.value.length);
+    }
+  }, [locked]);
 
   useEffect(
     () =>
@@ -604,8 +769,15 @@ const DraftForm = ({
     requestAnimationFrame(() => relationship.current?.focus());
   }, []);
 
+  // A prompt stays the modal until it is answered: the sheet waits.
+  const prompting = quitting || confirmingDiscard;
+
   // The menu keys that belong to the page: the fields and the sheet. Not while windows are picked.
   useCommands((command) => {
+    if (command === "showShortcuts" && prompting) {
+      return true;
+    }
+
     if (command === "showShortcuts") {
       if (sheet) {
         closeSheet();
@@ -616,7 +788,13 @@ const DraftForm = ({
       return true;
     }
 
-    if (choosing || quitting) {
+    if (choosing || locked) {
+      return true;
+    }
+
+    if (command === "saveCapture") {
+      void save();
+
       return true;
     }
 
@@ -655,15 +833,19 @@ const DraftForm = ({
         return;
       }
 
-      if (event.key === "Escape" && !event.defaultPrevented) {
+      // A prompt answers Escape itself.
+      if (
+        event.key === "Escape" &&
+        !event.defaultPrevented &&
+        !quitting &&
+        !confirmingDiscard
+      ) {
         event.preventDefault();
 
         if (sheet) {
           closeSheet();
         } else if (choosing) {
           void cancelChoice();
-        } else if (confirmingDiscard) {
-          keepDraft();
         } else {
           popoverApi().dismiss();
         }
@@ -672,7 +854,16 @@ const DraftForm = ({
       const saveKeys =
         event.key === "Enter" && (mac ? event.metaKey : event.ctrlKey);
 
-      if (saveKeys && quitting && check.kind === "ok") {
+      // Return that reaches the window with a prompt up, as after a click on its backdrop, is the
+      // prompt's: it saves or retries at quit, and keeps the capture when asked about Discard.
+      if (
+        event.key === "Enter" &&
+        !event.defaultPrevented &&
+        confirmingDiscard
+      ) {
+        event.preventDefault();
+        keepDraft();
+      } else if (event.key === "Enter" && quitting && check.kind === "ok") {
         event.preventDefault();
         void chooseQuit("save");
       } else if (saveKeys && canSave) {
@@ -697,34 +888,13 @@ const DraftForm = ({
     closeSheet,
   ]);
 
-  if (sheet) {
+  if (sheet && !prompting) {
     return (
-      <>
-        <PanelHeader
-          onShortcuts={closeSheet}
-          platform={platform}
-          title="Keyboard Shortcuts"
-        />
-        <PanelScroll fade>
-          <div className="px-3.5">
-            <ShortcutList
-              columns={1}
-              globalLabel={
-                snapshot.shortcut.kind === "registered"
-                  ? snapshot.shortcut.label
-                  : null
-              }
-              platform={platform}
-            />
-          </div>
-        </PanelScroll>
-        <footer className="flex shrink-0 items-center justify-end p-3.5">
-          <Button autoFocus onClick={closeSheet} size="sm" variant="outline">
-            Done
-            <Kbd>Esc</Kbd>
-          </Button>
-        </footer>
-      </>
+      <ShortcutsSheet
+        onDone={closeSheet}
+        platform={platform}
+        shortcut={snapshot.shortcut}
+      />
     );
   }
 
@@ -765,40 +935,50 @@ const DraftForm = ({
           {snapshot.notice !== null && (
             <NoticeBanner notice={snapshot.notice} />
           )}
-          <SourceChips
-            addKeys={menuKeyLabel("addWindows", platform)}
-            descriptions={text.viewDescriptions}
-            onAdd={addWindows}
-            onDescribe={(view, description) =>
-              setText({
-                ...text,
-                viewDescriptions: {
-                  ...text.viewDescriptions,
-                  [view.id]: description,
-                },
-              })
-            }
-            onRemove={async (view) => {
-              setText({
-                ...text,
-                viewDescriptions: removeViewDescription(
-                  text.viewDescriptions,
-                  view.id
-                ),
-              });
-              await popoverApi().removeView(view.id);
-            }}
-            pending={pending}
-            shortcut={snapshot.shortcut}
-            views={snapshot.views}
-          />
-          <TextBlock
-            handle={block}
-            platform={platform}
-            setText={setText}
-            text={text}
-            title={relationship}
-          />
+          <fieldset
+            className="flex min-w-0 flex-col gap-3 transition-opacity disabled:opacity-60 disabled:delay-150"
+            data-testid="draft-fields"
+            disabled={locked}
+          >
+            <SourceChips
+              addKeys={menuKeyLabel("addWindows", platform)}
+              descriptions={text.viewDescriptions}
+              onAdd={addWindows}
+              onDescribe={(view, description) =>
+                edit({
+                  ...text,
+                  viewDescriptions: {
+                    ...text.viewDescriptions,
+                    [view.id]: description,
+                  },
+                })
+              }
+              onRemove={async (view) => {
+                if (locked) {
+                  return;
+                }
+
+                setText({
+                  ...text,
+                  viewDescriptions: removeViewDescription(
+                    text.viewDescriptions,
+                    view.id
+                  ),
+                });
+                await popoverApi().removeView(view.id);
+              }}
+              pending={pending}
+              shortcut={snapshot.shortcut}
+              views={snapshot.views}
+            />
+            <TextBlock
+              handle={block}
+              platform={platform}
+              setText={edit}
+              text={text}
+              title={relationship}
+            />
+          </fieldset>
           {snapshot.activity.kind === "saveFailed" && (
             <div
               className="bg-destructive/10 flex items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-3 text-xs"
@@ -806,7 +986,7 @@ const DraftForm = ({
               role="alert"
             >
               <p className="min-w-0 flex-1">
-                Couldn&apos;t save. Your windows and text are still here.{" "}
+                Couldn’t save. Your windows and text are still here.{" "}
                 <span className="text-muted-foreground">
                   {snapshot.activity.message}
                 </span>
@@ -827,41 +1007,16 @@ const DraftForm = ({
             primary={quitSave}
           />
         )}
-        {!quitting && confirmingDiscard && (
-          <PromptRow
-            label={<p className="font-medium">Discard this capture?</p>}
-            testId="discard-confirm"
-          >
-            <Button autoFocus onClick={keepDraft} size="sm" variant="ghost">
-              Keep
-            </Button>
-            <Button onClick={discard} size="sm" variant="destructive">
-              Discard
-            </Button>
-          </PromptRow>
-        )}
-        {!quitting && !confirmingDiscard && (
-          <footer className="flex items-center justify-between gap-2">
-            <Button
-              onClick={requestDiscard}
-              size="sm"
-              variant="destructive-ghost"
-            >
-              Discard
-            </Button>
-            <Button
-              disabled={!canSave}
-              onClick={save}
-              size="sm"
-              title={landing ? "Waits for the window being added" : undefined}
-            >
-              {saveLabel(activity, landing)}
-              {/* The key does nothing while a save or a window is under way. */}
-              {activity !== "saving" && !landing && (
-                <Kbd>{mac ? "⌘↵" : "Ctrl+Enter"}</Kbd>
-              )}
-            </Button>
-          </footer>
+        {!quitting && confirmingDiscard && <DiscardPrompt onKeep={keepDraft} />}
+        {!quitting && (
+          <PanelFooter
+            canSave={canSave}
+            label={saveLabel(submitting ? "saving" : activity, landing)}
+            landing={landing}
+            mac={mac}
+            onDiscard={requestDiscard}
+            onSave={save}
+          />
         )}
       </div>
     </>

@@ -30,7 +30,7 @@ export const UnsavedCountSchema = z.number().int().min(0).max(100_000);
 export const SETTLE_MS = 3000;
 
 /** What a prompt or a refused copy says once SETTLE_MS pass without a save answering. */
-export const SAVE_LATE = "Saving didn't finish in time.";
+export const SAVE_LATE = "Saving didn’t finish in time.";
 
 /**
  * How long main waits for the page's first answer to a request. After `waiting` it waits this

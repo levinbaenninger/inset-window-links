@@ -208,7 +208,7 @@ export const ImageViewer = ({
   const reopen = async () => {
     const { failed } = await libraryApi().reopen(captureId, [view.id]);
 
-    setReopened(failed === 0 ? "Opened" : "Couldn't open");
+    setReopened(failed === 0 ? "Opened" : "Couldn’t open");
     setTimeout(() => setReopened(null), FEEDBACK_MS);
   };
 

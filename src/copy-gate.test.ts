@@ -77,3 +77,22 @@ describe("the copy gate", () => {
     ]);
   });
 });
+
+describe("the draft lifecycle", () => {
+  it("is the only way a page saves a capture's fields, the due date and checked steps included", async () => {
+    // The draft store's own setDue is the way in; a bridge call is the way around it.
+    const callers = await filesMatching(
+      /(?<!drafts)\.(?:updateText|setTodoDone|setDue)\s*\(/u
+    );
+
+    expect(
+      callers.filter((file) => file.startsWith("src/renderer"))
+    ).toStrictEqual(["src/renderer/src/library/drafts.ts"]);
+  });
+
+  it("leaves main no way to set a due date apart from the draft", async () => {
+    await expect(
+      filesMatching(/\bsetDue\s*:\s*(?:"invoke"|invoke\()/u)
+    ).resolves.toStrictEqual([]);
+  });
+});

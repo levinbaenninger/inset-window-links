@@ -94,7 +94,7 @@ const ShortcutSheet = ({
           <DialogDescription>
             {platform === "macos"
               ? "Also in the menus."
-              : "Inset's windows answer these keys; the menu key is Ctrl."}{" "}
+              : "Inset’s windows answer these keys; the menu key is Ctrl."}{" "}
             Open this list with {menuKeyLabel("showShortcuts", platform)}.
           </DialogDescription>
         </header>
