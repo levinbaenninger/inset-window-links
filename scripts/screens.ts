@@ -399,6 +399,39 @@ const SETTINGS_VIEW = {
 
 type Capture = Omit<(typeof CAPTURES)[number], "due"> & { due: string | null };
 
+/** A capture's fields as main lists them for a Discard it still owes. */
+const textOf = (capture: Capture) => ({
+  description: capture.description,
+  due: capture.due,
+  relationship: capture.relationship,
+  todos: capture.todos,
+  viewDescriptions: Object.fromEntries(
+    capture.views.map((each) => [each.id, each.description])
+  ),
+});
+
+const ALL: readonly Capture[] = CAPTURES;
+const [FIRST, ...REST] = ALL;
+
+if (FIRST === undefined) {
+  throw new Error("the fixture has no captures");
+}
+
+/** The first capture as main holds it while it owes a Discard of these words. */
+const OWED_CAPTURE: Capture = {
+  ...FIRST,
+  relationship: "Rieder’s quote needs a second look",
+};
+
+/** The Discard a closed Recent Captures window left owed: main couldn’t put the saved words back. */
+const OWED = {
+  captureId: FIRST.id,
+  message: "Inset can’t write to its data folder.",
+  rev: 4,
+  saved: textOf(FIRST),
+  words: textOf(OWED_CAPTURE),
+};
+
 /** What a scene's fake bridge answers from: the popover's draft, the library's captures or the settings view. */
 interface SceneData {
   captures?: readonly Capture[];
@@ -410,6 +443,10 @@ interface SceneData {
   holdSave?: boolean;
   /** The next copies main refuses as not saved, each with its reason; they copy nothing. */
   copyNotSaved?: string[];
+  /** The Discards main still owes as Recent Captures opens. */
+  owed?: readonly (typeof OWED)[];
+  /** Main can't say which Discards it owes: each time the page asks, the call rejects. */
+  owedUnread?: boolean;
   draft?: DraftState;
   view?: typeof SETTINGS_VIEW;
 }
@@ -611,6 +648,41 @@ const undiscard = async (page: Page, words: string) => {
   await setData(page, `{ holdSaves: false }`);
   await page.evaluate("globalThis.__releaseSaves()");
 };
+
+/**
+ * Types words on the open capture that can't be saved, then discards them while their Retry is on
+ * its way, and main holds that Discard without answering, as a disk that hangs would.
+ */
+const stallDiscard = async (page: Page, words: string) => {
+  const failure = page.getByTestId("save-failure");
+
+  await setData(
+    page,
+    `{ failDiscards: false, failSaves: true, holdDiscards: false, holdSaves: false }`
+  );
+  await page.getByTestId("record-relationship").fill(words);
+  await failure.getByText(/The disk is full/u).waitFor();
+  await setData(
+    page,
+    `{ failSaves: false, holdDiscards: true, holdSaves: true }`
+  );
+
+  const sent = await callCount(page, "updateText");
+  const discards = await callCount(page, "discard");
+
+  await failure.getByRole("button", { exact: true, name: "Retry" }).click();
+  await waitForCalls(page, "updateText", sent + 1);
+  await failure.getByRole("button", { name: "Discard changes" }).click();
+  await waitForCalls(page, "discard", discards + 1);
+  await setData(page, `{ holdSaves: false }`);
+  await page.evaluate("globalThis.__releaseSaves()");
+};
+
+/** What the page answered main's close and quit requests, in order. */
+const leaveAnswers = (page: Page) =>
+  page.evaluate<string[]>(
+    "globalThis.__calls.filter((call) => call.method === 'answerLeave').map((call) => call.args[0])"
+  );
 
 /** How many things on screen say Copied, as text or as a button's label. */
 const copiedShown = (page: Page) =>
@@ -3094,7 +3166,7 @@ const SCENES: readonly Scene[] = [
   {
     /*
      * A Discard main can't finish brings the changes back with why, Keep changes and Discard again.
-     * Nothing is saved meanwhile, typing included, and copies are refused with no Retry. Discard
+     * Nothing is saved meanwhile, typing included, and copies are refused with Keep changes. Discard
      * again asks main again and never saves the discarded words; Keep changes saves them, and so
      * does Return, whichever of the two has focus.
      */
@@ -3130,6 +3202,14 @@ const SCENES: readonly Scene[] = [
           "Couldn’t discard your changes, so nothing was copied. Inset can’t write to its data folder."
         )
         .waitFor();
+      assert.equal(
+        await header
+          .locator("xpath=..")
+          .getByRole("button", { exact: true, name: "Keep changes" })
+          .count(),
+        1,
+        "the refused copy offers Keep changes"
+      );
 
       const discards = await callCount(page, "discard");
 
@@ -3357,6 +3437,327 @@ const SCENES: readonly Scene[] = [
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
     name: "library-leave-undiscarded",
+    page: "library",
+  },
+  {
+    /*
+     * A Discard main hasn't answered within SETTLE_MS asks to Wait, leave anyway, or Cancel. Return
+     * waits, whichever button has focus, and asks again if main is still silent; Escape cancels;
+     * Space on Close anyway or Quit anyway leaves at once. The prompt goes by itself once main
+     * answers.
+     */
+    act: async (page) => {
+      const prompt = page.getByTestId("leave-prompt");
+
+      const button = (name: string) =>
+        prompt.getByRole("button", { exact: true, name });
+
+      const asked = async (reason: "close" | "quit") => {
+        await pushLeave(page, reason);
+        await prompt.waitFor();
+        await until(
+          page,
+          "document.activeElement?.textContent === 'Wait'",
+          `Wait has focus when the ${reason} is held`
+        );
+      };
+
+      const says = () =>
+        prompt.locator("[data-slot=alert-dialog-description]").textContent();
+
+      await stallDiscard(page, "STALLED WORDS");
+      await asked("close");
+      assert.deepEqual(
+        {
+          buttons: await prompt.getByRole("button").allTextContents(),
+          heading: await prompt.getByRole("heading").textContent(),
+          ring:
+            (await page.evaluate<string>(
+              "getComputedStyle(document.activeElement).boxShadow"
+            )) !== "none",
+          says: await says(),
+        },
+        {
+          buttons: ["Cancel", "Close anyway", "Wait"],
+          heading: "1 change isn’t discarded yet",
+          ring: true,
+          says: "Discarding didn’t finish in time. If you close now, Inset finishes discarding in the background.",
+        },
+        "a Discard main hasn’t answered asks to wait or close anyway, not to keep or discard again"
+      );
+
+      await button("Close anyway").focus();
+      await page.keyboard.press("Enter");
+      assert.equal(
+        await button("Wait").isDisabled(),
+        true,
+        "Return on a focused Close anyway waits"
+      );
+      await until(
+        page,
+        "document.activeElement?.textContent === 'Wait'",
+        "the prompt asks again while main is still silent",
+        Date.now() + 6000
+      );
+      assert.deepEqual(
+        await leaveAnswers(page),
+        ["waiting", "held"],
+        "waiting never lets the window close"
+      );
+
+      await page.keyboard.press("Escape");
+      await prompt.waitFor({ state: "detached" });
+      assert.deepEqual(
+        await leaveAnswers(page),
+        ["waiting", "held", "stay"],
+        "Escape cancels"
+      );
+
+      await asked("quit");
+      assert.deepEqual(
+        {
+          buttons: await prompt.getByRole("button").allTextContents(),
+          says: await says(),
+        },
+        {
+          buttons: ["Cancel", "Quit anyway", "Wait"],
+          says: "Discarding didn’t finish in time. If you quit now, Inset finishes discarding the next time it starts.",
+        },
+        "the quit asks the same, with Quit anyway"
+      );
+      await button("Quit anyway").focus();
+      await page.keyboard.press("Space");
+      await prompt.waitFor({ state: "detached" });
+      assert.deepEqual(
+        await leaveAnswers(page),
+        ["waiting", "held", "stay", "waiting", "held", "go"],
+        "Space on Quit anyway leaves at once"
+      );
+
+      // Typed while main still hasn't answered: it waits, and the prompt says leaving anyway loses it.
+      const sentBefore = await callCount(page, "updateText");
+
+      await page.getByTestId("record-relationship").fill("TYPED MEANWHILE");
+      await page.waitForTimeout(900);
+      assert.equal(
+        await callCount(page, "updateText"),
+        sentBefore,
+        "typing waits for main’s answer"
+      );
+
+      await asked("close");
+      assert.equal(
+        await says(),
+        "Discarding didn’t finish in time. If you close now, Inset finishes discarding in the background, and what you typed since is lost.",
+        "the prompt says what Close anyway loses"
+      );
+      await page.evaluate("globalThis.__releaseDiscards()");
+      await prompt.waitFor({ state: "detached" });
+      await until(
+        page,
+        "globalThis.__calls.filter((call) => call.method === 'answerLeave' && call.args[0] === 'go').length === 2",
+        "the close goes ahead once main puts the saved version back"
+      );
+      await waitForCalls(page, "updateText", sentBefore + 1);
+      assert.equal(
+        await page.evaluate<string>(
+          "globalThis.__screens.data.captures[0].relationship"
+        ),
+        "TYPED MEANWHILE",
+        "what was typed meanwhile is saved once the Discard works"
+      );
+
+      // As it looks: a close held by a Discard main hasn't answered.
+      await stallDiscard(page, "Rieder’s quote needs a second look");
+      await asked("close");
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-leave-stalled",
+    page: "library",
+  },
+  {
+    /*
+     * Recent Captures opens while main still owes a Discard that a closed window couldn't finish.
+     * The capture opens as not discarded, with the banner and the row's Not saved, and main hears
+     * 1 unsaved before anything else. Copies are refused with Keep changes, which keeps the words;
+     * typing sends nothing; Discard again puts the saved words back.
+     */
+    act: async (page) => {
+      const failure = page.getByTestId("save-failure");
+      const header = page.getByTestId("capture-feedback");
+      const title = page.getByTestId("record-relationship");
+      const row = page.getByTestId("recent-item").first();
+
+      const refused =
+        "Couldn’t discard your changes, so nothing was copied. Inset can’t write to its data folder.";
+
+      const opened = async () => {
+        await failure.getByRole("button", { name: "Discard again" }).waitFor();
+
+        return {
+          banner: await failure.getByRole("alert").textContent(),
+          reports: await callsTo(page, "reportUnsaved"),
+          row: await row.getByTestId("row-unsaved").textContent(),
+          title: await title.inputValue(),
+        };
+      };
+
+      assert.deepEqual(
+        await opened(),
+        {
+          banner:
+            "Couldn’t discard your changes. Inset can’t write to its data folder.",
+          reports: [1, 1],
+          row: "Not saved",
+          title: OWED_CAPTURE.relationship,
+        },
+        "the capture opens as not discarded, and main hears 1 unsaved first"
+      );
+
+      await seedClipboard(page);
+      await sendCommand(page, "copyNote");
+      await header.getByText(refused).waitFor();
+      await title.fill(`${OWED_CAPTURE.relationship} TYPED`);
+      await page.waitForTimeout(900);
+      assert.deepEqual(
+        {
+          clipboard: await readClipboard(page),
+          keep: await page
+            .getByRole("button", { exact: true, name: "Keep changes" })
+            .count(),
+          saves: await callCount(page, "updateText"),
+        },
+        { clipboard: SENTINEL, keep: 2, saves: 0 },
+        "the copy is refused with Keep changes, and typing sends nothing"
+      );
+
+      await page
+        .getByTestId("capture-feedback")
+        .locator("xpath=..")
+        .getByRole("button", { exact: true, name: "Keep changes" })
+        .click();
+      await failure.waitFor({ state: "detached" });
+      await waitForCalls(page, "updateText", 1);
+      await header.getByText("Saved. You can copy it now.").waitFor();
+      await sendCommand(page, "copyNote");
+      await header.filter({ hasText: "Copied" }).waitFor();
+      const copied = await readClipboard(page);
+
+      assert.equal(
+        copied.split("\n")[0],
+        `${OWED_CAPTURE.relationship} TYPED`,
+        "Keep changes saves the words on screen, and the copy gets them"
+      );
+
+      await page.reload();
+      await opened();
+
+      const discards = await callCount(page, "discard");
+
+      await failure.getByRole("button", { name: "Discard again" }).click();
+      await failure.waitFor({ state: "detached" });
+      await waitForCalls(page, "discard", discards + 1);
+
+      const discarded = await page.evaluate<unknown[][]>(
+        "globalThis.__calls.filter((call) => call.method === 'discard').map((call) => call.args)"
+      );
+
+      assert.deepEqual(
+        {
+          discarded: discarded.at(-1),
+          saves: await callCount(page, "updateText"),
+          title: await title.inputValue(),
+        },
+        {
+          discarded: [FIRST.id, OWED.rev],
+          saves: 0,
+          title: FIRST.relationship,
+        },
+        "Discard again names the save main holds, and puts the saved words back"
+      );
+
+      // As it looks: the capture main still owes a Discard for, and a copy refused with Keep changes.
+      await page.reload();
+      await opened();
+      await sendCommand(page, "copyNote");
+      await header.getByText(refused).waitFor();
+    },
+    data: { captures: [OWED_CAPTURE, ...REST], owed: [OWED] },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-owed-discard",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    /*
+     * Recent Captures opens while main can't say which Discards it still owes. The page shows no
+     * capture and reports no count, so nothing can be copied or edited over the words a Discard
+     * puts back; it asks again until main answers, then opens the capture as not discarded.
+     */
+    act: async (page) => {
+      const unread = page.getByTestId("owed-unread");
+      const failure = page.getByTestId("save-failure");
+
+      await unread.waitFor();
+      await seedClipboard(page);
+      await sendCommand(page, "copyNote");
+      assert.deepEqual(
+        {
+          asked: (await callCount(page, "owedDiscards")) > 0,
+          clipboard: await readClipboard(page),
+          reports: await callsTo(page, "reportUnsaved"),
+          rows: await page.getByTestId("recent-item").count(),
+          says: [
+            await unread.getByRole("heading").textContent(),
+            await unread.getByRole("status").textContent(),
+          ],
+        },
+        {
+          asked: true,
+          clipboard: SENTINEL,
+          reports: [],
+          rows: 0,
+          says: [
+            "Recent Captures can’t open yet",
+            "Inset couldn’t check which changes it still has to discard. Trying again…",
+          ],
+        },
+        "while main can’t say, no capture shows, nothing is copied and no count is reported"
+      );
+
+      await setData(page, "{ owedUnread: false }");
+      await failure.getByRole("button", { name: "Discard again" }).waitFor();
+      assert.deepEqual(
+        {
+          banner: await failure.getByRole("alert").textContent(),
+          clipboard: await readClipboard(page),
+          reports: await callsTo(page, "reportUnsaved"),
+          title: await page.getByTestId("record-relationship").inputValue(),
+          unread: await unread.count(),
+        },
+        {
+          banner:
+            "Couldn’t discard your changes. Inset can’t write to its data folder.",
+          clipboard: SENTINEL,
+          reports: [1, 1],
+          title: OWED_CAPTURE.relationship,
+          unread: 0,
+        },
+        "once main answers, the capture opens as not discarded, and main hears 1 unsaved first"
+      );
+
+      // As it looks: the page while main can't say. A reload starts again from the scene's data.
+      await page.reload();
+      await unread.waitFor();
+    },
+    data: {
+      captures: [OWED_CAPTURE, ...REST],
+      owed: [OWED],
+      owedUnread: true,
+    },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-owed-unread",
     page: "library",
   },
   {

@@ -149,6 +149,51 @@ if (page === "library") {
     }
   };
 
+  /** Discards a scene holds back until it calls __releaseDiscards, as a disk that hangs would. */
+  const heldDiscards = [];
+
+  globalThis.__releaseDiscards = () => {
+    for (const run of heldDiscards.splice(0)) {
+      run();
+    }
+  };
+
+  /** The Discards main still owes, from a page closed before this one, as main lists them. */
+  const owed = data.owed ?? [];
+
+  /** A Discard main owes that now works puts the saved words back, as main's rename does. */
+  const restoreOwed = (captureId, rev) => {
+    const at = owed.findIndex(
+      (one) => one.captureId === captureId && one.rev === rev
+    );
+
+    if (at === -1) {
+      return;
+    }
+
+    const [{ saved }] = owed.splice(at, 1);
+
+    for (const listed of [...captures, ...items]) {
+      if (listed.id === captureId) {
+        listed.relationship = saved.relationship;
+        listed.description = saved.description;
+        listed.todos = saved.todos;
+        listed.due = saved.due;
+      }
+    }
+
+    emit("changed");
+  };
+
+  /** Any save of the capture gives up the Discard main owed for it, as Keep changes does. */
+  const keepOwed = (captureId) => {
+    const at = owed.findIndex((one) => one.captureId === captureId);
+
+    if (at !== -1) {
+      owed.splice(at, 1);
+    }
+  };
+
   /** What main does with a text save: write it, or fail as a full disk would. */
   const saveText = (captureId, text) => {
     if (data.failSaves === true) {
@@ -276,14 +321,36 @@ if (page === "library") {
         epochs.set(captureId, epochOf(captureId) + 1);
         record("discard", captureId, rev);
 
-        return Promise.resolve(
-          data.failDiscards === true && rev !== null
-            ? {
-                kind: "failed",
-                message: "Inset can’t write to its data folder.",
-              }
-            : { kind: "ok" }
-        );
+        const answer = () => {
+          if (data.failDiscards === true && rev !== null) {
+            return {
+              kind: "failed",
+              message: "Inset can’t write to its data folder.",
+            };
+          }
+
+          restoreOwed(captureId, rev);
+
+          return { kind: "ok" };
+        };
+
+        if (data.holdDiscards === true && rev !== null) {
+          const { promise, resolve } = Promise.withResolvers();
+
+          heldDiscards.push(() => resolve(answer()));
+
+          return promise;
+        }
+
+        return Promise.resolve(answer());
+      },
+      owedDiscards: () => {
+        record("owedDiscards");
+
+        // Main can't say, as when the IPC call rejects, while a scene sets owedUnread.
+        return data.owedUnread === true
+          ? Promise.reject(new Error("The IPC channel closed."))
+          : Promise.resolve(structuredClone(owed));
       },
       updateText: (captureId, text) => {
         record("updateText", captureId, text);
@@ -291,10 +358,19 @@ if (page === "library") {
         const epoch = epochOf(captureId);
 
         // A save the page discarded meanwhile is dropped before it lands, as main drops it.
-        const write = () =>
-          epochOf(captureId) === epoch
-            ? saveText(captureId, text)
-            : { kind: "ok" };
+        const write = () => {
+          if (epochOf(captureId) !== epoch) {
+            return { kind: "ok" };
+          }
+
+          const outcome = saveText(captureId, text);
+
+          if (outcome.kind === "ok") {
+            keepOwed(captureId);
+          }
+
+          return outcome;
+        };
 
         if (data.holdSaves === true) {
           const { promise, resolve } = Promise.withResolvers();

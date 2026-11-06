@@ -1,33 +1,11 @@
-import type { MutationOutcome } from "../../../shared/dto";
-import type { DueDate } from "../../../shared/due";
+import type { MutationOutcome, OwedDiscard } from "../../../shared/dto";
 import { saveProblem } from "../../../shared/errors";
-import type { CaptureId, ViewId } from "../../../shared/ids";
+import type { CaptureId } from "../../../shared/ids";
 import { SAVE_LATE, SETTLE_MS } from "../../../shared/leave";
-import type { DraftText, Todo, ViewDescriptions } from "../../../shared/text";
+import type { DraftText } from "../../../shared/text";
 import { isBlank, keptTodos, keptViewDescriptions } from "../../../shared/text";
 
 export const SAVE_AFTER_MS = 600;
-
-/** A saved capture's fields that a draft edits, as the list and the capture's page both get them. */
-interface Editable {
-  description: string;
-  due: DueDate | null;
-  relationship: string;
-  todos: readonly Todo[];
-  views: readonly { id: ViewId; description: string }[];
-}
-
-/** A saved capture's fields as a draft holds them: what it shows when nothing is unsaved. */
-export const storedText = (capture: Editable): DraftText => ({
-  description: capture.description,
-  due: capture.due,
-  relationship: capture.relationship,
-  todos: [...capture.todos],
-  // SAFETY: the keys are the views' own ids.
-  viewDescriptions: Object.fromEntries(
-    capture.views.map((view) => [view.id, view.description])
-  ) as ViewDescriptions,
-});
 
 /** Main's side of a draft: its saves, each numbered by the draft's rev, and Discard. */
 export interface TextStore {
@@ -478,6 +456,13 @@ export interface Unsaved {
   late: boolean;
   /** Every one of them is a Discard that couldn't finish, or hasn't yet. */
   undiscarded: boolean;
+  /** How many of them are a Discard main hasn't answered yet. */
+  stalled: number;
+  /**
+   * Some hold words typed since a Discard main hasn't finished: they wait for its answer, so
+   * leaving without it loses them.
+   */
+  typedSince: boolean;
 }
 
 interface Waiter {
@@ -670,6 +655,48 @@ export class DraftStore {
     }
   }
 
+  /**
+   * As the page loads: each Discard main still owes, from a page closed before this one. One main
+   * couldn't finish shows as not discarded, with Keep changes and Discard again, exactly as the
+   * page that sent it showed it. One main hasn't answered yet is asked again, toward the same
+   * saved version, and waited for as that page would have: the saved words show, nothing typed
+   * meanwhile is sent, and copies wait for main's answer.
+   */
+  owe(owed: readonly OwedDiscard[]): void {
+    for (const { captureId: id, message, rev, saved, words } of owed) {
+      if (this.#drafts.has(id) || this.#discarding.has(id)) {
+        continue;
+      }
+
+      this.#rev += 1;
+
+      const landed: Landed = { rev, words };
+
+      const error: SaveError = {
+        kind: "failed",
+        message: message ?? SAVE_LATE,
+      };
+
+      const draft: Draft = {
+        base: saved,
+        error,
+        kind: "failed",
+        landed,
+        rev: this.#rev,
+        values: words,
+      };
+
+      if (message === null) {
+        this.#confirmed.set(id, saved);
+        this.#reverted.add(id);
+        void this.#discarded(id, rev, draft);
+        this.#changed();
+      } else {
+        this.#apply(id, { draft, error, kind: "undiscarded", landed });
+      }
+    }
+  }
+
   /** The capture was deleted: its words have nowhere to go. */
   forget(id: CaptureId): void {
     clearTimeout(this.#timers.get(id));
@@ -762,6 +789,11 @@ export class DraftStore {
     return draft !== undefined && landedOf(draft) !== undefined;
   }
 
+  /** Whether main hasn't answered a Discard of the capture's changes yet. */
+  discarding(id: CaptureId): boolean {
+    return this.#discarding.has(id);
+  }
+
   /**
    * How many captures a close must ask about: those holding words main does not have, and those
    * whose Discard main hasn't answered, as it may not put the saved version back.
@@ -787,6 +819,14 @@ export class DraftStore {
       late:
         this.#discarding.size > 0 ||
         drafts.some((draft) => draft.kind !== "failed"),
+      stalled: this.#discarding.size,
+      typedSince: [...this.#drafts].some(([id, draft]) => {
+        const landed = landedOf(draft);
+
+        return landed === undefined
+          ? this.#discarding.has(id)
+          : !sameText(draft.values, landed.words);
+      }),
       undiscarded: [...this.#drafts].every(
         ([id, draft]) =>
           landedOf(draft) !== undefined || this.#discarding.has(id)

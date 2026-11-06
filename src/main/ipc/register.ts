@@ -296,6 +296,7 @@ export const registerLibraryChannels = (
     menuOpen: send(z.tuple([z.boolean()]), actions.menuOpen),
     newCapture: send(z.tuple([]), actions.newCapture),
     openSettings: send(z.tuple([]), actions.openSettings),
+    owedDiscards: invoke(z.tuple([]), () => store.owed()),
     reportUnsaved: send(z.tuple([UnsavedCountSchema]), actions.reportUnsaved),
     remove: invoke(z.tuple([DraftIdSchema]), (captureId) =>
       store.remove(captureId)

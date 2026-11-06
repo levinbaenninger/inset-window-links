@@ -8,14 +8,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   copyCapture as copyThroughGate,
+  notCopiedText,
   retryOf,
 } from "../../renderer/src/library/copy-gate";
 import { DraftStore, reasonOf } from "../../renderer/src/library/drafts";
-import { LeaveFlow } from "../../renderer/src/library/leave";
+import { LeaveFlow, promptKind } from "../../renderer/src/library/leave";
 import type { MutationOutcome } from "../../shared/dto";
 import { DraftIdSchema, ViewIdSchema } from "../../shared/ids";
 import { SETTLE_MS } from "../../shared/leave";
 import type { DraftText } from "../../shared/text";
+import { storedText } from "../../shared/text";
 import { LeaveGate } from "../leave-gate";
 import type { Clip } from "./copy";
 import { copyCapture, CopyStarts } from "./copy";
@@ -1548,7 +1550,7 @@ describe("After a Discard that couldn't put the saved version back", () => {
     });
   });
 
-  it("copies nothing, with no Retry, when a copy starts while a Discard that then fails is on its way", async () => {
+  it("copies nothing, offering Keep changes, when a copy starts while a Discard that then fails is on its way", async () => {
     await expect(
       copyDuringDiscard({ fails: true, typed: false })
     ).resolves.toStrictEqual({
@@ -1557,11 +1559,11 @@ describe("After a Discard that couldn't put the saved version back", () => {
         kind: "notDiscarded",
         outcome: CAUSE,
       },
-      retry: null,
+      retry: "keep",
     });
   });
 
-  it("copies nothing, with no Retry, when words typed during a Discard that then fails are copied", async () => {
+  it("copies nothing, offering Keep changes, when words typed during a Discard that then fails are copied", async () => {
     await expect(
       copyDuringDiscard({ fails: true, typed: true })
     ).resolves.toStrictEqual({
@@ -1570,7 +1572,7 @@ describe("After a Discard that couldn't put the saved version back", () => {
         kind: "notDiscarded",
         outcome: CAUSE,
       },
-      retry: null,
+      retry: "keep",
     });
   });
 
@@ -1613,7 +1615,14 @@ describe("After a Discard that couldn't put the saved version back", () => {
         sent,
         unsaved: drafts.count,
       }).toStrictEqual({
-        asked: { count: 1, error: CAUSE, late: false, undiscarded: true },
+        asked: {
+          count: 1,
+          error: CAUSE,
+          late: false,
+          stalled: 0,
+          typedSince: true,
+          undiscarded: true,
+        },
         heard: ["waiting", "held", "unsaved 0", "go"],
         reopened: {
           ...SAVED_FIELDS,
@@ -1681,7 +1690,14 @@ describe("After a Discard that couldn't put the saved version back", () => {
       waiting,
     }).toStrictEqual({
       again: { heard: ["waiting", "held"], state: "held" },
-      asked: { count: 1, error: CAUSE, late: false, undiscarded: true },
+      asked: {
+        count: 1,
+        error: CAUSE,
+        late: false,
+        stalled: 0,
+        typedSince: false,
+        undiscarded: true,
+      },
       end: ["unsaved 0", "go"],
       reopened: SAVED_FIELDS,
       waiting: { heard: ["waiting"], state: "waiting" },
@@ -1730,14 +1746,21 @@ describe("After a Discard that couldn't put the saved version back", () => {
       heard,
       reopened: await reopenedFields(),
     }).toStrictEqual({
-      asked: { count: 1, error: null, late: true, undiscarded: true },
+      asked: {
+        count: 1,
+        error: null,
+        late: true,
+        stalled: 1,
+        typedSince: false,
+        undiscarded: true,
+      },
       atLimit: ["waiting", "held"],
       heard: ["waiting", "held", "unsaved 0", "go"],
       reopened: SAVED_FIELDS,
     });
   });
 
-  it("lets go at once on Discard again when the prompt holds only a Discard still on its way, so a write that hangs can’t keep the window open", async () => {
+  it("asks to wait or close anyway when a Discard main hasn’t answered in time, and Close anyway lets go at once, so a write that hangs can’t keep the window open", async () => {
     const { answers, disk, drafts, marker, reopenedFields, store } =
       await crashSetup();
 
@@ -1766,14 +1789,21 @@ describe("After a Discard that couldn't put the saved version back", () => {
     flow.request("close");
     await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
     vi.useRealTimers();
-    flow.discard();
+    const asked = flow.state();
+
+    flow.leaveNow();
 
     const atDiscard = { heard: [...heard], marked: existsSync(marker) };
 
     back.release();
     await store.idle();
 
-    expect({ atDiscard, reopened: await reopenedFields() }).toStrictEqual({
+    expect({
+      asked: asked.kind === "held" ? promptKind(asked.unsaved) : null,
+      atDiscard,
+      reopened: await reopenedFields(),
+    }).toStrictEqual({
+      asked: "stalled",
       atDiscard: { heard: ["waiting", "held", "go"], marked: true },
       reopened: SAVED_FIELDS,
     });
@@ -1858,6 +1888,790 @@ describe("After a Discard that couldn't put the saved version back", () => {
       marked: true,
       reopened: SAVED_FIELDS,
       sent: ["DISCARDED TEXT | SAVED description"],
+    });
+  });
+});
+
+/**
+ * The round-10 path to a Discard main still owes once its page has closed: an autosave that
+ * fails, a Retry that lands with its answer held, the close prompt after SETTLE_MS, then Discard
+ * and close while main holds the rename back. That rename fails with EPERM when `fails`.
+ */
+const closedOnDiscard = async ({ fails }: { fails: boolean }) => {
+  const crashed = await crashSetup();
+  const { answers, disk, drafts, store } = crashed;
+
+  const fixSave = disk.fail(
+    (op) => op === `write ${ID}/record.json.tmp`,
+    "ENOSPC"
+  );
+
+  drafts.edit(ID, DISCARDED_TEXT, stored);
+  drafts.flush(ID);
+  await store.idle();
+  await until(() => drafts.error(ID) !== undefined);
+  fixSave();
+  answers.hold = true;
+  void drafts.retry(ID);
+  await until(() => answers.held.length > 0);
+
+  const closing = leaveFlow(drafts);
+
+  vi.useFakeTimers();
+  closing.flow.request("close");
+  await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+  vi.useRealTimers();
+
+  const putBack = `rename ${ID}/record.json.prev -> ${ID}/record.json`;
+  const back = disk.hold((op) => op === putBack);
+
+  const healed = fails
+    ? disk.fail((op) => op === putBack, "EPERM")
+    : () => true;
+
+  closing.flow.discard();
+  await back.reached;
+  drafts.leave();
+  answers.hold = false;
+
+  for (const go of answers.held.splice(0)) {
+    go();
+  }
+
+  return { ...crashed, back, closed: closing.heard, healed };
+};
+
+/** A fresh Recent Captures page over the same store, not yet opened. */
+const pageOver = (store: CaptureStore) => {
+  const sent: string[] = [];
+
+  const drafts = new DraftStore(() => ({
+    discard: (id, rev) => store.discard(id, rev),
+    setTodoDone: (id, todoId, done, rev) =>
+      store.setTodoDone(id, todoId, done, rev),
+    updateText: (id, text, rev) => {
+      sent.push(`${text.relationship} | ${text.description}`);
+
+      return store.updateText(id, text, new Date(), rev);
+    },
+  }));
+
+  const leaving = leaveFlow(drafts);
+
+  /** The capture as the page shows it, over what main sends it. */
+  const shown = () => {
+    const entry = store.get(ID);
+
+    return drafts.shown(
+      ID,
+      entry?.kind === "current" ? storedText(entry.record) : stored
+    );
+  };
+
+  /** Types a description as the capture's page does, and lets its autosave go. */
+  const type = (description: string) => {
+    const before = shown();
+
+    drafts.edit(ID, { ...before, description }, before);
+    drafts.flush(ID);
+  };
+
+  /** How the page stands: what main heard from it, and how it shows the capture. */
+  const standing = () => ({
+    count: drafts.count,
+    error: drafts.error(ID) ?? null,
+    heard: [...leaving.heard],
+    title: shown().relationship,
+    undiscarded: drafts.undiscarded(ID),
+  });
+
+  return { ...leaving, drafts, sent, shown, standing, type };
+};
+
+/**
+ * A fresh Recent Captures page over the same store, opened as main.tsx opens it: it takes in the
+ * Discards main still owes before it shows anything or reports its count.
+ */
+const freshPage = async (store: CaptureStore) => {
+  const page = pageOver(store);
+
+  await page.flow.open(() => Promise.resolve(store.owed()));
+
+  return { ...page, opened: page.standing() };
+};
+
+/** ⌘C on the capture through the page's gate and main's copy: what it put on the clipboard, and what it offers. */
+const copyOf = async (store: CaptureStore, drafts: DraftStore) => {
+  const clipboard: string[] = [];
+  const starts = new CopyStarts(store);
+
+  const copied = await copyThroughGate(
+    ID,
+    { kind: "entry" },
+    {
+      beginCopy: (ticket, captureId) => starts.begin(ticket, captureId),
+      copy: (ticket, captureId, asked, text) =>
+        copyCapture(
+          store,
+          starts,
+          ticket,
+          captureId,
+          asked,
+          text,
+          (clip: Clip) => {
+            clipboard.push(
+              clip.kind === "text" ? (clip.text.split("\n")[0] ?? "") : "PNG"
+            );
+
+            return Promise.resolve();
+          },
+          { locale: "en-GB", timeZone: "UTC" }
+        ),
+    },
+    drafts
+  );
+
+  return { clipboard, copied, retry: retryOf(copied, ID, drafts) };
+};
+
+describe("A Discard main still owes when Recent Captures opens again", () => {
+  it("opens the capture as not discarded, counts it before anything else, refuses copies with Keep changes, and sends no edit", async () => {
+    const { back, closed, marker, reopenedFields, store } =
+      await closedOnDiscard({ fails: true });
+
+    back.release();
+    await store.idle();
+    await settled();
+
+    const page = await freshPage(store);
+    const copy = await copyOf(store, page.drafts);
+
+    page.type("Typed after reopening");
+    await store.idle();
+    await settled();
+
+    expect({
+      closed,
+      copy,
+      marked: existsSync(marker),
+      opened: page.opened,
+      restarted: await reopenedFields(),
+      sent: page.sent,
+      shown: page.shown().description,
+      undiscarded: page.drafts.undiscarded(ID),
+    }).toStrictEqual({
+      closed: ["waiting", "held", "go"],
+      copy: {
+        clipboard: [],
+        copied: { kind: "notDiscarded", outcome: CAUSE },
+        retry: "keep",
+      },
+      marked: true,
+      opened: {
+        count: 1,
+        error: CAUSE,
+        heard: ["unsaved 1", "unsaved 1"],
+        title: "DISCARDED TEXT",
+        undiscarded: true,
+      },
+      restarted: SAVED_FIELDS,
+      sent: [],
+      shown: "Typed after reopening",
+      undiscarded: true,
+    });
+  });
+
+  it("puts the saved version back on Discard again, toward the version the closed page's Discard named", async () => {
+    const { back, healed, marker, reopenedFields, store } =
+      await closedOnDiscard({ fails: true });
+
+    back.release();
+    await store.idle();
+
+    const page = await freshPage(store);
+
+    page.type("Typed after reopening");
+    healed();
+    page.drafts.discard(ID);
+    await store.idle();
+    await until(() => page.heard.includes("unsaved 0"), 40);
+
+    expect({
+      copy: await copyOf(store, page.drafts),
+      marked: existsSync(marker),
+      restarted: await reopenedFields(),
+      sent: page.sent,
+      title: page.shown().relationship,
+    }).toStrictEqual({
+      copy: {
+        clipboard: ["SAVED title"],
+        copied: { kind: "copied" },
+        retry: null,
+      },
+      marked: false,
+      restarted: SAVED_FIELDS,
+      sent: [],
+      title: "SAVED title",
+    });
+  });
+
+  it("keeps the changes on Keep changes, those typed since too, so a restart keeps them and a copy gets them", async () => {
+    const { back, marker, reopenedFields, store } = await closedOnDiscard({
+      fails: true,
+    });
+
+    back.release();
+    await store.idle();
+
+    const page = await freshPage(store);
+
+    page.type("Typed after reopening");
+
+    const kept = await page.drafts.retry(ID);
+
+    await store.idle();
+
+    expect({
+      copy: await copyOf(store, page.drafts),
+      kept,
+      marked: existsSync(marker),
+      restarted: await reopenedFields(),
+      sent: page.sent,
+    }).toStrictEqual({
+      copy: {
+        clipboard: ["DISCARDED TEXT"],
+        copied: { kind: "copied" },
+        retry: null,
+      },
+      kept: { kind: "ok" },
+      marked: false,
+      restarted: {
+        ...SAVED_FIELDS,
+        description: "Typed after reopening",
+        title: "DISCARDED TEXT",
+      },
+      sent: ["DISCARDED TEXT | Typed after reopening"],
+    });
+  });
+
+  it("waits for a Discard main is still putting back as the page opens: it counts it, holds typing and copies, and shows it failed when main can't", async () => {
+    const { back, marker, reopenedFields, store } = await closedOnDiscard({
+      fails: true,
+    });
+
+    const owed = store.owed().map(({ message, words }) => ({
+      message,
+      title: words.relationship,
+    }));
+
+    const page = await freshPage(store);
+
+    page.type("Typed after reopening");
+
+    const copying = copyOf(store, page.drafts);
+
+    await settled();
+
+    const meanwhile = { count: page.drafts.count, sent: [...page.sent] };
+
+    back.release();
+    await store.idle();
+    await until(() => page.drafts.undiscarded(ID), 40);
+
+    expect({
+      copy: await copying,
+      marked: existsSync(marker),
+      meanwhile,
+      opened: page.opened,
+      owed,
+      restarted: await reopenedFields(),
+      sent: page.sent,
+      shown: [page.shown().relationship, page.shown().description],
+    }).toStrictEqual({
+      copy: {
+        clipboard: [],
+        copied: { kind: "notDiscarded", outcome: CAUSE },
+        retry: "keep",
+      },
+      marked: true,
+      meanwhile: { count: 1, sent: [] },
+      opened: {
+        count: 1,
+        error: null,
+        heard: ["unsaved 1", "unsaved 1"],
+        title: "SAVED title",
+        undiscarded: false,
+      },
+      owed: [{ message: null, title: "DISCARDED TEXT" }],
+      restarted: SAVED_FIELDS,
+      sent: [],
+      shown: ["SAVED title", "Typed after reopening"],
+    });
+  });
+
+  it("sends what was typed once a Discard main was still putting back as the page opened works", async () => {
+    const { back, reopenedFields, store } = await closedOnDiscard({
+      fails: false,
+    });
+
+    const page = await freshPage(store);
+
+    page.type("Typed after reopening");
+    await settled();
+
+    const meanwhile = [...page.sent];
+
+    back.release();
+    await store.idle();
+    await until(() => page.heard.includes("unsaved 0"), 40);
+    await store.idle();
+
+    expect({
+      meanwhile,
+      owed: store.owed(),
+      restarted: await reopenedFields(),
+      sent: page.sent,
+    }).toStrictEqual({
+      meanwhile: [],
+      owed: [],
+      restarted: { ...SAVED_FIELDS, description: "Typed after reopening" },
+      sent: ["SAVED title | Typed after reopening"],
+    });
+  });
+
+  it("opens the capture as not discarded after Close anyway left a Discard main hadn’t answered, once it fails", async () => {
+    const { answers, disk, drafts, reopenedFields, store } = await crashSetup();
+
+    answers.hold = true;
+    drafts.edit(ID, DISCARDED_TEXT, stored);
+    drafts.flush(ID);
+    await until(() => answers.held.length > 0);
+
+    const putBack = `rename ${ID}/record.json.prev -> ${ID}/record.json`;
+    const back = disk.hold((op) => op === putBack);
+
+    disk.fail((op) => op === putBack, "EPERM");
+    drafts.discard(ID);
+    await back.reached;
+    answers.hold = false;
+
+    for (const go of answers.held.splice(0)) {
+      go();
+    }
+
+    await settled();
+
+    const { flow, heard } = leaveFlow(drafts);
+
+    vi.useFakeTimers();
+    flow.request("close");
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+    vi.useRealTimers();
+    flow.leaveNow();
+    drafts.leave();
+    back.release();
+    await store.idle();
+
+    const page = await freshPage(store);
+
+    expect({
+      closed: heard,
+      opened: page.opened,
+      restarted: await reopenedFields(),
+    }).toStrictEqual({
+      closed: ["waiting", "held", "go"],
+      opened: {
+        count: 1,
+        error: CAUSE,
+        heard: ["unsaved 1", "unsaved 1"],
+        title: "DISCARDED TEXT",
+        undiscarded: true,
+      },
+      restarted: SAVED_FIELDS,
+    });
+  });
+
+  it("says what Close anyway loses when words were typed while main hasn’t answered a Discard, and loses only those", async () => {
+    const { answers, disk, drafts, reopenedFields, sent, store } =
+      await crashSetup();
+
+    answers.hold = true;
+    drafts.edit(ID, DISCARDED_TEXT, stored);
+    drafts.flush(ID);
+    await until(() => answers.held.length > 0);
+
+    const back = disk.hold(
+      (op) => op === `rename ${ID}/record.json.prev -> ${ID}/record.json`
+    );
+
+    drafts.discard(ID);
+    await back.reached;
+    answers.hold = false;
+
+    for (const go of answers.held.splice(0)) {
+      go();
+    }
+
+    await settled();
+
+    const shown = drafts.shown(ID, stored);
+
+    drafts.edit(ID, { ...shown, description: "TYPED meanwhile" }, shown);
+
+    const { flow, heard } = leaveFlow(drafts);
+
+    vi.useFakeTimers();
+    flow.request("close");
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+    vi.useRealTimers();
+
+    const asked = flow.state();
+
+    flow.leaveNow();
+    drafts.leave();
+    back.release();
+    await store.idle();
+
+    expect({
+      asked:
+        asked.kind === "held"
+          ? {
+              kind: promptKind(asked.unsaved),
+              typedSince: asked.unsaved.typedSince,
+            }
+          : null,
+      heard,
+      reopened: await reopenedFields(),
+      sent,
+    }).toStrictEqual({
+      asked: { kind: "stalled", typedSince: true },
+      heard: ["waiting", "held", "go"],
+      reopened: SAVED_FIELDS,
+      sent: ["DISCARDED TEXT | SAVED description"],
+    });
+  });
+
+  it("waits again on Wait while main hasn’t answered a Discard, and lets go once it puts the saved version back", async () => {
+    const { answers, disk, drafts, reopenedFields, store } = await crashSetup();
+
+    answers.hold = true;
+    drafts.edit(ID, DISCARDED_TEXT, stored);
+    drafts.flush(ID);
+    await until(() => answers.held.length > 0);
+
+    const back = disk.hold(
+      (op) => op === `rename ${ID}/record.json.prev -> ${ID}/record.json`
+    );
+
+    drafts.discard(ID);
+    await back.reached;
+    answers.hold = false;
+
+    for (const go of answers.held.splice(0)) {
+      go();
+    }
+
+    await settled();
+
+    const { flow, heard } = leaveFlow(drafts);
+
+    vi.useFakeTimers();
+    flow.request("quit");
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+
+    const asked = flow.state();
+
+    flow.wait();
+
+    const waiting = flow.state();
+
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+
+    const askedAgain = flow.state();
+
+    flow.wait();
+    vi.useRealTimers();
+    back.release();
+    await store.idle();
+    await until(() => heard.includes("go"), 40);
+
+    const kindOf = (state: typeof asked) =>
+      state.kind === "held"
+        ? { kind: promptKind(state.unsaved), retrying: state.retrying }
+        : state.kind;
+
+    expect({
+      asked: kindOf(asked),
+      askedAgain: kindOf(askedAgain),
+      heard,
+      reopened: await reopenedFields(),
+      waiting: kindOf(waiting),
+    }).toStrictEqual({
+      asked: { kind: "stalled", retrying: false },
+      askedAgain: { kind: "stalled", retrying: false },
+      heard: ["waiting", "held", "unsaved 0", "go"],
+      reopened: SAVED_FIELDS,
+      waiting: { kind: "stalled", retrying: true },
+    });
+  });
+});
+
+/** How main fails to say which Discards it still owes, one per question; later ones it answers. */
+type Miss = "rejected" | "silent";
+
+/**
+ * Opens `page` as main.tsx does, while main's first answers about the Discards it still owes are
+ * lost as `missed` says: the call rejects, as a closed IPC channel does, or never answers.
+ */
+const openWhileMissing = (
+  page: ReturnType<typeof pageOver>,
+  store: CaptureStore,
+  missed: readonly Miss[]
+) => {
+  let asked = 0;
+  let open = false;
+
+  const owed = () => {
+    const miss = missed[asked];
+
+    asked += 1;
+
+    if (miss === "rejected") {
+      return Promise.reject(new Error("The IPC channel closed."));
+    }
+
+    return miss === "silent"
+      ? Promise.withResolvers<never>().promise
+      : Promise.resolve(store.owed());
+  };
+
+  void (async () => {
+    await page.flow.open(owed);
+    open = true;
+  })();
+
+  return {
+    /** How often the page asked, and whether it has opened. */
+    progress: () => ({ asked, open }),
+  };
+};
+
+describe("Recent Captures opening while main can’t say which Discards it still owes", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("doesn’t open or report a count until main says, then opens the capture as not discarded, refuses copies and keeps the marker through an unrelated edit", async () => {
+    const { back, marker, reopenedFields, store } = await closedOnDiscard({
+      fails: true,
+    });
+
+    back.release();
+    await store.idle();
+    await settled();
+
+    const page = pageOver(store);
+
+    vi.useFakeTimers();
+
+    const opening = openWhileMissing(page, store, ["rejected"]);
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    const unread = { ...opening.progress(), heard: [...page.heard] };
+
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    vi.useRealTimers();
+
+    const opened = { ...opening.progress(), ...page.standing() };
+    const copy = await copyOf(store, page.drafts);
+
+    page.type("Unrelated description edit after reopening");
+    await store.idle();
+    await settled();
+
+    expect({
+      copy,
+      marked: existsSync(marker),
+      opened,
+      owed: store.owed().length,
+      restarted: await reopenedFields(),
+      sent: page.sent,
+      unread,
+    }).toStrictEqual({
+      copy: {
+        clipboard: [],
+        copied: { kind: "notDiscarded", outcome: CAUSE },
+        retry: "keep",
+      },
+      marked: true,
+      opened: {
+        asked: 2,
+        count: 1,
+        error: CAUSE,
+        heard: ["unsaved 1", "unsaved 1"],
+        open: true,
+        title: "DISCARDED TEXT",
+        undiscarded: true,
+      },
+      owed: 1,
+      restarted: SAVED_FIELDS,
+      sent: [],
+      unread: { asked: 1, heard: [], open: false },
+    });
+  });
+
+  it("asks main again when it doesn’t answer within SETTLE_MS, and opens the capture as not discarded once it does", async () => {
+    const { back, store } = await closedOnDiscard({ fails: true });
+
+    back.release();
+    await store.idle();
+    await settled();
+
+    const page = pageOver(store);
+
+    vi.useFakeTimers();
+
+    const opening = openWhileMissing(page, store, ["silent", "rejected"]);
+
+    await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);
+
+    const waiting = { ...opening.progress(), heard: [...page.heard] };
+
+    await vi.advanceTimersByTimeAsync(SETTLE_MS * 3);
+    vi.useRealTimers();
+    await until(() => opening.progress().open, 40);
+
+    expect({
+      opened: { ...opening.progress(), ...page.standing() },
+      waiting,
+    }).toStrictEqual({
+      opened: {
+        asked: 3,
+        count: 1,
+        error: CAUSE,
+        heard: ["unsaved 1", "unsaved 1"],
+        open: true,
+        title: "DISCARDED TEXT",
+        undiscarded: true,
+      },
+      waiting: { asked: 1, heard: [], open: false },
+    });
+  });
+});
+
+/**
+ * A ⌘C through the page's gate and main's copy while main hasn't answered a Discard for longer
+ * than SETTLE_MS, after a description is typed on top when `typed`: what it put on the clipboard,
+ * how it went, what it offers and what it says.
+ */
+const copyWhileDiscardHangs = async ({ typed }: { typed: boolean }) => {
+  const { answers, disk, drafts, store } = await crashSetup();
+
+  answers.hold = true;
+  drafts.edit(ID, DISCARDED_TEXT, stored);
+  drafts.flush(ID);
+  await until(() => answers.held.length > 0);
+
+  const back = disk.hold(
+    (op) => op === `rename ${ID}/record.json.prev -> ${ID}/record.json`
+  );
+
+  drafts.discard(ID);
+  await back.reached;
+  answers.hold = false;
+
+  for (const go of answers.held.splice(0)) {
+    go();
+  }
+
+  await settled();
+
+  if (typed) {
+    const shown = drafts.shown(ID, stored);
+
+    drafts.edit(ID, { ...shown, description: "TYPED meanwhile" }, shown);
+  }
+
+  vi.useFakeTimers();
+
+  const copying = copyOf(store, drafts);
+
+  await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+  vi.useRealTimers();
+
+  const copy = await copying;
+
+  back.release();
+  await store.idle();
+
+  return {
+    ...copy,
+    says:
+      copy.copied.kind === "copied" ? null : notCopiedText(copy.copied, "page"),
+  };
+};
+
+describe("A copy refused while a Discard is still owed", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each([false, true])(
+    "says it couldn’t discard, never save, and offers nothing to retry, when main hasn’t put the saved version back in time (typed on top: %s)",
+    async (typed) => {
+      await expect(copyWhileDiscardHangs({ typed })).resolves.toStrictEqual({
+        clipboard: [],
+        copied: {
+          kind: "notDiscarded",
+          outcome: {
+            kind: "failed",
+            message: "Inset is still putting the earlier version back.",
+          },
+        },
+        retry: null,
+        says: "Couldn’t discard your changes, so nothing was copied. Inset is still putting the earlier version back.",
+      });
+    }
+  );
+
+  it("still says the changes were discarded when the user discards the words a copy waits for, though main hasn’t put the saved version back yet", async () => {
+    const { answers, disk, drafts, store } = await crashSetup();
+
+    answers.hold = true;
+    drafts.edit(ID, DISCARDED_TEXT, stored);
+
+    const copying = copyOf(store, drafts);
+
+    await until(() => answers.held.length > 0);
+
+    const back = disk.hold(
+      (op) => op === `rename ${ID}/record.json.prev -> ${ID}/record.json`
+    );
+
+    drafts.discard(ID);
+
+    const copy = await copying;
+
+    back.release();
+    answers.hold = false;
+
+    for (const go of answers.held.splice(0)) {
+      go();
+    }
+
+    await store.idle();
+
+    expect({
+      ...copy,
+      says:
+        copy.copied.kind === "copied"
+          ? null
+          : notCopiedText(copy.copied, "page"),
+    }).toStrictEqual({
+      clipboard: [],
+      copied: {
+        kind: "notSaved",
+        outcome: { kind: "failed", message: "The changes were discarded." },
+      },
+      retry: null,
+      says: "Its changes were discarded, so nothing was copied.",
     });
   });
 });

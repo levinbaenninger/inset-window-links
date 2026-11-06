@@ -1,5 +1,24 @@
+import type { OwedDiscard } from "../../../shared/dto";
 import type { LeaveAnswer, LeaveReason } from "../../../shared/leave";
+import { SETTLE_MS } from "../../../shared/leave";
 import type { DraftStore, Unsaved } from "./drafts";
+
+/**
+ * Which question the prompt asks:
+ * - save: words couldn't be saved (Retry, Discard and close, Cancel);
+ * - undiscarded: main answered a Discard with a failure (Keep changes, Discard again, Cancel);
+ * - stalled: main hasn't answered a Discard in time (Wait, Close anyway, Cancel). Keep changes and
+ *   Discard again would act on words main may be putting back that moment, so they wait for it.
+ */
+export type PromptKind = "save" | "undiscarded" | "stalled";
+
+export const promptKind = ({ stalled, undiscarded }: Unsaved): PromptKind => {
+  if (!undiscarded) {
+    return "save";
+  }
+
+  return stalled > 0 ? "stalled" : "undiscarded";
+};
 
 /**
  * Recent Captures being asked to let go, as its window closes or the app quits.
@@ -14,9 +33,40 @@ export type LeaveState =
       kind: "held";
       reason: LeaveReason;
       unsaved: Unsaved;
-      /** Retry, or a Discard again, is on its way: Retry waits for its answer; Cancel and Discard still work. */
+      /** Retry, Discard again or Wait is on its way: Retry waits for its answer; Cancel and Discard still work. */
       retrying: boolean;
     };
+
+/**
+ * How far the page is in opening. It shows captures only once it knows which Discards main still
+ * owes, since a capture main owes one for must open as not discarded.
+ * - reading: it is asking main; nothing shows yet.
+ * - unread: main couldn't say, or not within SETTLE_MS. No capture shows, so none can be copied
+ *   or edited, and the page asks again after OWED_RETRY_MS.
+ * - open: it took them in and told main its count.
+ */
+export type Opening = "reading" | "unread" | "open";
+
+/** How long the page waits before it asks main again which Discards it still owes. */
+export const OWED_RETRY_MS = 1000;
+
+/** The Discards main still owes, or null when it couldn't say within SETTLE_MS. */
+const owedInTime = async (
+  owed: () => Promise<readonly OwedDiscard[]>
+): Promise<readonly OwedDiscard[] | null> => {
+  const { promise: late, resolve } = Promise.withResolvers<null>();
+  const timer = setTimeout(() => resolve(null), SETTLE_MS);
+
+  try {
+    return await Promise.race([owed(), late]);
+  } catch (error) {
+    console.error("Couldn’t hear which Discards main still owes", error);
+
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 /** What the page tells main. */
 export interface LeaveMain {
@@ -32,7 +82,9 @@ const sameUnsaved = (a: Unsaved, b: Unsaved): boolean =>
   a.count === b.count &&
   a.error === b.error &&
   a.late === b.late &&
-  a.undiscarded === b.undiscarded;
+  a.undiscarded === b.undiscarded &&
+  a.stalled === b.stalled &&
+  a.typedSince === b.typedSince;
 
 /**
  * Holds a close or quit while the page has words that are not saved. Main asks only while the
@@ -44,6 +96,7 @@ export class LeaveFlow {
   readonly #main: () => LeaveMain;
   readonly #listeners = new Set<() => void>();
   #state: LeaveState = { kind: "idle" };
+  #opening: Opening = "reading";
   /** Bumped by every wait and every final answer: a wait that ends after either changes nothing. */
   #run = 0;
   readonly #reported: () => number;
@@ -75,12 +128,39 @@ export class LeaveFlow {
   /** The same object until it changes, for useSyncExternalStore. */
   readonly state = (): LeaveState => this.#state;
 
+  /** For useSyncExternalStore, as `state` is. */
+  readonly opening = (): Opening => this.#opening;
+
   /**
    * Tells main the count as the page loads. Main keeps the count a crashed or reloaded page last
    * reported until a fresh page reports its own.
    */
   announce(): void {
     this.#main().reportUnsaved(this.#reported());
+  }
+
+  /**
+   * As the page loads, before it shows anything: takes in the Discards main still owes, then tells
+   * main the count, so the first count it hears holds them. Until main can say, the page doesn't
+   * open and reports nothing: treating its captures as clean would let a copy take, or an edit
+   * save over, the words a Discard is still owed for. It asks again until main answers.
+   */
+  async open(owed: () => Promise<readonly OwedDiscard[]>): Promise<void> {
+    const listed = await owedInTime(owed);
+
+    if (listed === null) {
+      const { promise: again, resolve } = Promise.withResolvers<undefined>();
+
+      this.#setOpening("unread");
+      setTimeout(() => resolve(undefined), OWED_RETRY_MS);
+      await again;
+
+      return this.open(owed);
+    }
+
+    this.#drafts.owe(listed);
+    this.announce();
+    this.#setOpening("open");
   }
 
   /**
@@ -129,8 +209,7 @@ export class LeaveFlow {
       return;
     }
 
-    // Undiscarded with an error: at least one Discard failed, rather than all still being on their way.
-    if (state.unsaved.undiscarded && state.unsaved.error !== null) {
+    if (promptKind(state.unsaved) === "undiscarded") {
       this.#set({ ...state, retrying: true });
       this.#drafts.discardAll();
       void this.#wait();
@@ -142,6 +221,29 @@ export class LeaveFlow {
     this.#set({ kind: "idle" });
     this.#drafts.discardAll();
     this.#main().answerLeave("go");
+  }
+
+  /** Waits again for the Discards main hasn't answered, as long as any wait, and asks again if they still haven't. */
+  wait(): void {
+    const state = this.#state;
+
+    if (state.kind !== "held" || state.retrying) {
+      return;
+    }
+
+    this.#set({ ...state, retrying: true });
+    void this.#wait();
+  }
+
+  /**
+   * Lets go now, without waiting for main to answer the Discards still on their way: main goes on
+   * putting the saved versions back, and their markers finish them at the next start. A Discard
+   * main answered with a failure stays owed, so Recent Captures shows it again when it opens.
+   */
+  leaveNow(): void {
+    if (this.#state.kind === "held") {
+      this.#finish("go");
+    }
   }
 
   cancel(): void {
@@ -210,7 +312,17 @@ export class LeaveFlow {
 
   #set(state: LeaveState): void {
     this.#state = state;
+    this.#changed();
+  }
 
+  #setOpening(opening: Opening): void {
+    if (opening !== this.#opening) {
+      this.#opening = opening;
+      this.#changed();
+    }
+  }
+
+  #changed(): void {
     for (const listener of this.#listeners) {
       listener();
     }

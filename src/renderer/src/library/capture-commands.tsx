@@ -66,7 +66,7 @@ import type {
 import { ACTIVE, snoozePresets } from "../../../shared/status";
 import type { DraftText } from "../../../shared/text";
 import type { RetryKind } from "./copy-gate";
-import { copyCapture, notCopiedText, retryOf } from "./copy-gate";
+import { copyCapture, lasts, notCopiedText, retryOf } from "./copy-gate";
 import { reasonOf } from "./drafts";
 import { drafts } from "./page-drafts";
 import { neighborRow, ROW_SELECTOR } from "./row-keys";
@@ -80,8 +80,8 @@ export interface Feedback {
   text: string;
   failed: boolean;
   /**
-   * A refused copy's Retry. One that saves the capture's unsaved words lasts until they are saved
-   * or given up; one that copies again goes like any failure.
+   * A refused copy's Retry, or Keep changes. One that saves the capture's unsaved words lasts until
+   * they are saved or given up; one that copies again goes like any failure.
    */
   retry?: { run: () => void; kind: RetryKind } | undefined;
 }
@@ -207,7 +207,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   // A failure stays longer, so it is read before it goes; a newer answer restarts the wait. On a
   // row, a refusal with Retry stays until the words are saved or given up: the row has no other
   // Retry, and an action should not run away.
-  const lasting = feedback?.retry?.kind === "save" && target.from === "row";
+  const lasting = lasts(feedback?.retry?.kind) && target.from === "row";
 
   useEffect(() => {
     if (feedback === null || lasting) {
@@ -223,7 +223,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     return () => clearTimeout(timer);
   }, [feedback, lasting]);
 
-  if (feedback?.retry?.kind === "save" && !unsavedWords) {
+  if (lasts(feedback?.retry?.kind) && !unsavedWords) {
     setFeedback(null);
   }
 
@@ -409,7 +409,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
           : {
               kind: retry,
               run: () => {
-                void (retry === "save" ? retrySave() : copy(request));
+                void (retry === "copy" ? copy(request) : retrySave());
               },
             },
       text: notCopiedText(result, target.from),

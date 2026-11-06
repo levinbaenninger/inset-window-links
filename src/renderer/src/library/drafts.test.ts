@@ -987,7 +987,14 @@ describe(DraftStore, () => {
 
     expect([before, await now()]).toStrictEqual([
       "still waiting",
-      { count: 1, error: null, late: true, undiscarded: false },
+      {
+        count: 1,
+        error: null,
+        late: true,
+        stalled: 0,
+        typedSince: false,
+        undiscarded: false,
+      },
     ]);
   });
 
@@ -1080,5 +1087,168 @@ describe(DraftStore, () => {
       snapshot.kind === "pending" ? await snapshot.saved : null,
       drafts.draft(ID),
     ]).toStrictEqual([{ kind: "missing" }, undefined]);
+  });
+});
+
+/** A page whose main logs every call, and answers each Discard with `discards` in turn. */
+const owedPage = (discards: Promise<MutationOutcome>[] = []) => {
+  const main: string[] = [];
+
+  const drafts = new DraftStore(() => ({
+    discard: (_id, rev) => {
+      main.push(`discard ${String(rev)}`);
+
+      return discards.shift() ?? Promise.resolve({ kind: "ok" });
+    },
+    setTodoDone: () => Promise.resolve({ kind: "ok" }),
+    updateText: (_id, text) => {
+      main.push(`save ${text.relationship}`);
+
+      return Promise.resolve({ kind: "ok" });
+    },
+  }));
+
+  return { drafts, main };
+};
+
+describe("a Discard main still owes as the page opens", () => {
+  const CANT_WRITE = "Inset can’t write to its data folder.";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows one main couldn’t finish as not discarded, refuses copies, keeps edits in it, and Discard again names main’s save", async () => {
+    const { drafts, main } = owedPage();
+
+    drafts.owe([
+      {
+        captureId: ID,
+        message: CANT_WRITE,
+        rev: 7,
+        saved: initial,
+        words: titled("Discarded"),
+      },
+    ]);
+
+    const atOpen = {
+      count: drafts.count,
+      error: drafts.error(ID),
+      shown: drafts.shown(ID, titled("Discarded")).relationship,
+      snapshot: drafts.snapshot(ID).kind,
+    };
+
+    drafts.edit(ID, titled("Discarded, edited"), titled("Discarded"));
+    await vi.advanceTimersByTimeAsync(SAVE_AFTER_MS + 10);
+
+    const afterEdit = [...main];
+
+    drafts.discard(ID);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect({
+      afterEdit,
+      atOpen,
+      main,
+      shown: drafts.shown(ID, titled("Discarded")).relationship,
+    }).toStrictEqual({
+      afterEdit: [],
+      atOpen: {
+        count: 1,
+        error: { kind: "failed", message: CANT_WRITE },
+        shown: "Discarded",
+        snapshot: "undiscarded",
+      },
+      main: ["discard 7"],
+      shown: "A limits B",
+    });
+  });
+
+  it("asks main again for one it hasn’t answered, shows the saved words meanwhile, and holds edits until it answers", async () => {
+    const answer = Promise.withResolvers<MutationOutcome>();
+    const { drafts, main } = owedPage([answer.promise]);
+
+    drafts.owe([
+      {
+        captureId: ID,
+        message: null,
+        rev: 7,
+        saved: initial,
+        words: titled("Discarded"),
+      },
+    ]);
+
+    const atOpen = {
+      count: drafts.count,
+      shown: drafts.shown(ID, titled("Discarded")).relationship,
+      unsaved: drafts.unsaved(),
+    };
+
+    drafts.edit(ID, titled("Typed meanwhile"), initial);
+    await vi.advanceTimersByTimeAsync(SAVE_AFTER_MS + 10);
+
+    const meanwhile = [...main];
+
+    answer.resolve({ kind: "failed", message: CANT_WRITE });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect({
+      atOpen,
+      main,
+      meanwhile,
+      now: {
+        error: drafts.error(ID),
+        shown: drafts.shown(ID, titled("Discarded")).relationship,
+        undiscarded: drafts.undiscarded(ID),
+      },
+    }).toStrictEqual({
+      atOpen: {
+        count: 1,
+        shown: "A limits B",
+        unsaved: {
+          count: 1,
+          error: null,
+          late: true,
+          stalled: 1,
+          typedSince: false,
+          undiscarded: true,
+        },
+      },
+      main: ["discard 7"],
+      meanwhile: ["discard 7"],
+      now: {
+        error: { kind: "failed", message: CANT_WRITE },
+        shown: "Typed meanwhile",
+        undiscarded: true,
+      },
+    });
+  });
+
+  it("sends what was typed once main puts the saved version back", async () => {
+    const answer = Promise.withResolvers<MutationOutcome>();
+    const { drafts, main } = owedPage([answer.promise]);
+
+    drafts.owe([
+      {
+        captureId: ID,
+        message: null,
+        rev: 7,
+        saved: initial,
+        words: titled("Discarded"),
+      },
+    ]);
+    drafts.edit(ID, titled("Typed meanwhile"), initial);
+    await vi.advanceTimersByTimeAsync(SAVE_AFTER_MS + 10);
+    answer.resolve({ kind: "ok" });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect({ count: drafts.count, main }).toStrictEqual({
+      count: 0,
+      main: ["discard 7", "save Typed meanwhile"],
+    });
   });
 });

@@ -32,6 +32,9 @@ export const SETTLE_MS = 3000;
 /** What a prompt or a refused copy says once SETTLE_MS pass without a save answering. */
 export const SAVE_LATE = "Saving didn’t finish in time.";
 
+/** Why a copy is refused while main hasn't answered a Discard in time. It never says "save". */
+export const DISCARD_LATE = "Inset is still putting the earlier version back.";
+
 /**
  * How long main waits for the page's first answer to a request. After `waiting` it waits this
  * much longer than the page's own wait, so the two never race.

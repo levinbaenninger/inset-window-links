@@ -1,6 +1,6 @@
 import "../index.css";
 import { RouterProvider } from "@tanstack/react-router";
-import { StrictMode } from "react";
+import { StrictMode, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { z } from "zod";
 
@@ -12,7 +12,8 @@ import { followSystemTheme } from "@/lib/theme";
 import { LeavePushSchema } from "../../../shared/leave";
 import { listenForCopy } from "./copy-keys";
 import { LeavePrompt } from "./leave-prompt";
-import { drafts, leaving } from "./page-drafts";
+import { OwedUnread } from "./owed-unread";
+import { drafts, leaving, opened } from "./page-drafts";
 import { router } from "./router";
 import { SidebarProvider } from "./sidebar";
 
@@ -33,6 +34,7 @@ announceMenus((open) => libraryApi().menuOpen(open));
 // may not have been reported yet: this is the last chance to send them.
 window.addEventListener("pagehide", () => drafts.leave());
 
+// The page answers for the Discards main still owes only once it has taken them in.
 libraryApi().onLeave((push) => {
   const parsed = LeavePushSchema.safeParse(push);
 
@@ -40,11 +42,15 @@ libraryApi().onLeave((push) => {
     return;
   }
 
-  if (parsed.data === "cancel") {
-    leaving.dismiss();
-  } else {
-    leaving.request(parsed.data);
-  }
+  void (async () => {
+    await opened;
+
+    if (parsed.data === "cancel") {
+      leaving.dismiss();
+    } else {
+      leaving.request(parsed.data);
+    }
+  })();
 });
 
 libraryApi().onChanged(() => {
@@ -59,15 +65,36 @@ libraryApi().onNavigate((route) => {
   }
 });
 
+/**
+ * The captures show only once the page knows which Discards main still owes, so a capture main
+ * owes one for shows as not discarded from the first frame, and none can be copied or edited
+ * before then.
+ */
+const Library = () => {
+  const opening = useSyncExternalStore(leaving.subscribe, leaving.opening);
+
+  if (opening === "reading") {
+    return null;
+  }
+
+  if (opening === "unread") {
+    return <OwedUnread />;
+  }
+
+  return (
+    <SidebarProvider>
+      <RouterProvider router={router} />
+      <LeavePrompt />
+    </SidebarProvider>
+  );
+};
+
 const root = document.querySelector("#root");
 
 if (root) {
   createRoot(root).render(
     <StrictMode>
-      <SidebarProvider>
-        <RouterProvider router={router} />
-        <LeavePrompt />
-      </SidebarProvider>
+      <Library />
     </StrictMode>
   );
 }

@@ -1,4 +1,5 @@
 import {
+  Alert02Icon,
   AlarmClockIcon,
   Cancel01Icon,
   CheckmarkCircle02Icon,
@@ -56,11 +57,10 @@ import {
 import { matchesCapture, matchSource } from "../../../shared/search";
 import type { StatusKind } from "../../../shared/status";
 import type { DraftText } from "../../../shared/text";
-import { isBlank } from "../../../shared/text";
+import { isBlank, storedText } from "../../../shared/text";
 import { MenuEntries, useCaptureCommands } from "./capture-commands";
-import { retryLabel } from "./copy-gate";
+import { retryLabel, retryText } from "./copy-gate";
 import { useEntryCopy } from "./copy-keys";
-import { storedText } from "./drafts";
 import { drafts } from "./page-drafts";
 import type { RowAction } from "./row-keys";
 import { neighborRow, rowKey } from "./row-keys";
@@ -462,10 +462,11 @@ const CurrentRow = ({
                     <>
                       {unsaved && (
                         <span
-                          className="text-destructive shrink-0"
+                          className="text-destructive flex shrink-0 items-center gap-1"
                           data-testid="row-unsaved"
                           title="Changes couldn’t be saved. Open the capture to retry or discard them."
                         >
+                          <HugeiconsIcon icon={Alert02Icon} size={12} />
                           Not saved
                         </span>
                       )}
@@ -543,7 +544,7 @@ const CurrentRow = ({
             size="xs"
             variant="outline"
           >
-            Retry
+            {retryText(refused.retry.kind)}
           </Button>
         </div>
       )}

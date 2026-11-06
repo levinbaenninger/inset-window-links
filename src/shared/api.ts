@@ -5,6 +5,7 @@ import type {
   CaptureListItem,
   DraftSnapshot,
   MutationOutcome,
+  OwedDiscard,
   ShortcutStatus,
 } from "./dto";
 import type { CandidateId, CaptureId, ViewId } from "./ids";
@@ -53,6 +54,11 @@ export interface LibraryApi {
     captureId: CaptureId,
     rev: number | null
   ) => Promise<MutationOutcome>;
+  /**
+   * The Discards main still owes, from a page closed before this one: asked once as the page
+   * loads, before it shows anything or reports its count.
+   */
+  owedDiscards: () => Promise<readonly OwedDiscard[]>;
   remove: (captureId: CaptureId) => Promise<MutationOutcome>;
   setStatus: (
     captureId: CaptureId,

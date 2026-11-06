@@ -141,3 +141,20 @@ export type MutationOutcome =
   | { kind: "missing" }
   | { kind: "readOnly"; version: number }
   | { kind: "failed"; message: string };
+
+/**
+ * A Discard main still owes for a page that closed, so a Recent Captures page that opens meanwhile
+ * shows it as not discarded, with Keep changes and Discard again, rather than the discarded words
+ * as saved.
+ */
+export interface OwedDiscard {
+  captureId: CaptureId;
+  /** The save main still holds, which Discard again names. */
+  rev: number;
+  /** What the capture holds now: the words the user discarded. */
+  words: DraftText;
+  /** What the Discard puts back. */
+  saved: DraftText;
+  /** Why main couldn't put it back; null while it is still trying. */
+  message: string | null;
+}

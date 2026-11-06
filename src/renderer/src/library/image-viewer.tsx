@@ -18,7 +18,14 @@ import { formatWhen, viewTitle } from "@/lib/format";
 
 import type { CaptureDetail, ViewSummary } from "../../../shared/dto";
 import type { RetryKind } from "./copy-gate";
-import { copyCapture, notCopiedText, retryLabel, retryOf } from "./copy-gate";
+import {
+  copyCapture,
+  lasts,
+  notCopiedText,
+  retryLabel,
+  retryOf,
+  retryText,
+} from "./copy-gate";
 import { reasonOf } from "./drafts";
 import { drafts } from "./page-drafts";
 
@@ -98,7 +105,7 @@ export const ImageViewer = ({
     () => drafts.draft(captureId) !== undefined
   );
 
-  if (refused?.retry === "save" && !unsavedWords) {
+  if (lasts(refused?.retry) && !unsavedWords) {
     setRefused(null);
   }
 
@@ -181,7 +188,7 @@ export const ImageViewer = ({
 
     setRefused({ retry, text: notCopiedText(result, "viewer") });
 
-    if (retry !== "save") {
+    if (!lasts(retry)) {
       setTimeout(() => setRefused(null), FAILURE_MS);
     }
   };
@@ -258,12 +265,12 @@ export const ImageViewer = ({
             aria-label={retryLabel(refused.retry)}
             className="mr-1"
             onClick={() => {
-              void (refused.retry === "save" ? retrySave() : copy());
+              void (refused.retry === "copy" ? copy() : retrySave());
             }}
             size="xs"
             variant="outline"
           >
-            Retry
+            {retryText(refused.retry)}
           </Button>
         )}
         {view.origin !== null && (

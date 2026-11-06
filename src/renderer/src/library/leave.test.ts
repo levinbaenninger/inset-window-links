@@ -6,7 +6,7 @@ import { SETTLE_MS } from "../../../shared/leave";
 import type { DraftText } from "../../../shared/text";
 import type { TextStore } from "./drafts";
 import { DraftStore, SAVE_AFTER_MS } from "./drafts";
-import { LeaveFlow } from "./leave";
+import { LeaveFlow, OWED_RETRY_MS, promptKind } from "./leave";
 
 // SAFETY: CaptureIds are branded UUID strings; the store only passes them through.
 const A = "00000000-0000-4000-8000-000000000001" as CaptureId;
@@ -112,7 +112,7 @@ const held = (
   kind: "held",
   reason,
   retrying,
-  unsaved: { ...unsaved, undiscarded: false },
+  unsaved: { ...unsaved, stalled: 0, typedSince: false, undiscarded: false },
 });
 
 describe(LeaveFlow, () => {
@@ -420,6 +420,37 @@ describe(LeaveFlow, () => {
     expect(log).toStrictEqual(["unsaved 0", "unsaved 1", "unsaved 1"]);
   });
 
+  it("opens only once main says which Discards it owes, showing it can’t yet while main fails, and tells main its count once", async () => {
+    const { flow, log } = setup();
+
+    const answers = [
+      () => Promise.reject(new Error("The IPC channel closed.")),
+      () => Promise.withResolvers<never>().promise,
+      () => Promise.resolve([]),
+    ];
+
+    const seen: string[] = [];
+
+    flow.subscribe(() => seen.push(flow.opening()));
+
+    const before = flow.opening();
+    const opened = flow.open(() => answers.shift()?.() ?? Promise.resolve([]));
+
+    await vi.advanceTimersByTimeAsync(OWED_RETRY_MS + SETTLE_MS - 1);
+
+    const meanwhile = { log: [...log], opening: flow.opening() };
+
+    await vi.advanceTimersByTimeAsync(1 + OWED_RETRY_MS);
+    await opened;
+
+    expect({ before, log, meanwhile, seen }).toStrictEqual({
+      before: "reading",
+      log: ["unsaved 0"],
+      meanwhile: { log: [], opening: "unread" },
+      seen: ["unread", "open"],
+    });
+  });
+
   it("Discard gives up every capture's words, reports that, then lets go", async () => {
     const { drafts, flow, log, type } = setup([DISK_FULL, DISK_FULL]);
 
@@ -519,6 +550,112 @@ describe(LeaveFlow, () => {
       "unsaved 0",
       "go",
     ]);
+  });
+
+  it("asks to wait or leave anyway when main hasn’t answered a Discard in time: Wait asks again after SETTLE_MS, and Close anyway lets go at once", async () => {
+    const log: string[] = [];
+    const save = Promise.withResolvers<MutationOutcome>();
+
+    const drafts = new DraftStore(() => ({
+      discard: (_id, rev) => {
+        log.push(`discard ${rev === null ? "none" : "sent"}`);
+
+        return Promise.withResolvers<MutationOutcome>().promise;
+      },
+      setTodoDone: () => Promise.resolve(OK),
+      updateText: () => save.promise,
+    }));
+
+    const flow = new LeaveFlow(drafts, () => ({
+      answerLeave: (answer) => log.push(answer),
+      reportUnsaved: (count) => log.push(`unsaved ${String(count)}`),
+    }));
+
+    drafts.edit(A, titled("A limits C"), stored);
+    drafts.flush(A);
+    drafts.discard(A);
+    flow.request("close");
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+
+    const kindOf = () => {
+      const state = flow.state();
+
+      return state.kind === "held"
+        ? `${promptKind(state.unsaved)}${state.retrying ? " waiting" : ""}`
+        : state.kind;
+    };
+
+    const asked = kindOf();
+
+    flow.wait();
+
+    const waiting = kindOf();
+
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+
+    const askedAgain = kindOf();
+
+    flow.leaveNow();
+
+    expect({
+      asked,
+      askedAgain,
+      log,
+      now: kindOf(),
+      waiting,
+    }).toStrictEqual({
+      asked: "stalled",
+      askedAgain: "stalled",
+      log: ["unsaved 1", "discard sent", "waiting", "held", "go"],
+      now: "idle",
+      waiting: "stalled waiting",
+    });
+  });
+
+  it("asks to keep or discard again, not to wait, once main answers the Discard with a failure", async () => {
+    const discarded = Promise.withResolvers<MutationOutcome>();
+
+    const failing = new DraftStore(() => ({
+      discard: () => discarded.promise,
+      setTodoDone: () => Promise.resolve(OK),
+      updateText: () => Promise.resolve(OK),
+    }));
+
+    const heard: string[] = [];
+
+    const leaving = new LeaveFlow(failing, () => ({
+      answerLeave: (answer) => heard.push(answer),
+      reportUnsaved: (count) => heard.push(`unsaved ${String(count)}`),
+    }));
+
+    failing.owe([
+      {
+        captureId: A,
+        message: null,
+        rev: 3,
+        saved: stored,
+        words: titled("Discarded"),
+      },
+    ]);
+    leaving.request("quit");
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+
+    const stalled = leaving.state();
+
+    discarded.resolve(DISK_FULL);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const failed = leaving.state();
+
+    expect({
+      failed: failed.kind === "held" ? promptKind(failed.unsaved) : null,
+      heard,
+      stalled: stalled.kind === "held" ? promptKind(stalled.unsaved) : null,
+    }).toStrictEqual({
+      failed: "undiscarded",
+      heard: ["unsaved 1", "waiting", "held"],
+      stalled: "stalled",
+    });
   });
 
   it("drops the request without an answer once main stopped waiting for one", async () => {

@@ -33,6 +33,7 @@ export const libraryChannels = {
   menuOpen: "send",
   newCapture: "send",
   openSettings: "send",
+  owedDiscards: "invoke",
   remove: "invoke",
   reopen: "invoke",
   reportUnsaved: "send",

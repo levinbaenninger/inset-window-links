@@ -1,4 +1,5 @@
 import {
+  Alert02Icon,
   CheckmarkCircle02Icon,
   Copy01Icon,
   MoreHorizontalIcon,
@@ -64,6 +65,7 @@ import {
   MAX_DESCRIPTION,
   MAX_RELATIONSHIP,
   MAX_VIEW_DESCRIPTION,
+  storedText,
 } from "../../../shared/text";
 import type { Feedback } from "./capture-commands";
 import {
@@ -71,10 +73,10 @@ import {
   reopenedMessage,
   useCaptureCommands,
 } from "./capture-commands";
-import { retryLabel } from "./copy-gate";
+import { retryLabel, retryText } from "./copy-gate";
 import { useEntryCopy } from "./copy-keys";
 import type { SaveError } from "./drafts";
-import { reasonOf, storedText } from "./drafts";
+import { reasonOf } from "./drafts";
 import { ImageViewer } from "./image-viewer";
 import { drafts } from "./page-drafts";
 import { PaneHeader } from "./pane-header";
@@ -356,7 +358,11 @@ const SaveFailure = ({
       }
     }}
   >
-    <p className="text-destructive text-xs" role="alert">
+    <p
+      className="text-destructive flex items-center gap-1.5 text-xs"
+      role="alert"
+    >
+      <HugeiconsIcon className="shrink-0" icon={Alert02Icon} size={14} />
       {undiscarded
         ? `Couldn’t discard your changes. ${reasonOf(failure)}`
         : problem(failure)}
@@ -375,7 +381,7 @@ const SaveFailure = ({
           onClick={onDiscard}
           size="xs"
           title="Try again to go back to the saved words"
-          variant="ghost"
+          variant="destructive"
         >
           Discard again
         </Button>
@@ -391,7 +397,7 @@ const SaveFailure = ({
           onClick={onDiscard}
           size="xs"
           title="Go back to the saved words"
-          variant="ghost"
+          variant="destructive"
         >
           Discard changes
         </Button>
@@ -430,7 +436,7 @@ const HeaderFeedback = ({
         size="xs"
         variant="outline"
       >
-        Retry
+        {retryText(feedback.retry.kind)}
       </Button>
     )}
   </>

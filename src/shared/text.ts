@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { DueDate } from "./due";
 import { DueDateSchema } from "./due";
 import { ViewIdSchema } from "./ids";
 import type { ViewId } from "./ids";
@@ -60,6 +61,27 @@ export type DraftText = z.infer<typeof DraftTextSchema>;
 /** A saved capture's text, as it arrives in main to be saved or copied: its title is never blank. */
 export const EditedTextSchema = DraftTextSchema.extend({
   relationship: z.string().trim().min(1).max(MAX_RELATIONSHIP),
+});
+
+/** A saved capture's fields that a draft edits, as the list, the capture's page and main all have them. */
+interface Editable {
+  description: string;
+  due: DueDate | null;
+  relationship: string;
+  todos: readonly Todo[];
+  views: readonly { id: ViewId; description: string }[];
+}
+
+/** A saved capture's fields as a draft holds them: what it shows when nothing is unsaved. */
+export const storedText = (capture: Editable): DraftText => ({
+  description: capture.description,
+  due: capture.due,
+  relationship: capture.relationship,
+  todos: [...capture.todos],
+  // SAFETY: the keys are the views' own ids.
+  viewDescriptions: Object.fromEntries(
+    capture.views.map((view) => [view.id, view.description])
+  ) as ViewDescriptions,
 });
 
 export const blankText: DraftText = {

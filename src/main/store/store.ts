@@ -1,13 +1,13 @@
 import path from "node:path";
 
-import type { MutationOutcome } from "../../shared/dto";
+import type { MutationOutcome, OwedDiscard } from "../../shared/dto";
 import { errorCode, saveProblem } from "../../shared/errors";
 import type { CaptureId, ViewId } from "../../shared/ids";
 import { DraftIdSchema } from "../../shared/ids";
 import type { CaptureStatus } from "../../shared/status";
 import { ACTIVE } from "../../shared/status";
 import type { DraftText } from "../../shared/text";
-import { keptTodos } from "../../shared/text";
+import { keptTodos, storedText } from "../../shared/text";
 import type { StoreFs } from "./fs";
 import type { CaptureRecord } from "./schema";
 import { readVersioned } from "./schema";
@@ -106,6 +106,8 @@ interface Undo {
   pending?: CaptureRecord;
   /** A Discard is putting it back: a newer save waits behind that, and leaves it be. */
   reverting: boolean;
+  /** Why the last Discard couldn't put it back, while that Discard is still owed. */
+  failure?: string;
 }
 
 /** What a save the page discarded answers: nothing was written, and the page no longer waits for it. */
@@ -727,9 +729,10 @@ export class CaptureStore {
       await this.#fs.rename(`${target}.prev`, target);
     } catch (error) {
       undo.reverting = false;
+      undo.failure = saveProblem(error);
       console.error(`Couldn’t put back the saved version of ${id}`, error);
 
-      return { kind: "failed", message: saveProblem(error) };
+      return { kind: "failed", message: undo.failure };
     }
 
     this.#undo.delete(id);
@@ -819,6 +822,31 @@ export class CaptureStore {
     }
 
     return this.#serial(() => this.#revert(id, rev));
+  }
+
+  /**
+   * Every Discard still owed: marked, and not yet put back by a rename or given up by a save, as
+   * Keep changes does. One still on its way has no message yet. A Recent Captures page that opens
+   * meanwhile shows them, so it never takes the discarded words for saved.
+   */
+  owed(): OwedDiscard[] {
+    return [...this.#undo].flatMap(([id, undo]) => {
+      const entry = this.#index.get(id);
+
+      if (!this.#marks.has(id) || entry?.kind !== "current") {
+        return [];
+      }
+
+      return [
+        {
+          captureId: entry.record.id,
+          message: undo.reverting ? null : (undo.failure ?? null),
+          rev: undo.rev,
+          saved: storedText(undo.before),
+          words: storedText(entry.record),
+        },
+      ];
+    });
   }
 
   /** Moves a capture between the list, snoozed and done. Not an edit of the text, so updatedAt stays. */

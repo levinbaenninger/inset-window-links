@@ -4,8 +4,9 @@ import { newCopyTicket } from "../../../shared/copy";
 import type { MutationOutcome } from "../../../shared/dto";
 import { copyProblem } from "../../../shared/errors";
 import type { CaptureId } from "../../../shared/ids";
+import { DISCARD_LATE } from "../../../shared/leave";
 import type { DraftStore, SaveError } from "./drafts";
-import { DISCARDED, reasonOf, within } from "./drafts";
+import { DISCARDED, LATE, reasonOf, within } from "./drafts";
 
 /**
  * How a copy went: copied; refused because the words on screen aren't saved, because a Discard of
@@ -17,6 +18,28 @@ export type CopyResult =
   | { kind: "notDiscarded"; outcome: SaveError }
   | { kind: "untitled" }
   | { kind: "notCopied"; outcome: MutationOutcome };
+
+/**
+ * A copy whose words main didn't save, or not in time. A Discard that couldn't finish, or one
+ * main hasn't answered by the time the wait runs out, refuses it as not discarded, in words that
+ * never say "save".
+ */
+const refused = (
+  id: CaptureId,
+  outcome: SaveError,
+  drafts: DraftStore
+): CopyResult => {
+  if (drafts.undiscarded(id)) {
+    return { kind: "notDiscarded", outcome };
+  }
+
+  return outcome === LATE && drafts.discarding(id)
+    ? {
+        kind: "notDiscarded",
+        outcome: { kind: "failed", message: DISCARD_LATE },
+      }
+    : { kind: "notSaved", outcome };
+};
 
 /**
  * The one way the page copies a capture: ⌘C, Copy as text, the image buttons, menu items and keys.
@@ -57,9 +80,7 @@ export const copyCapture = async (
       const saved = await within(snapshot.saved);
 
       if (saved.kind !== "ok") {
-        return drafts.undiscarded(id)
-          ? { kind: "notDiscarded", outcome: saved }
-          : { kind: "notSaved", outcome: saved };
+        return refused(id, saved, drafts);
       }
 
       break;
@@ -110,16 +131,21 @@ export const canRetry = (result: CopyResult): boolean =>
   result.outcome !== DISCARDED;
 
 /**
- * What Retry does for a refused copy: save the capture's words again while they are unsaved, or
- * else copy again, as after a due date that could not be written or a write that ran late.
+ * What a refused copy's button does: save the capture's words again while they are unsaved; keep
+ * them after a Discard that couldn't finish (Keep changes); or else copy again, as after a due
+ * date that could not be written or a write that ran late.
  */
-export type RetryKind = "save" | "copy";
+export type RetryKind = "save" | "keep" | "copy";
 
 export const retryOf = (
   result: CopyResult,
   id: CaptureId,
   drafts: DraftStore
 ): RetryKind | null => {
+  if (result.kind === "notDiscarded") {
+    return drafts.undiscarded(id) ? "keep" : null;
+  }
+
   if (!canRetry(result)) {
     return null;
   }
@@ -161,6 +187,27 @@ export const notCopiedText = (
     : `Couldn’t save your changes, so nothing was copied. ${reasonOf(outcome)}`;
 };
 
-/** The name a refused copy's Retry button reads out. */
-export const retryLabel = (kind: RetryKind): string =>
-  kind === "save" ? "Retry saving" : "Retry copying";
+/** The name a refused copy's button reads out. */
+export const retryLabel = (kind: RetryKind): string => {
+  switch (kind) {
+    case "keep": {
+      return "Keep changes";
+    }
+
+    case "save": {
+      return "Retry saving";
+    }
+
+    default: {
+      return "Retry copying";
+    }
+  }
+};
+
+/** Whether a refusal stays until the words are saved or given up: its button saves or keeps them. */
+export const lasts = (kind: RetryKind | null | undefined): boolean =>
+  kind === "save" || kind === "keep";
+
+/** What a refused copy's button says. */
+export const retryText = (kind: RetryKind): string =>
+  kind === "keep" ? "Keep changes" : "Retry";

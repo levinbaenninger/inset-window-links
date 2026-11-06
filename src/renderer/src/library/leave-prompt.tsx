@@ -15,6 +15,7 @@ import { SAVE_LATE } from "../../../shared/leave";
 import type { Unsaved } from "./drafts";
 import { reasonOf } from "./drafts";
 import type { LeaveState } from "./leave";
+import { promptKind } from "./leave";
 import { leaving } from "./page-drafts";
 
 /** Why the words aren't saved: the first failure, and saves that didn't finish in time. */
@@ -25,28 +26,57 @@ const why = ({ error, late }: Unsaved): string =>
 
 type Held = LeaveState & { kind: "held" };
 
-/** The title and the two answers; a Discard that couldn't finish asks to keep the changes or discard again. */
-const wordsOf = ({ reason, unsaved: { count, undiscarded } }: Held) => {
+/**
+ * The title, the description and the two answers. A Discard that couldn't finish asks to keep the
+ * changes or discard again; one main hasn't answered in time asks to wait for it or leave anyway.
+ */
+const wordsOf = ({ reason, unsaved }: Held) => {
+  const { count } = unsaved;
   const changes = count === 1 ? "1 change" : `${String(count)} changes`;
 
-  return undiscarded
-    ? {
+  switch (promptKind(unsaved)) {
+    case "stalled": {
+      const finishes =
+        reason === "quit"
+          ? "If you quit now, Inset finishes discarding the next time it starts"
+          : "If you close now, Inset finishes discarding in the background";
+
+      return {
+        description: `Discarding didn’t finish in time. ${finishes}${unsaved.typedSince ? ", and what you typed since is lost." : "."}`,
+        discard: reason === "quit" ? "Quit anyway" : "Close anyway",
+        retry: "Wait",
+        title:
+          count === 1
+            ? "1 change isn’t discarded yet"
+            : `${changes} aren’t discarded yet`,
+      };
+    }
+
+    case "undiscarded": {
+      return {
+        description: why(unsaved),
         discard: "Discard again",
         retry: "Keep changes",
         title: `${changes} couldn’t be discarded`,
-      }
-    : {
+      };
+    }
+
+    default: {
+      return {
+        description: why(unsaved),
         discard: reason === "quit" ? "Discard and quit" : "Discard and close",
         retry: "Retry",
         title: `${changes} couldn’t be saved`,
       };
+    }
+  }
 };
 
 /**
  * Shown when the window closes, or the app quits, with words that could not be saved or
- * discarded, or not in time. Return always retries (keeps the changes after a Discard that
- * couldn't finish), whichever button has focus, and closes once they are saved; Escape cancels;
- * Space presses the focused button, so Discard stays a deliberate choice.
+ * discarded, or not in time. Return always takes the safe answer, whichever button has focus:
+ * Retry, Keep changes after a Discard that couldn't finish, or Wait for one main hasn't answered.
+ * Escape cancels; Space presses the focused button, so Discard and leaving anyway stay deliberate.
  */
 export const LeavePrompt = () => {
   const state = useSyncExternalStore(leaving.subscribe, leaving.state);
@@ -74,6 +104,15 @@ export const LeavePrompt = () => {
   }
 
   const words = wordsOf(shown);
+  const stalled = promptKind(shown.unsaved) === "stalled";
+
+  const safe = () => {
+    if (stalled) {
+      leaving.wait();
+    } else {
+      leaving.retry();
+    }
+  };
 
   return (
     <AlertDialog
@@ -91,7 +130,7 @@ export const LeavePrompt = () => {
           if (event.key === "Enter" && !event.nativeEvent.isComposing) {
             event.preventDefault();
             event.stopPropagation();
-            leaving.retry();
+            safe();
           }
         }}
         onOpenAutoFocus={(event) => {
@@ -101,18 +140,23 @@ export const LeavePrompt = () => {
       >
         <AlertDialogHeader>
           <AlertDialogTitle>{words.title}</AlertDialogTitle>
-          <AlertDialogDescription>{why(shown.unsaved)}</AlertDialogDescription>
+          <AlertDialogDescription>{words.description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <Button onClick={() => leaving.discard()} variant="destructive">
+          <Button
+            onClick={() => {
+              if (stalled) {
+                leaving.leaveNow();
+              } else {
+                leaving.discard();
+              }
+            }}
+            variant="destructive"
+          >
             {words.discard}
           </Button>
-          <Button
-            disabled={shown.retrying}
-            onClick={() => leaving.retry()}
-            ref={retry}
-          >
+          <Button disabled={shown.retrying} onClick={safe} ref={retry}>
             {words.retry}
           </Button>
         </AlertDialogFooter>
