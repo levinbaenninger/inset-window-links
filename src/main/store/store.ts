@@ -113,6 +113,13 @@ interface Undo {
 /** What a save the page discarded answers: nothing was written, and the page no longer waits for it. */
 const GIVEN_UP: MutationOutcome = { kind: "ok" };
 
+/** A write queued or on its way: whether quitting now loses nothing, because a start finishes what it does. */
+interface Write {
+  durable: () => boolean;
+}
+
+const NOT_DURABLE = () => false;
+
 const entryId = (entry: StoreEntry): string =>
   entry.kind === "current" ? entry.record.id : entry.id;
 
@@ -130,7 +137,9 @@ export class CaptureStore {
   readonly #index = new Map<string, StoreEntry>();
   readonly #listeners = new Set<() => void>();
   #queue: Promise<unknown> = Promise.resolve();
-  #pending = 0;
+  readonly #pending = new Set<Write>();
+  /** Waits for a write to end or turn durable: each checks again when woken. */
+  readonly #waking = new Set<() => void>();
   /** Each capture's rewrites still queued or on their way. */
   readonly #writes = new Map<string, Set<Promise<MutationOutcome>>>();
   /** Each capture's epoch, bumped by every Discard. */
@@ -141,9 +150,18 @@ export class CaptureStore {
   /** Captures whose folder is being renamed into place. */
   readonly #placing = new Set<string>();
   /** The tombstone of a capture withdrawn while its folder was renamed into place. */
-  readonly #tombstones = new Map<string, Promise<void>>();
-  /** Each capture whose Discard marker may be on disk: its write, settled once it is. */
-  readonly #marks = new Map<string, Promise<void>>();
+  readonly #tombstones = new Map<string, Promise<boolean>>();
+  /**
+   * Each capture whose Discard marker may be on disk: its last marker write or removal, settled
+   * with whether the marker is down after it. A write waits for the removal before it, and a
+   * removal for whatever came before, so they never cross.
+   */
+  readonly #marks = new Map<
+    string,
+    { down: Promise<boolean>; removing: boolean }
+  >();
+  /** Captures whose Discard marker is confirmed on disk: a start finishes their Discard. */
+  readonly #marked = new Set<string>();
 
   private constructor(root: string, fs: StoreFs) {
     this.#root = root;
@@ -300,10 +318,14 @@ export class CaptureStore {
     }
   }
 
-  #serial<T>(run: () => Promise<T>): Promise<T> {
+  #serial<T>(
+    run: () => Promise<T>,
+    durable: () => boolean = NOT_DURABLE
+  ): Promise<T> {
     const previous = this.#queue;
+    const write: Write = { durable };
 
-    this.#pending += 1;
+    this.#pending.add(write);
 
     const result = (async () => {
       try {
@@ -311,7 +333,8 @@ export class CaptureStore {
 
         return await run();
       } finally {
-        this.#pending -= 1;
+        this.#pending.delete(write);
+        this.#wake();
       }
     })();
 
@@ -324,6 +347,14 @@ export class CaptureStore {
     for (const listener of this.#listeners) {
       listener();
     }
+  }
+
+  #wake(): void {
+    for (const resolve of this.#waking) {
+      resolve();
+    }
+
+    this.#waking.clear();
   }
 
   publish(capture: NewCapture): Promise<PublishResult> {
@@ -463,6 +494,13 @@ export class CaptureStore {
     change: (record: CaptureRecord) => CaptureRecord | null,
     draft?: DraftWrite
   ): Promise<MutationOutcome> {
+    const stale = () => draft !== undefined && draft.epoch !== this.#epoch(id);
+    let movingIn = false;
+
+    // A save the page discarded is dropped, or puts back the record it moved aside, as a start does
+    // too. Once it renames itself in, only the Discard's marker lets a start put the saved version back.
+    const durable = () => stale() && (!movingIn || this.#marked.has(id));
+
     const write = this.#serial(async (): Promise<MutationOutcome> => {
       const entry = this.#index.get(id);
 
@@ -476,9 +514,6 @@ export class CaptureStore {
           version: entry.kind === "unsupported" ? entry.version : 0,
         };
       }
-
-      const stale = () =>
-        draft !== undefined && draft.epoch !== this.#epoch(id);
 
       if (stale()) {
         return GIVEN_UP;
@@ -567,6 +602,7 @@ export class CaptureStore {
             rev: draft.rev,
           };
 
+          movingIn = true;
           this.#undo.set(id, mine);
           await this.#moveIn(id, mine);
         }
@@ -580,7 +616,7 @@ export class CaptureStore {
       this.#changed();
 
       return { kind: "ok" };
-    });
+    }, durable);
 
     const writes = this.#writes.get(id) ?? new Set();
 
@@ -664,37 +700,79 @@ export class CaptureStore {
 
   /**
    * Writes the Discard marker now, ahead of anything queued, so a crash from here on still comes
-   * back to the backup. A full disk can fail it; the rename back still goes ahead.
+   * back to the backup. One already written, or on its way, is not written again; one being taken
+   * away is written again once it is gone. A full disk can fail it; the rename back still goes
+   * ahead. Settles with whether the marker is down.
    */
-  #mark(id: string): Promise<void> {
-    const marking =
-      this.#marks.get(id) ?? this.#touch(`${this.#record(id)}${DISCARD_MARK}`);
+  #mark(id: string): Promise<boolean> {
+    const before = this.#marks.get(id);
 
-    this.#marks.set(id, marking);
+    if (before?.removing === false) {
+      return before.down;
+    }
 
-    return marking;
+    const down = (async () => {
+      await before?.down;
+
+      const written = await this.#touch(`${this.#record(id)}${DISCARD_MARK}`);
+
+      if (written) {
+        this.#marked.add(id);
+        this.#wake();
+      }
+
+      return written;
+    })();
+
+    this.#marks.set(id, { down, removing: false });
+
+    return down;
   }
 
-  /** Writes an empty marker. A full disk can refuse it: that is logged, and the work goes on. */
-  async #touch(file: string): Promise<void> {
+  /** Writes an empty marker; false when the disk refused it, which is logged, and the work goes on. */
+  async #touch(file: string): Promise<boolean> {
     try {
       await this.#fs.writeFileDurable(file, "");
+
+      return true;
     } catch (error) {
       console.error(`Couldn’t write the marker ${file}`, error);
+
+      return false;
     }
   }
 
-  /** Takes the Discard marker away, so it can't undo a save that comes after it. */
+  /**
+   * Takes the Discard marker away, so it can't undo a save that comes after it, once the marker
+   * write or removal before it is done. Throws when it can't, and the marker may still be there.
+   */
   async #unmark(id: string): Promise<void> {
-    const marking = this.#marks.get(id);
+    const before = this.#marks.get(id);
 
-    if (marking === undefined) {
+    if (before === undefined) {
       return;
     }
 
-    await marking;
-    await this.#fs.rmrf(`${this.#record(id)}${DISCARD_MARK}`);
-    this.#marks.delete(id);
+    const removing = (async () => {
+      await before.down;
+      this.#marked.delete(id);
+      await this.#fs.rmrf(`${this.#record(id)}${DISCARD_MARK}`);
+    })();
+
+    const removal = {
+      down: removing.then(
+        () => false,
+        () => false
+      ),
+      removing: true,
+    };
+
+    this.#marks.set(id, removal);
+    await removing;
+
+    if (this.#marks.get(id) === removal) {
+      this.#marks.delete(id);
+    }
   }
 
   async #unmarked(id: string): Promise<MutationOutcome> {
@@ -821,7 +899,16 @@ export class CaptureStore {
       void this.#mark(id);
     }
 
-    return this.#serial(() => this.#revert(id, rev));
+    const reverting = this.#serial(
+      () => this.#revert(id, rev),
+      // Nothing to put back, or the marker is down, so a start puts it back.
+      () => this.#undo.get(id)?.rev !== rev || this.#marked.has(id)
+    );
+
+    // Saves sent before now are stale, which may be all a quit waits for.
+    this.#wake();
+
+    return reverting;
   }
 
   /**
@@ -897,6 +984,7 @@ export class CaptureStore {
       this.#index.delete(id);
       this.#undo.delete(id);
       this.#marks.delete(id);
+      this.#marked.delete(id);
       this.#changed();
       await Promise.allSettled([this.#fs.rmrf(trash)]);
 
@@ -936,12 +1024,28 @@ export class CaptureStore {
 
   /** Whether a write is queued or on its way, so quitting now would cut it off. */
   get busy(): boolean {
-    return this.#pending > 0;
+    return this.#pending.size > 0;
   }
 
   /** Settles once every write queued so far has. */
   async idle(): Promise<void> {
     await this.#queue;
+  }
+
+  /**
+   * Settles once quitting loses nothing: every write queued so far, or meanwhile, has landed, or
+   * is a Discard, or a save it discarded, that the next start finishes from the marker on disk.
+   */
+  async durable(): Promise<void> {
+    if ([...this.#pending].every((write) => write.durable())) {
+      return;
+    }
+
+    const { promise, resolve } = Promise.withResolvers<undefined>();
+
+    this.#waking.add(() => resolve(undefined));
+    await promise;
+    await this.durable();
   }
 
   onChange(listener: () => void): () => void {

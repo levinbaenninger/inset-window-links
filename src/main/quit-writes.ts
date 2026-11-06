@@ -1,11 +1,12 @@
 import { SETTLE_MS } from "../shared/leave";
+import type { CaptureStore } from "./store/store";
 
 /** What the user picks when the last writes take too long: wait some more, or quit anyway. */
 export type WritesChoice = "wait" | "quit";
 
 export interface QuitWrites {
-  /** Settles once every write queued so far has. */
-  idle: () => Promise<void>;
+  /** The capture store, whose writes are let finish. */
+  writes: Pick<CaptureStore, "durable">;
   /** Asked each time SETTLE_MS pass with writes still on their way. */
   ask: () => Promise<WritesChoice>;
 }
@@ -23,28 +24,29 @@ export const writesDialog = (appName: string) => ({
 
 /**
  * Before the app exits, the writes already sent are let finish, but never for good: after
- * SETTLE_MS the user decides, and Wait gives them another SETTLE_MS.
+ * SETTLE_MS the user decides, and Wait gives them another SETTLE_MS. A Discard whose marker is
+ * down doesn't hold the quit, as the next start finishes it: Quit anyway in the page leaves now.
  */
 export const settleWrites = async ({
-  idle,
+  writes,
   ask,
 }: QuitWrites): Promise<void> => {
   const { promise: late, resolve } = Promise.withResolvers<"late">();
   const timer = setTimeout(() => resolve("late"), SETTLE_MS);
 
   const landed = async () => {
-    await idle();
+    await writes.durable();
 
-    return "idle" as const;
+    return "landed" as const;
   };
 
   const settled = await Promise.race([landed(), late]);
 
   clearTimeout(timer);
 
-  if (settled === "idle" || (await ask()) === "quit") {
+  if (settled === "landed" || (await ask()) === "quit") {
     return;
   }
 
-  await settleWrites({ ask, idle });
+  await settleWrites({ ask, writes });
 };

@@ -30,19 +30,24 @@ type Held = LeaveState & { kind: "held" };
  * The title, the description and the two answers. A Discard that couldn't finish asks to keep the
  * changes or discard again; one main hasn't answered in time asks to wait for it or leave anyway.
  */
-const wordsOf = ({ reason, unsaved }: Held) => {
+const wordsOf = ({ reason, retrying, unsaved }: Held) => {
   const { count } = unsaved;
   const changes = count === 1 ? "1 change" : `${String(count)} changes`;
 
   switch (promptKind(unsaved)) {
     case "stalled": {
+      // Wait is disabled while it waits, so the words say what it is doing.
+      const state = retrying
+        ? "Waiting for Inset to put the earlier version back…"
+        : "Discarding didn’t finish in time.";
+
       const finishes =
         reason === "quit"
           ? "If you quit now, Inset finishes discarding the next time it starts"
           : "If you close now, Inset finishes discarding in the background";
 
       return {
-        description: `Discarding didn’t finish in time. ${finishes}${unsaved.typedSince ? ", and what you typed since is lost." : "."}`,
+        description: `${state} ${finishes}${unsaved.typedSince ? ", and what you typed since is lost." : "."}`,
         discard: reason === "quit" ? "Quit anyway" : "Close anyway",
         retry: "Wait",
         title:

@@ -19,7 +19,7 @@ const setup = (choices: WritesChoice[]) => {
 
         return Promise.resolve(choice);
       },
-      idle: () => landed,
+      writes: { durable: () => landed },
     });
     done = true;
   };

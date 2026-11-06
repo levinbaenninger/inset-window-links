@@ -19,6 +19,8 @@ import { SETTLE_MS } from "../../shared/leave";
 import type { DraftText } from "../../shared/text";
 import { storedText } from "../../shared/text";
 import { LeaveGate } from "../leave-gate";
+import type { WritesChoice } from "../quit-writes";
+import { settleWrites } from "../quit-writes";
 import type { Clip } from "./copy";
 import { copyCapture, CopyStarts } from "./copy";
 import type { StoreFs } from "./fs";
@@ -2672,6 +2674,301 @@ describe("A copy refused while a Discard is still owed", () => {
       },
       retry: null,
       says: "Its changes were discarded, so nothing was copied.",
+    });
+  });
+});
+
+/** Main's quit wait over the store, as `will-quit` runs it, answering its asks with `answers` in turn. */
+const quitting = (store: CaptureStore, answers: WritesChoice[] = []) => {
+  const asks: WritesChoice[] = [];
+  let left = false;
+
+  void (async () => {
+    await settleWrites({
+      ask: () => {
+        const answer = answers.shift() ?? "wait";
+
+        asks.push(answer);
+
+        return Promise.resolve(answer);
+      },
+      writes: store,
+    });
+    left = true;
+  })();
+
+  return () => ({ asks: [...asks], left });
+};
+
+/** The title a start reads from a copy of the folder as it is now, as if the app quit here. */
+const restartNow = async (root: string) => {
+  const copy = await mkdtemp(path.join(tmpdir(), "iwl-quit-"));
+
+  await cp(root, copy, { recursive: true });
+
+  const started = await CaptureStore.open(copy, nodeStoreFs);
+  const entry = started.get(ID);
+
+  return entry?.kind === "current" ? entry.record.relationship : null;
+};
+
+const PUT_BACK = `rename ${ID}/record.json.prev -> ${ID}/record.json`;
+const MARKER_WRITE = `write ${ID}/record.json.discard`;
+
+describe("Quitting while main puts the saved version back", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("lets Quit anyway leave at once, without asking again, when the Discard's marker is down and main's rename back hangs", async () => {
+    const { back, marker, reopenedFields, root, store } = await closedOnDiscard(
+      { fails: false }
+    );
+
+    // A reopened page sends the owed Discard again; it queues behind the held rename.
+    const page = await freshPage(store);
+
+    vi.useFakeTimers();
+    page.flow.request("quit");
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+
+    const asked = page.flow.state();
+
+    page.flow.leaveNow();
+    page.drafts.leave();
+
+    const answered = page.heard.at(-1);
+    const { busy } = store;
+    const quit = quitting(store);
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    const atOnce = quit();
+
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+
+    const later = quit();
+
+    vi.useRealTimers();
+
+    const restarted = await restartNow(root);
+
+    back.release();
+    await store.idle();
+
+    expect({
+      answered,
+      asked: asked.kind === "held" ? promptKind(asked.unsaved) : asked.kind,
+      atOnce,
+      busy,
+      later,
+      marked: existsSync(marker),
+      owed: store.owed(),
+      restarted,
+      saved: await reopenedFields(),
+    }).toStrictEqual({
+      answered: "go",
+      asked: "stalled",
+      atOnce: { asks: [], left: true },
+      busy: true,
+      later: { asks: [], left: true },
+      marked: false,
+      owed: [],
+      restarted: "SAVED title",
+      saved: SAVED_FIELDS,
+    });
+  });
+
+  it("still holds the quit, and asks after SETTLE_MS, when the marker couldn’t be written, since only the rename finishes the Discard", async () => {
+    const { disk, reopenedFields, root, store } = await crashSetup();
+
+    await store.updateText(ID, DISCARDED_TEXT, new Date(), 1);
+    disk.fail((op) => op === MARKER_WRITE, "ENOSPC");
+
+    const back = disk.hold((op) => op === PUT_BACK);
+    const discarding = store.discard(ID, 1);
+
+    await back.reached;
+    vi.useFakeTimers();
+
+    const quit = quitting(store, ["wait"]);
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    const atOnce = quit();
+
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 1);
+
+    const late = quit();
+
+    vi.useRealTimers();
+
+    const restarted = await restartNow(root);
+
+    back.release();
+    await discarding;
+    await until(() => quit().left);
+
+    expect({
+      atOnce,
+      late,
+      left: quit(),
+      restarted,
+      saved: await reopenedFields(),
+    }).toStrictEqual({
+      atOnce: { asks: [], left: false },
+      late: { asks: ["wait"], left: false },
+      left: { asks: ["wait"], left: true },
+      restarted: "DISCARDED TEXT",
+      saved: SAVED_FIELDS,
+    });
+  });
+
+  it("holds the quit while the marker is being written, and lets it go once the marker is down, though the rename back still hangs", async () => {
+    const { disk, reopenedFields, root, store } = await crashSetup();
+
+    await store.updateText(ID, DISCARDED_TEXT, new Date(), 1);
+
+    const marking = disk.hold((op) => op === MARKER_WRITE);
+    const back = disk.hold((op) => op === PUT_BACK);
+    const discarding = store.discard(ID, 1);
+
+    await marking.reached;
+
+    const quit = quitting(store);
+
+    await settled();
+
+    const whileWriting = quit();
+    const restartedWhileWriting = await restartNow(root);
+
+    marking.release();
+    await back.reached;
+    await until(() => quit().left);
+
+    const onceDown = quit();
+    const restarted = await restartNow(root);
+
+    back.release();
+    await discarding;
+
+    expect({
+      onceDown,
+      restarted,
+      restartedWhileWriting,
+      saved: await reopenedFields(),
+      whileWriting,
+    }).toStrictEqual({
+      onceDown: { asks: [], left: true },
+      restarted: "SAVED title",
+      restartedWhileWriting: "DISCARDED TEXT",
+      saved: SAVED_FIELDS,
+      whileWriting: { asks: [], left: false },
+    });
+  });
+
+  it("holds the quit for a save being renamed in until it is discarded and the marker is down", async () => {
+    const { disk, reopenedFields, root, store } = await crashSetup();
+
+    const moving = disk.hold(
+      (op) => op === `rename ${ID}/record.json.tmp -> ${ID}/record.json`
+    );
+
+    const saving = store.updateText(ID, DISCARDED_TEXT, new Date(), 1);
+
+    await moving.reached;
+
+    const quit = quitting(store);
+
+    await settled();
+
+    const beforeDiscard = quit();
+    const discarding = store.discard(ID, 1);
+
+    await until(() => quit().left);
+
+    const afterDiscard = quit();
+    const restarted = await restartNow(root);
+
+    moving.release();
+    await saving;
+    await discarding;
+
+    expect({
+      afterDiscard,
+      beforeDiscard,
+      owed: store.owed(),
+      restarted,
+      saved: await reopenedFields(),
+    }).toStrictEqual({
+      afterDiscard: { asks: [], left: true },
+      beforeDiscard: { asks: [], left: false },
+      owed: [],
+      restarted: "SAVED title",
+      saved: SAVED_FIELDS,
+    });
+  });
+
+  it("never counts a marker as down while a save is taking it away: Discard again writes it anew, and only then lets the quit go", async () => {
+    const { disk, reopenedFields, root, store } = await crashSetup();
+
+    await store.updateText(ID, DISCARDED_TEXT, new Date(), 1);
+
+    const back = disk.hold((op) => op === PUT_BACK);
+    const heal = disk.fail((op) => op === PUT_BACK, "EPERM");
+    const first = store.discard(ID, 1);
+
+    await back.reached;
+
+    // Keep changes, sent while the Discard is still on its way, takes its marker away once it fails.
+    const removing = disk.hold((op) => op === `rmrf ${ID}/record.json.discard`);
+
+    const keeping = store.updateText(
+      ID,
+      { ...stored, relationship: "KEPT title" },
+      new Date(),
+      2
+    );
+
+    back.release();
+
+    const failed = await first;
+
+    await removing.reached;
+
+    // Discard again while the marker is being taken away. The kept save then waits to be written.
+    const writing = disk.hold((op) => op === `write ${ID}/record.json.tmp`);
+    const again = store.discard(ID, 1);
+    const quit = quitting(store);
+
+    await settled();
+
+    const whileRemoving = quit();
+
+    removing.release();
+    await until(() => quit().left);
+
+    const restarted = await restartNow(root);
+
+    heal();
+    writing.release();
+
+    const outcomes = [await keeping, await again];
+
+    expect({
+      failed,
+      outcomes,
+      owed: store.owed(),
+      restarted,
+      saved: await reopenedFields(),
+      whileRemoving,
+    }).toStrictEqual({
+      failed: CAUSE,
+      outcomes: [{ kind: "ok" }, { kind: "ok" }],
+      owed: [],
+      restarted: "SAVED title",
+      saved: SAVED_FIELDS,
+      whileRemoving: { asks: [], left: false },
     });
   });
 });

@@ -66,7 +66,7 @@ import type {
 import { ACTIVE, snoozePresets } from "../../../shared/status";
 import type { DraftText } from "../../../shared/text";
 import type { RetryKind } from "./copy-gate";
-import { copyCapture, lasts, notCopiedText, retryOf } from "./copy-gate";
+import { copyCapture, lasts, refusalOf, retryOf } from "./copy-gate";
 import { reasonOf } from "./drafts";
 import { drafts } from "./page-drafts";
 import { neighborRow, ROW_SELECTOR } from "./row-keys";
@@ -399,7 +399,11 @@ export const useCaptureCommands = (target: CaptureTarget) => {
       return true;
     }
 
-    const retry = retryOf(result, target.id, drafts);
+    const { retry, text } = refusalOf(
+      result,
+      target.from,
+      retryOf(result, target.id, drafts)
+    );
 
     setFeedback({
       failed: true,
@@ -412,7 +416,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
                 void (retry === "copy" ? copy(request) : retrySave());
               },
             },
-      text: notCopiedText(result, target.from),
+      text,
     });
 
     return false;

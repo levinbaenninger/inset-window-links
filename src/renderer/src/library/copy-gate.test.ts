@@ -4,7 +4,7 @@ import type { MutationOutcome } from "../../../shared/dto";
 import type { CaptureId } from "../../../shared/ids";
 import { SETTLE_MS } from "../../../shared/leave";
 import type { DraftText } from "../../../shared/text";
-import { canRetry, copyCapture, notCopiedText } from "./copy-gate";
+import { canRetry, copyCapture, notCopiedText, refusalOf } from "./copy-gate";
 import { DraftStore } from "./drafts";
 
 // SAFETY: CaptureId is a branded UUID string; the gate only passes it through.
@@ -117,6 +117,58 @@ describe(copyCapture, () => {
         outcome: { kind: "failed", message: "The disk is full." },
       },
       retry: true,
+    });
+  });
+});
+
+describe(refusalOf, () => {
+  const undiscarded = {
+    kind: "notDiscarded",
+    outcome: {
+      kind: "failed",
+      message: "Inset can’t write to its data folder.",
+    },
+  } as const;
+
+  it("says only that nothing was copied on the capture's page after a failed Discard, as its banner says why and offers Keep changes", () => {
+    expect(refusalOf(undiscarded, "page", "keep")).toStrictEqual({
+      retry: null,
+      text: "Couldn’t discard your changes, so nothing was copied.",
+    });
+  });
+
+  it("keeps the cause and Keep changes on a row and in the viewer, where no banner shows", () => {
+    expect([
+      refusalOf(undiscarded, "row", "keep"),
+      refusalOf(undiscarded, "viewer", "keep"),
+    ]).toStrictEqual([
+      {
+        retry: "keep",
+        text: "Couldn’t discard your changes, so nothing was copied. Inset can’t write to its data folder.",
+      },
+      {
+        retry: "keep",
+        text: "Couldn’t discard your changes, so nothing was copied. Inset can’t write to its data folder.",
+      },
+    ]);
+  });
+
+  it("keeps the cause on the page while a Discard is still on its way, which shows no banner", () => {
+    expect(
+      refusalOf(
+        {
+          kind: "notDiscarded",
+          outcome: {
+            kind: "failed",
+            message: "Inset is still putting the earlier version back.",
+          },
+        },
+        "page",
+        null
+      )
+    ).toStrictEqual({
+      retry: null,
+      text: "Couldn’t discard your changes, so nothing was copied. Inset is still putting the earlier version back.",
     });
   });
 });

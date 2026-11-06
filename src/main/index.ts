@@ -571,7 +571,7 @@ const start = async () => {
 
         return choices[response] ?? "wait";
       },
-      idle: () => store.idle(),
+      writes: store,
     });
     writesSettled = true;
     app.quit();

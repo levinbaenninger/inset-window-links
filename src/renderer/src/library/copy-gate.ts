@@ -187,6 +187,23 @@ export const notCopiedText = (
     : `Couldn’t save your changes, so nothing was copied. ${reasonOf(outcome)}`;
 };
 
+/**
+ * What a refused copy says `where`, and what its button does. On the capture's page, a failed
+ * Discard's banner sits just below with its cause and Keep changes, so the refusal says only that
+ * nothing was copied.
+ */
+export const refusalOf = (
+  result: Exclude<CopyResult, { kind: "copied" }>,
+  where: "row" | "page" | "viewer",
+  retry: RetryKind | null
+): { text: string; retry: RetryKind | null } =>
+  where === "page" && retry === "keep"
+    ? {
+        retry: null,
+        text: "Couldn’t discard your changes, so nothing was copied.",
+      }
+    : { retry, text: notCopiedText(result, where) };
+
 /** The name a refused copy's button reads out. */
 export const retryLabel = (kind: RetryKind): string => {
   switch (kind) {

@@ -510,6 +510,10 @@ const waitForCalls = (page: Page, method: string, count: number) =>
 /** On the clipboard before each copy, so a copy that wrote nothing shows. */
 const SENTINEL = "(what the clipboard held before)";
 
+/** A copy refused on a capture's page after a failed Discard: its banner, just below, says why. */
+const NOT_DISCARDED_COPY =
+  "Couldn’t discard your changes, so nothing was copied.";
+
 const seedClipboard = (page: Page) =>
   page.evaluate(`navigator.clipboard.writeText(${JSON.stringify(SENTINEL)})`);
 
@@ -3197,18 +3201,20 @@ const SCENES: readonly Scene[] = [
 
       await seedClipboard(page);
       await sendCommand(page, "copyNote");
-      await header
-        .getByText(
-          "Couldn’t discard your changes, so nothing was copied. Inset can’t write to its data folder."
-        )
-        .waitFor();
-      assert.equal(
-        await header
-          .locator("xpath=..")
-          .getByRole("button", { exact: true, name: "Keep changes" })
-          .count(),
-        1,
-        "the refused copy offers Keep changes"
+      await header.getByText(NOT_DISCARDED_COPY).waitFor();
+      assert.deepEqual(
+        {
+          banner: await failure
+            .getByRole("button", { exact: true, name: "Keep changes" })
+            .count(),
+          header: await header.textContent(),
+          headerButtons: await header
+            .locator("xpath=..")
+            .getByRole("button", { exact: true, name: "Keep changes" })
+            .count(),
+        },
+        { banner: 1, header: NOT_DISCARDED_COPY, headerButtons: 0 },
+        "the refused copy says nothing was copied; the banner just below says why and offers Keep changes"
       );
 
       const discards = await callCount(page, "discard");
@@ -3488,16 +3494,24 @@ const SCENES: readonly Scene[] = [
 
       await button("Close anyway").focus();
       await page.keyboard.press("Enter");
-      assert.equal(
-        await button("Wait").isDisabled(),
-        true,
-        "Return on a focused Close anyway waits"
+      assert.deepEqual(
+        { disabled: await button("Wait").isDisabled(), says: await says() },
+        {
+          disabled: true,
+          says: "Waiting for Inset to put the earlier version back… If you close now, Inset finishes discarding in the background.",
+        },
+        "Return on a focused Close anyway waits, and the prompt says so"
       );
       await until(
         page,
         "document.activeElement?.textContent === 'Wait'",
         "the prompt asks again while main is still silent",
         Date.now() + 6000
+      );
+      assert.equal(
+        await says(),
+        "Discarding didn’t finish in time. If you close now, Inset finishes discarding in the background.",
+        "asked again, it says discarding didn’t finish in time"
       );
       assert.deepEqual(
         await leaveAnswers(page),
@@ -3578,6 +3592,46 @@ const SCENES: readonly Scene[] = [
   },
   {
     /*
+     * Wait in the stalled prompt waits up to SETTLE_MS more. Meanwhile Wait is disabled and the
+     * prompt says it is waiting, so the press visibly did something.
+     */
+    act: async (page) => {
+      const prompt = page.getByTestId("leave-prompt");
+
+      await stallDiscard(page, "STALLED WORDS");
+      await pushLeave(page, "quit");
+      await prompt.waitFor();
+      await until(
+        page,
+        "document.activeElement?.textContent === 'Wait'",
+        "Wait has focus when the quit is held"
+      );
+      await page.keyboard.press("Enter");
+      assert.deepEqual(
+        {
+          disabled: await prompt
+            .getByRole("button", { exact: true, name: "Wait" })
+            .isDisabled(),
+          says: await prompt
+            .locator("[data-slot=alert-dialog-description]")
+            .textContent(),
+        },
+        {
+          disabled: true,
+          says: "Waiting for Inset to put the earlier version back… If you quit now, Inset finishes discarding the next time it starts.",
+        },
+        "Wait says it is waiting while it waits"
+      );
+      // As it looks: within the wait, before the prompt asks again.
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-leave-waiting",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    /*
      * Recent Captures opens while main still owes a Discard that a closed window couldn't finish.
      * The capture opens as not discarded, with the banner and the row's Not saved, and main hears
      * 1 unsaved before anything else. Copies are refused with Keep changes, which keeps the words;
@@ -3588,9 +3642,6 @@ const SCENES: readonly Scene[] = [
       const header = page.getByTestId("capture-feedback");
       const title = page.getByTestId("record-relationship");
       const row = page.getByTestId("recent-item").first();
-
-      const refused =
-        "Couldn’t discard your changes, so nothing was copied. Inset can’t write to its data folder.";
 
       const opened = async () => {
         await failure.getByRole("button", { name: "Discard again" }).waitFor();
@@ -3617,29 +3668,32 @@ const SCENES: readonly Scene[] = [
 
       await seedClipboard(page);
       await sendCommand(page, "copyNote");
-      await header.getByText(refused).waitFor();
+      await header.getByText(NOT_DISCARDED_COPY).waitFor();
       await title.fill(`${OWED_CAPTURE.relationship} TYPED`);
       await page.waitForTimeout(900);
       assert.deepEqual(
         {
           clipboard: await readClipboard(page),
+          header: await header.textContent(),
           keep: await page
             .getByRole("button", { exact: true, name: "Keep changes" })
             .count(),
           saves: await callCount(page, "updateText"),
         },
-        { clipboard: SENTINEL, keep: 2, saves: 0 },
-        "the copy is refused with Keep changes, and typing sends nothing"
+        {
+          clipboard: SENTINEL,
+          header: NOT_DISCARDED_COPY,
+          keep: 1,
+          saves: 0,
+        },
+        "the copy is refused below the banner's Keep changes, and typing sends nothing"
       );
 
-      await page
-        .getByTestId("capture-feedback")
-        .locator("xpath=..")
+      await failure
         .getByRole("button", { exact: true, name: "Keep changes" })
         .click();
       await failure.waitFor({ state: "detached" });
       await waitForCalls(page, "updateText", 1);
-      await header.getByText("Saved. You can copy it now.").waitFor();
       await sendCommand(page, "copyNote");
       await header.filter({ hasText: "Copied" }).waitFor();
       const copied = await readClipboard(page);
@@ -3677,11 +3731,11 @@ const SCENES: readonly Scene[] = [
         "Discard again names the save main holds, and puts the saved words back"
       );
 
-      // As it looks: the capture main still owes a Discard for, and a copy refused with Keep changes.
+      // As it looks: the capture main still owes a Discard for, and a copy refused below its banner.
       await page.reload();
       await opened();
       await sendCommand(page, "copyNote");
-      await header.getByText(refused).waitFor();
+      await header.getByText(NOT_DISCARDED_COPY).waitFor();
     },
     data: { captures: [OWED_CAPTURE, ...REST], owed: [OWED] },
     hash: `/captures/${uuid(1)}`,
