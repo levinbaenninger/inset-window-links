@@ -30,7 +30,7 @@ import { openScreenSettings } from "../capture/capturer";
 import { reopenOrigin } from "../reopen";
 import type { SessionController } from "../session/controller";
 import { originSummary, summarizeViews } from "../session/snapshot";
-import { formatNote } from "../store/note";
+import { formatEntry, formatNote } from "../store/note";
 import type { CaptureStore, StoreEntry } from "../store/store";
 import type { RendererPage } from "../windows/renderer-page";
 import { shortcutStatus } from "../windows/shortcut";
@@ -241,6 +241,16 @@ export const registerLibraryChannels = (
 ): void => {
   const table: Table<typeof libraryChannels> = {
     addWindows: send(z.tuple([]), actions.addWindows),
+    // The page saves what is typed first, and copies nothing when that fails.
+    copyEntry: invoke(z.tuple([DraftIdSchema]), async (captureId) => {
+      await store.idle();
+
+      const entry = store.get(captureId);
+
+      if (entry?.kind === "current") {
+        await clipboard.writeText(formatEntry(entry.record));
+      }
+    }),
     copyImage: invoke(
       z.tuple([DraftIdSchema, ViewIdSchema]),
       async (captureId, viewId) => {

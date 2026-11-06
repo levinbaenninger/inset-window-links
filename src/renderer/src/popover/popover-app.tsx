@@ -190,16 +190,42 @@ const PromptRow = ({
   </footer>
 );
 
-/** Shown when Quit meets an unsaved draft. Escape cancels, like the Cancel button. */
-const QuitPrompt = ({ check }: { check: Saveability }) => (
+/** What the quit prompt calls the windows still being added: "Calendar", or "2 windows". */
+const landingName = (landing: DraftSnapshot["landing"]): string | null => {
+  if (landing.length > 1) {
+    return `${landing.length} windows`;
+  }
+
+  const [only] = landing;
+
+  return only === undefined ? null : (only?.appName ?? "the window");
+};
+
+/**
+ * Shown when Quit meets an unsaved draft. Escape cancels, like the Cancel button. With a window
+ * still being added, it says that Save waits for it.
+ */
+const QuitPrompt = ({
+  check,
+  landing,
+}: {
+  check: Saveability;
+  landing: string | null;
+}) => (
   <PromptRow
     label={
       <>
         <p className="font-medium">Save before quitting?</p>
-        {check.kind === "blocked" && (
+        {check.kind === "blocked" ? (
           <p className="text-muted-foreground">
             {blockedReasons[check.reason]}
           </p>
+        ) : (
+          landing !== null && (
+            <p className="text-muted-foreground truncate">
+              Save waits for {landing} to be added.
+            </p>
+          )
         )}
       </>
     }
@@ -740,7 +766,9 @@ const DraftForm = ({
         </div>
       </PanelScroll>
       <div className="shrink-0 px-3.5 pt-3 pb-3.5">
-        {quitting && <QuitPrompt check={check} />}
+        {quitting && (
+          <QuitPrompt check={check} landing={landingName(snapshot.landing)} />
+        )}
         {!quitting && confirmingDiscard && (
           <PromptRow
             label={<p className="font-medium">Discard this capture?</p>}
@@ -770,7 +798,10 @@ const DraftForm = ({
               title={landing ? "Waits for the window being added" : undefined}
             >
               {saveLabel(activity, landing)}
-              <Kbd>{mac ? "⌘↵" : "Ctrl+Enter"}</Kbd>
+              {/* The key does nothing while a save or a window is under way. */}
+              {activity !== "saving" && !landing && (
+                <Kbd>{mac ? "⌘↵" : "Ctrl+Enter"}</Kbd>
+              )}
             </Button>
           </footer>
         )}

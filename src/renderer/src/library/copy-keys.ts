@@ -1,6 +1,32 @@
-/** A capture's own words, title then description: what ⌘C copies when no text is selected. */
-export const entryText = (title: string, description: string): string =>
-  [title.trim(), description.trim()].filter((part) => part !== "").join("\n\n");
+import { useEffect, useEffectEvent } from "react";
+import type { RefObject } from "react";
+
+import { openMenuRow, ROW_SELECTOR } from "./row-keys";
+
+/** What ⌘C runs for each sidebar row and for the open capture's page. */
+const copiers = new WeakMap<Element, () => void>();
+
+/** Makes ⌘C on `holder`, or inside it, run `copy`. */
+export const useEntryCopy = (
+  holder: RefObject<HTMLElement | null>,
+  copy: () => void
+): void => {
+  const run = useEffectEvent(copy);
+
+  useEffect(() => {
+    const element = holder.current;
+
+    if (element === null) {
+      return;
+    }
+
+    copiers.set(element, () => run());
+
+    return () => {
+      copiers.delete(element);
+    };
+  }, [holder]);
+};
 
 const editable = (element: Element | null) =>
   element instanceof HTMLInputElement ||
@@ -8,10 +34,10 @@ const editable = (element: Element | null) =>
   (element instanceof HTMLElement && element.isContentEditable);
 
 /**
- * The entry ⌘C copies: the row in focus, else the open capture. Nothing while a text field has
- * focus or text is selected, so ⌘C there copies as it always does.
+ * The copy ⌘C runs: the row whose menu is open, else the row in focus, else the open capture.
+ * Nothing while a text field has focus or text is selected, so ⌘C there copies as it always does.
  */
-const entryToCopy = (): string | null => {
+const entryCopier = (): (() => void) | null => {
   const active = document.activeElement;
 
   if (
@@ -22,30 +48,28 @@ const entryToCopy = (): string | null => {
   }
 
   const holder =
-    active?.closest<HTMLElement>("[data-copy]") ??
-    document.querySelector<HTMLElement>("main[data-copy]");
+    openMenuRow() ??
+    active?.closest(ROW_SELECTOR) ??
+    // The open capture's page.
+    document.querySelector("[data-copy-entry]");
 
-  return holder?.dataset["copy"] ?? null;
+  return holder === null ? null : (copiers.get(holder) ?? null);
 };
 
 /**
- * ⌘C (Ctrl+C) on a capture copies its title and description. Both the Edit menu's Copy and the
- * key run the page's copy command, which fires these events whatever is selected. Chromium runs
- * the command with nothing selected only when beforecopy is cancelled.
+ * ⌘C (Ctrl+C) on a capture copies its title and description, once what is typed in it is saved.
+ * Both the Edit menu's Copy and the key run the page's copy command, which fires these events.
+ * Chromium runs the command with nothing selected only when beforecopy is cancelled, and then
+ * writes nothing itself, so a copy refused for an unsaved edit leaves the clipboard as it was.
  */
 export const listenForCopy = (): void => {
   document.addEventListener("beforecopy", (event) => {
-    if (entryToCopy() !== null) {
+    if (entryCopier() !== null) {
       event.preventDefault();
     }
   });
 
-  document.addEventListener("copy", (event) => {
-    const text = entryToCopy();
-
-    if (text !== null && event.clipboardData !== null) {
-      event.preventDefault();
-      event.clipboardData.setData("text/plain", text);
-    }
+  document.addEventListener("copy", () => {
+    entryCopier()?.();
   });
 };

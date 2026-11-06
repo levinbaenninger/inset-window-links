@@ -10,7 +10,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
 import type { ReactNode, RefObject } from "react";
-import { useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 import { DueBadge, useToday } from "@/components/due";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
+import { libraryApi } from "@/lib/bridge";
 import { useCommands } from "@/lib/commands";
 import { formatClock, formatDay } from "@/lib/format";
 
@@ -48,7 +49,9 @@ import {
 import { matchesCapture, matchSource } from "../../../shared/search";
 import type { StatusKind } from "../../../shared/status";
 import { MenuEntries, useCaptureCommands } from "./capture-commands";
-import { entryText } from "./copy-keys";
+import { useEntryCopy } from "./copy-keys";
+import type { RowAction } from "./row-keys";
+import { neighborRow, rowKey } from "./row-keys";
 
 export type CurrentItem = Extract<CaptureListItem, { kind: "current" }>;
 
@@ -79,17 +82,8 @@ const Thumbnail = ({ views }: { views: readonly ListedView[] }) => {
   );
 };
 
-/**
- * "1/3" with a check, or nothing when the capture has no next steps. A narrow row with a due chip
- * leaves it out, so the chip's date stays whole.
- */
-const Progress = ({
-  item,
-  dueShown,
-}: {
-  item: CurrentItem;
-  dueShown: boolean;
-}) => {
+/** "1/3" with a check, or nothing when the capture has no next steps. */
+const Progress = ({ item }: { item: CurrentItem }) => {
   if (item.todos.length === 0) {
     return null;
   }
@@ -99,10 +93,7 @@ const Progress = ({
   return (
     <span
       aria-label={`${done} of ${item.todos.length} next steps done`}
-      className={cn(
-        "flex items-center gap-1",
-        dueShown && "@max-[250px]:hidden"
-      )}
+      className="flex shrink-0 items-center gap-1 whitespace-nowrap"
     >
       <HugeiconsIcon icon={CheckmarkCircle02Icon} size={12} />
       {done}/{item.todos.length}
@@ -111,15 +102,16 @@ const Progress = ({
 };
 
 /** When a snoozed capture comes back, under the heading of that day; otherwise the time it was saved. */
-const When = ({ item }: { item: CurrentItem }) =>
-  item.status.kind === "snoozed" ? (
-    <span className="flex items-center gap-1">
+const When = ({ item }: { item: CurrentItem }) => (
+  <span className="flex shrink-0 items-center gap-1 whitespace-nowrap">
+    {item.status.kind === "snoozed" && (
       <HugeiconsIcon icon={AlarmClockIcon} size={12} />
-      {formatClock(item.status.until)}
-    </span>
-  ) : (
-    formatClock(item.createdAt)
-  );
+    )}
+    {formatClock(
+      item.status.kind === "snoozed" ? item.status.until : item.createdAt
+    )}
+  </span>
+);
 
 /** The text with every match of the search marked, so a row shows why it is listed. */
 const Highlight = ({ text, needle }: { text: string; needle: string }) => {
@@ -148,13 +140,48 @@ const Highlight = ({ text, needle }: { text: string; needle: string }) => {
   return parts;
 };
 
-const ROW_SELECTOR = "[data-testid='recent-item']";
+/**
+ * Whether the due chip is wider than the row's text column, as a long date can be at the
+ * narrowest sidebar. The chip then gets a line of its own under the row, never a shortened label.
+ */
+const useChipOwnLine = (
+  column: RefObject<HTMLElement | null>,
+  chip: RefObject<HTMLElement | null>,
+  label: string | null
+): boolean => {
+  const [ownLine, setOwnLine] = useState(false);
+
+  useLayoutEffect(() => {
+    const host = column.current;
+
+    if (host === null || label === null) {
+      return;
+    }
+
+    const check = () =>
+      setOwnLine((chip.current?.offsetWidth ?? 0) > host.clientWidth);
+
+    // The chip's own width changes too, as when the font finishes loading.
+    const observer = new ResizeObserver(check);
+
+    observer.observe(host);
+
+    if (chip.current !== null) {
+      observer.observe(chip.current);
+    }
+
+    return () => observer.disconnect();
+  }, [column, chip, label]);
+
+  return label !== null && ownLine;
+};
 
 /**
  * A capture in the list; right-click focuses it and opens what the capture's own "…" menu holds.
- * The row in focus takes the menu keys for a capture, and Space marks it done, or takes a done one
- * back. The row then leaves this list, so focus moves on to the next row first, and Space again
- * does the next one.
+ * The row in focus takes the keys for a capture: ⌘C, the menu keys, Space to mark it done (or take
+ * a done one back) and ⌫ to delete it. A row leaving the list hands focus on to the next row.
+ * While its menu is open, the keys the menu shows act on this row too: the menu closes, focus
+ * comes back here, and the row does what the key says.
  */
 const CurrentRow = ({
   item,
@@ -167,56 +194,89 @@ const CurrentRow = ({
   needle: string;
   now: Date;
 }) => {
+  const link = useRef<HTMLAnchorElement>(null);
+  const column = useRef<HTMLSpanElement>(null);
+  const chip = useRef<HTMLSpanElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  /** A key pressed in the open menu, run once the menu has closed. */
+  const afterMenu = useRef<RowAction | null>(null);
+  const { platform } = libraryApi();
+
   const commands = useCaptureCommands({
     due: item.due,
     from: "row",
     id: item.id,
     reopenable: item.reopenable,
+    row: link,
     status: item.status,
+    title: item.relationship,
   });
 
   const { feedback } = commands;
   const found = matchSource(item, needle);
   const dueShown = item.due !== null && item.status.kind !== "done";
 
-  const toggleDone = (row: HTMLElement) => {
-    const rows = [...document.querySelectorAll<HTMLElement>(ROW_SELECTOR)];
-    const at = rows.indexOf(row);
+  const chipOwnLine = useChipOwnLine(
+    column,
+    chip,
+    dueShown ? `${item.due}@${now.toDateString()}` : null
+  );
 
-    (rows[at + 1] ?? rows[at - 1])?.focus();
-    void (item.status.kind === "done"
-      ? commands.backToList.run()
-      : commands.done.run());
-  };
+  const run = (action: RowAction) => {
+    switch (action) {
+      case "copyEntry": {
+        void commands.copyEntry.run();
+        break;
+      }
 
-  const link = useRef<HTMLAnchorElement>(null);
-
-  useCommands((command) => {
-    const row = link.current;
-
-    // Its menu still open counts too: that menu shows these keys beside its items.
-    if (
-      row === null ||
-      (document.activeElement !== row && row.dataset["state"] !== "open")
-    ) {
-      return false;
-    }
-
-    switch (command) {
       case "copyNote": {
         void commands.copy.run();
-
-        return true;
+        break;
       }
 
       case "reopen": {
         void commands.reopen?.run();
-
-        return true;
+        break;
       }
 
+      case "delete": {
+        commands.askDelete();
+        break;
+      }
+
+      default: {
+        if (link.current !== null) {
+          neighborRow(link.current)?.focus();
+        }
+
+        void (item.status.kind === "done"
+          ? commands.backToList.run()
+          : commands.done.run());
+      }
+    }
+  };
+
+  const act = (action: RowAction) => {
+    if (menuOpen) {
+      afterMenu.current = action;
+      setMenuOpen(false);
+    } else {
+      run(action);
+    }
+  };
+
+  useEntryCopy(link, () => act("copyEntry"));
+
+  useCommands((command) => {
+    if (!menuOpen && document.activeElement !== link.current) {
+      return false;
+    }
+
+    switch (command) {
+      case "copyNote":
+      case "reopen":
       case "toggleDone": {
-        toggleDone(row);
+        act(command);
 
         return true;
       }
@@ -227,81 +287,130 @@ const CurrentRow = ({
     }
   });
 
+  const badge =
+    dueShown && item.due !== null ? (
+      <DueBadge className="ml-auto" due={item.due} now={now} ref={chip} />
+    ) : null;
+
   return (
     <li>
-      <ContextMenu onOpenChange={(open) => open && commands.onMenuOpen()}>
+      <ContextMenu
+        onOpenChange={(open) => {
+          setMenuOpen(open);
+
+          if (open) {
+            commands.onMenuOpen();
+          }
+        }}
+        open={menuOpen}
+      >
         <ContextMenuTrigger asChild>
           <Link
             aria-current={active ? "page" : undefined}
-            aria-keyshortcuts="Space"
+            aria-keyshortcuts={`Space ${platform === "macos" ? "Backspace" : "Delete"}`}
             className={cn(
-              "focus-visible:ring-ring/50 data-[state=open]:bg-foreground/5 flex items-start gap-2.5 rounded-md px-2 py-2 outline-none focus-visible:ring-3",
+              "focus-visible:ring-ring/50 data-[state=open]:bg-foreground/5 flex flex-col gap-1 rounded-md px-2 py-2 outline-none focus-visible:ring-3",
               active ? "bg-foreground/10" : "hover:bg-foreground/5"
             )}
-            data-copy={entryText(item.relationship, item.description)}
             data-testid="recent-item"
-            // The menu's keys then act on this row once it closes.
             onContextMenu={(event) => event.currentTarget.focus()}
             onKeyDown={(event) => {
-              const plain =
-                !event.metaKey &&
-                !event.ctrlKey &&
-                !event.altKey &&
-                !event.shiftKey;
+              const action = rowKey(event, platform);
 
-              if (event.key === " " && plain && !event.repeat) {
+              if (action === "toggleDone" || action === "delete") {
                 event.preventDefault();
-                toggleDone(event.currentTarget);
+                run(action);
               }
             }}
             params={{ captureId: item.id }}
             ref={link}
             to="/captures/$captureId"
           >
-            <Thumbnail views={item.views} />
-            <span className="@container flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="line-clamp-2 text-sm leading-snug font-medium">
-                <Highlight needle={needle} text={item.relationship} />
-              </span>
-              {found !== null && (
-                <span
-                  className="text-muted-foreground line-clamp-1 text-xs"
-                  data-testid="match-source"
-                >
-                  <span className="font-medium">{found.where}: </span>
-                  <Highlight needle={needle} text={found.text} />
+            <span className="flex items-start gap-2.5">
+              <Thumbnail views={item.views} />
+              <span
+                className="flex min-w-0 flex-1 flex-col gap-0.5"
+                ref={column}
+              >
+                <span className="line-clamp-2 text-sm leading-snug font-medium">
+                  <Highlight needle={needle} text={item.relationship} />
                 </span>
-              )}
-              <span className="text-muted-foreground flex min-w-0 items-center gap-2.5 text-xs tabular-nums">
-                {feedback === null ? (
+                {found !== null && (
                   <span
-                    className={cn(
-                      "flex shrink-0 items-center gap-2.5 whitespace-nowrap",
-                      dueShown && "@max-[200px]:hidden"
-                    )}
+                    className="text-muted-foreground line-clamp-1 text-xs"
+                    data-testid="match-source"
                   >
-                    <When item={item} />
-                    <Progress dueShown={dueShown} item={item} />
+                    <span className="font-medium">{found.where}: </span>
+                    <Highlight needle={needle} text={found.text} />
                   </span>
-                ) : (
-                  <output
-                    className={cn(
-                      "min-w-0 truncate",
-                      feedback.failed && "text-destructive"
-                    )}
-                    title={feedback.text}
-                  >
-                    {feedback.text}
-                  </output>
                 )}
-                {dueShown && item.due !== null && (
-                  <DueBadge className="ml-auto" due={item.due} now={now} />
-                )}
+                {/*
+                 * Reversed and wrapping, so what no longer fits beside the chip wraps out of sight:
+                 * the time first, then the step progress. The chip itself always stays whole.
+                 */}
+                <span
+                  className="text-muted-foreground flex max-h-5 flex-row-reverse flex-wrap items-center justify-end gap-x-2.5 overflow-hidden text-xs tabular-nums"
+                  data-testid="row-meta"
+                >
+                  {!chipOwnLine && badge}
+                  {feedback === null ? (
+                    <>
+                      <Progress item={item} />
+                      <When item={item} />
+                    </>
+                  ) : (
+                    <output
+                      className={cn(
+                        "min-w-0 flex-1 truncate",
+                        feedback.failed && "text-destructive"
+                      )}
+                      title={feedback.text}
+                    >
+                      {feedback.text}
+                    </output>
+                  )}
+                </span>
               </span>
             </span>
+            {chipOwnLine && badge !== null && (
+              <span className="flex justify-end">{badge}</span>
+            )}
           </Link>
         </ContextMenuTrigger>
-        <ContextMenuContent className="min-w-48">
+        <ContextMenuContent
+          className="min-w-52"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+
+            const action = afterMenu.current;
+
+            afterMenu.current = null;
+
+            const row = link.current;
+
+            const free =
+              document.activeElement === null ||
+              document.activeElement === document.body;
+
+            // A dialog the menu opened keeps focus; otherwise it comes back to this row.
+            if (row?.isConnected === true && free) {
+              row.focus();
+            }
+
+            if (action !== null) {
+              run(action);
+            }
+          }}
+          onKeyDownCapture={(event) => {
+            const action = rowKey(event, platform);
+
+            if (action !== null) {
+              event.preventDefault();
+              event.stopPropagation();
+              act(action);
+            }
+          }}
+        >
           <MenuEntries entries={commands.entries} kind="context" />
         </ContextMenuContent>
       </ContextMenu>
@@ -373,7 +482,8 @@ const byDay = (items: readonly CaptureListItem[]) => {
 
 /**
  * The due filters a search can still become, under the field while a due: word is being typed,
- * or after one that names no filter. Picking one finishes the word.
+ * or after one that names no filter: each token with what it means, in the same list as the other
+ * Inset apps. Picking one finishes the word; Return picks the first while a word is being typed.
  */
 export const DueSuggestions = ({
   query,
@@ -384,29 +494,41 @@ export const DueSuggestions = ({
   onQuery: (query: string) => void;
   onPicked: () => void;
 }) => {
-  const filters = dueSuggestions(parseQuery(query));
+  const parsed = parseQuery(query);
+  const filters = dueSuggestions(parsed);
+  const returnPicks = parsed.partialDue !== null;
 
   return filters.length === 0 ? null : (
     <ul
       aria-label="Due filters"
-      className="flex flex-wrap gap-1 pt-1.5"
+      className="flex flex-col pt-1.5"
       data-testid="due-suggestions"
     >
-      {filters.map((filter) => (
-        <li key={filter}>
-          <button
-            className="bg-foreground/5 hover:bg-foreground/10 focus-visible:ring-ring/50 flex h-6 items-center gap-1.5 rounded-md px-2 text-xs outline-none focus-visible:ring-3"
-            onClick={() => {
-              onQuery(withDueFilter(query, filter));
-              onPicked();
-            }}
-            title={DUE_FILTER_LABELS[filter]}
-            type="button"
-          >
-            <span className="font-medium">due:{filter}</span>
-          </button>
-        </li>
-      ))}
+      {filters.map((filter, index) => {
+        const first = returnPicks && index === 0;
+
+        return (
+          <li key={filter}>
+            <Button
+              aria-label={`${DUE_FILTER_LABELS[filter]} (due:${filter})`}
+              className="w-full justify-between"
+              onClick={() => {
+                onQuery(withDueFilter(query, filter));
+                onPicked();
+              }}
+              size="xs"
+              title={first ? "Return picks this one" : undefined}
+              type="button"
+              variant={first ? "secondary" : "ghost"}
+            >
+              <span className="shrink-0">due:{filter}</span>
+              <span className="text-muted-foreground min-w-0 truncate font-normal">
+                {DUE_FILTER_LABELS[filter]}
+              </span>
+            </Button>
+          </li>
+        );
+      })}
     </ul>
   );
 };

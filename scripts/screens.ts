@@ -429,6 +429,58 @@ const waitForFocus = (page: Page, selector: string) =>
     selector
   );
 
+/** The first argument of every recorded call to `method`, in order: the capture it acted on. */
+const callsTo = (page: Page, method: string) =>
+  page.evaluate<string[]>(
+    `globalThis.__calls.filter((call) => call.method === ${JSON.stringify(method)}).map((call) => call.args[0])`
+  );
+
+/**
+ * Polls `expression` from here until it is true. waitForFunction would poll inside the page,
+ * where the renderer's Content-Security-Policy forbids the eval it needs for a string.
+ */
+const until = async (
+  page: Page,
+  expression: string,
+  what: string,
+  end = Date.now() + 5000
+): Promise<void> => {
+  if (await page.evaluate<boolean>(expression)) {
+    return;
+  }
+
+  if (Date.now() > end) {
+    throw new Error(`timed out waiting for ${what}`);
+  }
+
+  await page.waitForTimeout(50);
+  await until(page, expression, what, end);
+};
+
+const waitForCalls = (page: Page, method: string, count: number) =>
+  until(
+    page,
+    `globalThis.__calls.filter((call) => call.method === ${JSON.stringify(method)}).length >= ${count}`,
+    `${count} ${method} call(s)`
+  );
+
+/** On the clipboard before each copy, so a copy that wrote nothing shows. */
+const SENTINEL = "(what the clipboard held before)";
+
+const seedClipboard = (page: Page) =>
+  page.evaluate(`navigator.clipboard.writeText(${JSON.stringify(SENTINEL)})`);
+
+const readClipboard = (page: Page) =>
+  page.evaluate<string>("navigator.clipboard.readText()");
+
+/** Waits until the sidebar row of capture `id` has focus. */
+const waitForRowFocus = (page: Page, id: string) =>
+  until(
+    page,
+    `document.activeElement?.matches("[data-testid='recent-item']") === true && (document.activeElement.getAttribute("href") ?? "").includes(${JSON.stringify(id)})`,
+    `focus on the row of ${id}`
+  );
+
 const SCENES: readonly Scene[] = [
   { data: { draft: draft() }, name: "popover-empty", page: "popover" },
   {
@@ -911,8 +963,34 @@ const SCENES: readonly Scene[] = [
       await page
         .getByRole("button", { name: /Resize sidebar/u })
         .press("ArrowLeft");
+      await page.waitForTimeout(100);
+      assert.deepEqual(
+        await page.getByTestId("due-badge").evaluateAll((badges) =>
+          badges
+            .filter((badge) => {
+              const box = badge.getBoundingClientRect();
+              const row = badge.closest("a")?.getBoundingClientRect();
+
+              return (
+                row === undefined ||
+                box.left < row.left ||
+                box.right > row.right ||
+                badge.scrollWidth > badge.clientWidth ||
+                badge.querySelector("svg") === null
+              );
+            })
+            .map((badge) => badge.textContent)
+        ),
+        [],
+        "every due chip keeps its icon and whole label inside its row"
+      );
     },
-    data: { captures: CAPTURES },
+    // One chip with the longest label a date gets: overdue from last year, which needs the year.
+    data: {
+      captures: CAPTURES.map((capture) =>
+        capture.id === uuid(3) ? { ...capture, due: "2025-12-28" } : capture
+      ),
+    },
     hash: `/captures/${uuid(1)}`,
     name: "library-narrow",
     page: "library",
@@ -1004,11 +1082,36 @@ const SCENES: readonly Scene[] = [
 
       await search.fill("due:o");
       await page.getByTestId("due-suggestions").waitFor();
+      assert.deepEqual(
+        await page
+          .getByTestId("due-suggestions")
+          .getByRole("button")
+          .evaluateAll((buttons) =>
+            buttons.map((button) => button.getAttribute("aria-label"))
+          ),
+        ["Overdue (due:overdue)"]
+      );
       assert.equal(await page.getByTestId("recent-no-match").count(), 0);
       assert.equal(await page.getByTestId("recent-item").count(), 3);
       await search.press("Enter");
       assert.equal(await search.inputValue(), "due:overdue");
       await search.fill("due:");
+      assert.deepEqual(
+        await page
+          .getByTestId("due-suggestions")
+          .getByRole("button")
+          .evaluateAll((buttons) =>
+            buttons.map((button) => button.textContent)
+          ),
+        [
+          "due:todayDue today",
+          "due:overdueOverdue",
+          "due:weekDue this week (incl. overdue)",
+          "due:anyHas a Due",
+          "due:noneNo Due",
+        ],
+        "the labelled list, in the order all three apps use"
+      );
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
@@ -1036,33 +1139,62 @@ const SCENES: readonly Scene[] = [
       const rows = page.getByTestId("recent-item");
 
       await rows.nth(1).focus();
+      await seedClipboard(page);
       await page.keyboard.press("ControlOrMeta+C");
+      await waitForCalls(page, "copyEntry", 1);
       assert.equal(
-        await page.evaluate<string>("navigator.clipboard.readText()"),
+        await readClipboard(page),
         "Movers need the lift on Monday, keys only come Thursday",
         "⌘C on a row copies its title"
       );
-      await page.getByRole("button", { name: "More" }).focus();
+
+      // The open capture's row copies what its editor holds, saved first, not the list's copy.
+      const title = page.getByTestId("record-relationship");
+
+      await title.fill("Rieder's quote is CHF 260 over the cap");
+      await rows.nth(0).focus();
+      await seedClipboard(page);
       await page.keyboard.press("ControlOrMeta+C");
+      await waitForCalls(page, "copyEntry", 2);
       assert.match(
-        await page.evaluate<string>("navigator.clipboard.readText()"),
-        /^Rieder's quote breaks the furniture cap and comes too late\n\nChairs are CHF 280/u,
+        await readClipboard(page),
+        /^Rieder's quote is CHF 260 over the cap\n\nChairs are CHF 280/u,
+        "⌘C on the open capture's row copies the title just typed"
+      );
+      await page.getByRole("button", { name: "More" }).focus();
+      await seedClipboard(page);
+      await page.keyboard.press("ControlOrMeta+C");
+      await waitForCalls(page, "copyEntry", 3);
+      assert.match(
+        await readClipboard(page),
+        /^Rieder's quote is CHF 260 over the cap\n\nChairs are CHF 280/u,
         "⌘C on the open capture copies its title and description"
       );
+      assert.deepEqual(await callsTo(page, "copyEntry"), [
+        uuid(2),
+        uuid(1),
+        uuid(1),
+      ]);
+
       await rows.nth(1).focus();
       await page.keyboard.press("Space");
-      await page.waitForFunction(
-        "globalThis.__screens.data.captures[1].status.kind === 'done'"
+      await until(
+        page,
+        "globalThis.__screens.data.captures[1].status.kind === 'done'",
+        "the row marked done"
       );
-      await page.waitForFunction(
-        "document.querySelectorAll(\"[data-testid='recent-item']\").length === 2"
+      await until(
+        page,
+        "document.querySelectorAll(\"[data-testid='recent-item']\").length === 2",
+        "the row leaving the list"
       );
+      await waitForRowFocus(page, uuid(3));
+
+      // ⌫ asks first, naming the capture in focus.
+      await page.keyboard.press("Backspace");
       assert.equal(
-        await page.evaluate<string>(
-          "document.activeElement?.getAttribute('data-copy') ?? ''"
-        ),
-        "The floor plan has room for 12 desks only without the shelving wall",
-        "focus moves on to the next row"
+        await page.getByTestId("delete-names").textContent(),
+        "The floor plan has room for 12 desks only without the shelving wall"
       );
     },
     data: { captures: CAPTURES },
@@ -1071,6 +1203,7 @@ const SCENES: readonly Scene[] = [
     page: "library",
     platforms: ["macos"],
   },
+
   {
     act: async (page) => {
       const title = page.getByTestId("record-relationship");
@@ -1124,35 +1257,204 @@ const SCENES: readonly Scene[] = [
     platforms: ["windows"],
   },
   {
+    // Windows: main takes Ctrl+Alt+C and Ctrl+O before the page and sends them as commands.
     act: async (page) => {
-      const row = page.getByTestId("recent-item").nth(1);
+      const rows = page.getByTestId("recent-item");
+      const row = rows.nth(1);
+      const menu = page.getByRole("menu");
 
       await row.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Copy as text" }).waitFor();
       await sendCommand(page, "copyNote");
-      await page.keyboard.press("Escape");
-      await page.getByRole("menu").waitFor({ state: "detached" });
-      assert.equal(
-        await row.evaluate((element) => element.matches(":focus")),
-        true,
-        "a right-click leaves focus on that row"
-      );
+      await menu.waitFor({ state: "detached" });
+      await waitForRowFocus(page, uuid(2));
+      await row.click({ button: "right" });
+      await menu.waitFor();
+      await sendCommand(page, "reopen");
+      await menu.waitFor({ state: "detached" });
+      await waitForRowFocus(page, uuid(2));
       await sendCommand(page, "copyNote");
       await row.getByText("Copied").waitFor();
+      await waitForCalls(page, "copyNote", 2);
       assert.deepEqual(
-        await page.evaluate<unknown[]>(
-          "globalThis.__calls.filter((call) => call.method === 'copyNote').map((call) => call.args[0])"
-        ),
-        [uuid(2), uuid(2)],
-        "Copy as text acts on the right-clicked row, menu open or closed, not the open capture"
+        {
+          copyNote: await callsTo(page, "copyNote"),
+          reopen: await callsTo(page, "reopen"),
+        },
+        { copyNote: [uuid(2), uuid(2)], reopen: [uuid(2)] },
+        "the commands act on the right-clicked row, menu open or closed, not the open capture"
       );
+
+      // Delete on a row asks, then removes it and moves focus on to the next row.
+      await page.keyboard.press("Delete");
+      await page.getByRole("button", { name: "Delete", exact: true }).click();
+      await waitForCalls(page, "remove", 1);
+      await waitForRowFocus(page, uuid(3));
+      assert.deepEqual(await callsTo(page, "remove"), [uuid(2)]);
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
     name: "library-row-menu-keys",
     page: "library",
+    platforms: ["windows"],
+  },
+  {
+    // The keys pressed with row B's menu open, while capture A is open, act on B.
+    act: async (page) => {
+      const rows = page.getByTestId("recent-item");
+      const rowB = rows.nth(1);
+      const menu = page.getByRole("menu");
+
+      const openMenu = async () => {
+        await rowB.click({ button: "right" });
+        await menu.waitFor();
+      };
+
+      const closedOnB = async (after: string) => {
+        try {
+          await menu.waitFor({ state: "detached" });
+          await waitForRowFocus(page, uuid(2));
+        } catch (error) {
+          throw new Error(`after ${after}: ${String(error)}`, { cause: error });
+        }
+      };
+
+      await openMenu();
+      await seedClipboard(page);
+      await page.keyboard.press("Meta+C");
+      await closedOnB("⌘C");
+      await waitForCalls(page, "copyEntry", 1);
+      assert.equal(
+        await readClipboard(page),
+        "Movers need the lift on Monday, keys only come Thursday",
+        "⌘C in B's menu copies B"
+      );
+
+      await openMenu();
+      await page.keyboard.press("Meta+Alt+C");
+      await closedOnB("⌥⌘C");
+      await waitForCalls(page, "copyNote", 1);
+
+      await openMenu();
+      await page.keyboard.press("Meta+O");
+      await closedOnB("⌘O");
+      await waitForCalls(page, "reopen", 1);
+
+      await openMenu();
+      await page.keyboard.press("Backspace");
+      assert.equal(
+        await page.getByTestId("delete-names").textContent(),
+        "Movers need the lift on Monday, keys only come Thursday",
+        "⌫ in B's menu asks to delete B"
+      );
+      await page.keyboard.press("Escape");
+      await page.getByRole("alertdialog").waitFor({ state: "detached" });
+      await waitForRowFocus(page, uuid(2));
+
+      await openMenu();
+      await page.keyboard.press("Escape");
+      await closedOnB("Escape");
+      await seedClipboard(page);
+      await page.keyboard.press("Meta+C");
+      await waitForCalls(page, "copyEntry", 2);
+      assert.equal(
+        await readClipboard(page),
+        "Movers need the lift on Monday, keys only come Thursday",
+        "⌘C after Escape copies B"
+      );
+
+      await openMenu();
+      // The menu starts listening for presses outside it a moment after it opens.
+      await page.waitForTimeout(200);
+      await page.mouse.click(760, 520);
+      await closedOnB("a click outside");
+      await seedClipboard(page);
+      await page.keyboard.press("Meta+C");
+      await waitForCalls(page, "copyEntry", 3);
+      assert.equal(
+        await readClipboard(page),
+        "Movers need the lift on Monday, keys only come Thursday",
+        "⌘C after a click outside copies B"
+      );
+
+      await openMenu();
+      await page.keyboard.press("Space");
+      await menu.waitFor({ state: "detached" });
+      await until(
+        page,
+        "globalThis.__screens.data.captures[1].status.kind === 'done'",
+        "B marked done"
+      );
+      await waitForRowFocus(page, uuid(3));
+
+      assert.deepEqual(
+        {
+          copyEntry: await callsTo(page, "copyEntry"),
+          copyNote: await callsTo(page, "copyNote"),
+          remove: await callsTo(page, "remove"),
+          reopen: await callsTo(page, "reopen"),
+          setStatus: await callsTo(page, "setStatus"),
+        },
+        {
+          copyEntry: [uuid(2), uuid(2), uuid(2)],
+          copyNote: [uuid(2)],
+          remove: [],
+          reopen: [uuid(2)],
+          setStatus: [uuid(2)],
+        },
+        "every key acts once, on B, never on the open capture"
+      );
+      assert.equal(
+        await page.getByTestId("record-relationship").inputValue(),
+        "Rieder's quote breaks the furniture cap and comes too late",
+        "capture A stays open"
+      );
+
+      // The menu as it looks on the row now in focus.
+      await rows.nth(1).click({ button: "right" });
+      await menu.waitFor();
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-menu-keys",
+    page: "library",
     platforms: ["macos"],
   },
+  {
+    // ⌘C on the open capture's row, and on its page, after its title failed to save.
+    act: async (page) => {
+      const title = page.getByTestId("record-relationship");
+      const row = page.getByTestId("recent-item").first();
+
+      await title.fill("NEW UNSAVED TITLE");
+      await row.focus();
+      await page.getByText("Couldn't save. The disk is full.").waitFor();
+      await seedClipboard(page);
+      await page.keyboard.press("ControlOrMeta+C");
+      await row.getByText("Not copied: not saved").waitFor();
+      await page.getByRole("button", { name: "More" }).focus();
+      await page.keyboard.press("ControlOrMeta+C");
+      await page
+        .getByTestId("capture-feedback")
+        .filter({ hasText: "Not copied: changes aren’t saved" })
+        .waitFor();
+      assert.deepEqual(
+        {
+          clipboard: await readClipboard(page),
+          copyEntry: await callsTo(page, "copyEntry"),
+          shown: await title.inputValue(),
+        },
+        { clipboard: SENTINEL, copyEntry: [], shown: "NEW UNSAVED TITLE" },
+        "a failed save copies nothing"
+      );
+    },
+    data: { captures: CAPTURES, failSaves: true },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-row-copy-refused",
+    page: "library",
+    platforms: ["macos"],
+  },
+
   { data: { view: SETTINGS_VIEW }, name: "settings", page: "settings" },
 ];
 

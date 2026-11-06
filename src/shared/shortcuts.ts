@@ -226,6 +226,7 @@ export const SHEET: readonly SheetGroup[] = [
       { keys: [page("⌘C", "Ctrl+C")], label: "Copy the title and description" },
       { keys: [menu("copyNote")], label: "Copy as text, with every detail" },
       { keys: [menu("reopen")], label: "Reopen the windows" },
+      { keys: [page("⌫", "Delete")], label: "Delete the row, after asking" },
     ],
     title: "Edit",
     where: "On the open capture or the row in focus",

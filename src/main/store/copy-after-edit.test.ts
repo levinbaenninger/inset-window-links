@@ -13,7 +13,7 @@ import {
 import { DraftIdSchema, ViewIdSchema } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
 import { failingWrites, nodeStoreFs, slowWrites } from "./fs";
-import { formatNote } from "./note";
+import { formatEntry, formatNote } from "./note";
 import type { CaptureRecord } from "./schema";
 import { CaptureStore } from "./store";
 
@@ -95,6 +95,12 @@ const setup = async () => {
       : "";
   };
 
+  const storedEntry = () => {
+    const entry = store.get(ID);
+
+    return entry?.kind === "current" ? formatEntry(entry.record) : "";
+  };
+
   const storedNote = () => {
     const entry = store.get(ID);
 
@@ -109,6 +115,7 @@ const setup = async () => {
     setFailing: (on: boolean) => {
       failing = on;
     },
+    storedEntry,
     storedNote,
   };
 };
@@ -197,5 +204,54 @@ describe("Copy as Text after an edit", () => {
       outcome.kind,
       copied.map((note) => note.includes("Second try")),
     ]).toStrictEqual(["ok", [true]]);
+  });
+});
+
+/** ⌘C, from a row or the page: the same wait, then main copies the stored title and description. */
+describe("Copy (⌘C) after an edit", () => {
+  it("copies the title still being typed, not the one the list last showed", async () => {
+    const { saver, storedEntry } = await setup();
+    const copied: string[] = [];
+
+    saver.edit({ ...stored, relationship: "NEW TITLE" });
+
+    const outcome = await copyAfterSaving(ID, () => {
+      copied.push(storedEntry());
+
+      return Promise.resolve();
+    });
+
+    expect([outcome.kind, copied]).toStrictEqual([
+      "ok",
+      ["NEW TITLE\n\nOld description"],
+    ]);
+  });
+
+  it("copies nothing when the title on screen could not be saved", async () => {
+    const { saver, setFailing, storedEntry } = await setup();
+    const copied: string[] = [];
+
+    setFailing(true);
+    saver.edit({ ...stored, relationship: "NEW UNSAVED TITLE" });
+    saver.flush();
+    await savePending(ID);
+
+    const outcome = await copyAfterSaving(ID, () => {
+      copied.push(storedEntry());
+
+      return Promise.resolve();
+    });
+
+    expect({
+      copied,
+      outcome: outcome.kind,
+      shown: saver.state().text?.relationship,
+      stored: storedEntry(),
+    }).toStrictEqual({
+      copied: [],
+      outcome: "failed",
+      shown: "NEW UNSAVED TITLE",
+      stored: "Old title\n\nOld description",
+    });
   });
 });

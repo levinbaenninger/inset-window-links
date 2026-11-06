@@ -51,6 +51,8 @@ export interface LibraryApi {
     captureId: CaptureId,
     due: DueDate | null
   ) => Promise<MutationOutcome>;
+  /** What ⌘C copies: the stored title and description. */
+  copyEntry: (captureId: CaptureId) => Promise<void>;
   copyNote: (captureId: CaptureId) => Promise<void>;
   shortcut: () => Promise<ShortcutStatus>;
   copyImage: (captureId: CaptureId, viewId: ViewId) => Promise<void>;

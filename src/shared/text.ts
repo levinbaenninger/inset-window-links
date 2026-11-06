@@ -4,6 +4,10 @@ import { DueDateSchema } from "./due";
 import { ViewIdSchema } from "./ids";
 import type { ViewId } from "./ids";
 
+/** A capture's own words, title then description: what ⌘C copies when no text is selected. */
+export const entryText = (title: string, description: string): string =>
+  [title.trim(), description.trim()].filter((part) => part !== "").join("\n\n");
+
 /** Main rejects longer text, so the text fields stop at the same lengths. */
 export const MAX_RELATIONSHIP = 10_000;
 export const MAX_DESCRIPTION = 10_000;

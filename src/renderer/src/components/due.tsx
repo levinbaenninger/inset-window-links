@@ -6,7 +6,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "cn";
 import { useEffect, useRef, useState } from "react";
-import type { ComponentProps, KeyboardEvent } from "react";
+import type { ComponentProps, KeyboardEvent, Ref } from "react";
 
 import { Kbd } from "@/components/ui/kbd";
 import { formatPickHint } from "@/lib/format";
@@ -69,24 +69,28 @@ export const DueBadge = ({
   due,
   now,
   className,
+  ref,
 }: {
   due: DueDate;
   now: Date;
   className?: string;
+  ref?: Ref<HTMLSpanElement>;
 }) => (
+  // Never cut short: a row makes room for the whole label, or gives it a line of its own.
   <span
     aria-label={dueSentence(due, now)}
     className={cn(
-      "inline-flex h-5 max-w-full min-w-0 items-center gap-1 rounded-sm px-1.5 text-xs leading-none font-medium whitespace-nowrap tabular-nums",
+      "inline-flex h-5 shrink-0 items-center gap-1 rounded-sm px-1.5 text-xs leading-none font-medium whitespace-nowrap tabular-nums",
       dueTone(due, now),
       className
     )}
     data-due-state={dueState(due, now)}
     data-testid="due-badge"
+    ref={ref}
     title={dueLongLabel(due)}
   >
     <HugeiconsIcon className="shrink-0" icon={Calendar03Icon} size={12} />
-    <span className="truncate">{chipText(due, now)}</span>
+    {chipText(due, now)}
   </span>
 );
 

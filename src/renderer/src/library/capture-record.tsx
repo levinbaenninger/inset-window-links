@@ -69,10 +69,11 @@ import {
   reopenedMessage,
   useCaptureCommands,
 } from "./capture-commands";
-import { entryText } from "./copy-keys";
+import { useEntryCopy } from "./copy-keys";
 import { ImageViewer } from "./image-viewer";
 import { InlineSaver, trackSaver } from "./inline-saver";
 import { PaneHeader } from "./pane-header";
+import { openMenuRow, ROW_SELECTOR } from "./row-keys";
 
 const route = getRouteApi("/captures/$captureId");
 
@@ -352,6 +353,7 @@ const Record = ({
   const description = useRef<HTMLTextAreaElement>(null);
   const steps = useRef<TodoEditorHandle>(null);
   const dueControls = useRef<HTMLDivElement>(null);
+  const page = useRef<HTMLElement>(null);
   const [describing, setDescribing] = useState(false);
   const [dueOpen, setDueOpen] = useState(false);
 
@@ -381,6 +383,12 @@ const Record = ({
     id: detail.id,
     reopenable: reopenable.map((view) => view.id),
     status: detail.status,
+    title: text.relationship,
+  });
+
+  // ⌘C with nothing selected: the title and description on screen, once they are saved.
+  useEntryCopy(page, () => {
+    void commands.copyEntry.run();
   });
 
   const shown: Feedback | null =
@@ -429,10 +437,7 @@ const Record = ({
   useCommands((command) => {
     // A sidebar row in focus, or with its menu open, takes the keys for a capture itself.
     const rowFocused =
-      (document.activeElement?.closest("[data-testid='recent-item']") ??
-        document.querySelector(
-          "[data-testid='recent-item'][data-state='open']"
-        )) !== null;
+      (document.activeElement?.closest(ROW_SELECTOR) ?? openMenuRow()) !== null;
 
     if (
       rowFocused &&
@@ -582,7 +587,8 @@ const Record = ({
       </PaneHeader>
       <main
         className="min-h-0 flex-1 overflow-y-auto"
-        data-copy={entryText(text.relationship, text.description)}
+        data-copy-entry
+        ref={page}
       >
         <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 pt-2 pb-10">
           <div className="flex flex-col gap-2">

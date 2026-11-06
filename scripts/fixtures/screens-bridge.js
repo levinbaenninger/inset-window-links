@@ -32,6 +32,12 @@ globalThis.__calls = [];
 
 const record = (method, ...args) => globalThis.__calls.push({ method, args });
 
+/** What ⌘C copies of a stored capture, as main writes it: title, then description. */
+const entryText = (capture) =>
+  [capture.relationship.trim(), capture.description.trim()]
+    .filter((part) => part !== "")
+    .join("\n\n");
+
 /** Answers every method the renderer calls that the scene does not name itself. */
 const withFallback = (api, fallback) =>
   new Proxy(api, { get: (target, key) => target[key] ?? fallback });
@@ -79,6 +85,35 @@ if (page === "library") {
 
   globalThis.inset = withFallback(
     {
+      // Main writes the clipboard once the page's edits are saved; the call is recorded after it.
+      copyEntry: async (captureId) => {
+        const capture = captures.find((item) => item.id === captureId);
+
+        if (capture !== undefined) {
+          await navigator.clipboard.writeText(entryText(capture));
+        }
+
+        record("copyEntry", captureId);
+      },
+      remove: (captureId) => {
+        for (const list of [captures, items]) {
+          const at = list.findIndex((item) => item.id === captureId);
+
+          if (at !== -1) {
+            list.splice(at, 1);
+          }
+        }
+
+        record("remove", captureId);
+        emit("changed");
+
+        return Promise.resolve({ kind: "ok" });
+      },
+      reopen: (captureId, viewIds) => {
+        record("reopen", captureId, viewIds);
+
+        return Promise.resolve({ failed: 0 });
+      },
       get: (id) =>
         Promise.resolve(captures.find((capture) => capture.id === id) ?? null),
       copyNote: (captureId) => {

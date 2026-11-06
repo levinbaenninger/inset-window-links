@@ -6,12 +6,14 @@ import {
   Copy01Icon,
   Delete02Icon,
   RepeatIcon,
+  TextAlignLeftIcon,
   Undo02Icon,
 } from "@hugeicons/core-free-icons";
 import type { Add01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
 
 import { DueOptions } from "@/components/due";
 import {
@@ -62,6 +64,7 @@ import type {
 } from "../../../shared/status";
 import { ACTIVE, snoozePresets } from "../../../shared/status";
 import { copyAfterSaving } from "./inline-saver";
+import { neighborRow, ROW_SELECTOR } from "./row-keys";
 
 const FEEDBACK_MS = 2000;
 const FAILURE_MS = 6000;
@@ -102,12 +105,16 @@ export type MenuEntry =
 
 export interface CaptureTarget {
   id: CaptureId;
+  /** The words on screen, which the Delete confirm names. */
+  title: string;
   status: CaptureStatus;
   due: DueDate | null;
   /** The windows Reopen can bring back. */
   reopenable: readonly ViewId[];
-  /** Where the menu opens: on a row of the list, where Space works too, or on the capture's page. */
+  /** Where the menu opens: on a row of the list, where Space and ⌫ work too, or on the capture's page. */
   from: "row" | "page";
+  /** The row, which gets focus back when a dialog its menu opened closes. */
+  row?: RefObject<HTMLElement | null>;
 }
 
 /** "Opened 3 windows", or how many could not be. */
@@ -153,6 +160,13 @@ const presetHint = (preset: SnoozePreset): string => {
 /** The menu key that does the same to the open capture. */
 const keys = (id: MenuKeyId) => menuKeyLabel(id, libraryApi().platform);
 
+/** ⌫ on a Mac; Windows answers Backspace and Delete alike and names the key it labels Delete. */
+const deleteKey = (): string =>
+  libraryApi().platform === "macos" ? "⌫" : "Delete";
+
+const copyKey = (): string =>
+  libraryApi().platform === "macos" ? "⌘C" : "Ctrl+C";
+
 /**
  * Everything that can be done to one capture, once: the right-click menu in the sidebar and the
  * capture's own header both draw these entries. Delete asks first, in the dialog this returns.
@@ -166,6 +180,8 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   /** When the snooze times were worked out; a menu asks again each time it opens. */
   const [now, setNow] = useState(() => new Date());
+  /** The row that takes focus once this one is deleted. */
+  const afterDelete = useRef<HTMLElement | null>(null);
 
   // A failure stays longer, so it is read before it goes; a newer answer restarts the wait.
   useEffect(() => {
@@ -183,6 +199,27 @@ export const useCaptureCommands = (target: CaptureTarget) => {
 
   const say = (text: string) => setFeedback({ failed: false, text });
 
+  /**
+   * A dialog opened from a row gives focus back to it, or to the row after it once Delete took it
+   * out of the list, unless focus has moved on to another row. The dialog belongs to the row, so it
+   * can close by leaving the page together with it.
+   */
+  const focusRow = (event: Event) => {
+    if (target.row === undefined) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const row = target.row.current;
+    const to = row?.isConnected === true ? row : afterDelete.current;
+    const onRow = document.activeElement?.closest(ROW_SELECTOR) ?? null;
+
+    if (to?.isConnected === true && onRow === null) {
+      to.focus();
+    }
+  };
+
   /** Shows what went wrong, or nothing when the call went through. */
   const report = (outcome: MutationOutcome) => {
     const text = outcomeMessage(outcome);
@@ -197,6 +234,8 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   };
 
   const remove = async () => {
+    const row = target.row?.current;
+    const next = row === null || row === undefined ? null : neighborRow(row);
     const outcome = await libraryApi().remove(target.id);
 
     if (outcome.kind !== "ok" && outcome.kind !== "missing") {
@@ -204,6 +243,9 @@ export const useCaptureCommands = (target: CaptureTarget) => {
 
       return;
     }
+
+    afterDelete.current = next;
+    next?.focus();
 
     if (openId === target.id) {
       // "/" opens the newest capture, so the list must no longer hold this one.
@@ -293,25 +335,41 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     snoozed: [backToList, snooze, done],
   };
 
-  const copy: MenuItem = {
-    hint: hint("copyNote"),
+  /** Saves what is typed in the capture first; when that fails, copies nothing and says so. */
+  const copyAfterEdits = async (copyNow: () => Promise<void>) => {
+    const saved = await copyAfterSaving(target.id, copyNow);
+
+    if (saved.kind === "ok") {
+      say("Copied");
+    } else if (saved.kind === "failed") {
+      // Short enough for the page header, shorter still in a row; the field that failed says why.
+      setFeedback({
+        failed: true,
+        text:
+          target.from === "row"
+            ? "Not copied: not saved"
+            : "Not copied: changes aren’t saved",
+      });
+    } else {
+      report(saved);
+    }
+  };
+
+  /** ⌘C: the title and description, as the Edit menu's Copy and the key copy them. */
+  const copyEntry: MenuItem = {
+    hint: copyKey(),
     icon: Copy01Icon,
     kind: "item",
-    label: "Copy as text",
-    run: async () => {
-      const saved = await copyAfterSaving(target.id, () =>
-        libraryApi().copyNote(target.id)
-      );
+    label: "Copy",
+    run: () => copyAfterEdits(() => libraryApi().copyEntry(target.id)),
+  };
 
-      if (saved.kind === "ok") {
-        say("Copied");
-      } else if (saved.kind === "failed") {
-        // Short enough for the page header; the field that could not be saved says why.
-        setFeedback({ failed: true, text: "Not copied: changes aren’t saved" });
-      } else {
-        report(saved);
-      }
-    },
+  const copy: MenuItem = {
+    hint: hint("copyNote"),
+    icon: TextAlignLeftIcon,
+    kind: "item",
+    label: "Copy as text",
+    run: () => copyAfterEdits(() => libraryApi().copyNote(target.id)),
   };
 
   const reopen: MenuItem | null =
@@ -335,6 +393,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
 
   const entries: readonly MenuEntry[] = [
     ...(reopen === null ? [] : [reopen]),
+    copyEntry,
     copy,
     { id: "status", kind: "separator" },
     dueMenu,
@@ -342,6 +401,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     { id: "delete", kind: "separator" },
     {
       destructive: true,
+      hint: space === undefined ? undefined : deleteKey(),
       icon: Delete02Icon,
       kind: "item",
       label: "Delete…",
@@ -352,7 +412,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   const dialog = (
     <>
       <Dialog open={pickingDue} onOpenChange={setPickingDue}>
-        <DialogContent className="w-72">
+        <DialogContent className="w-72" onCloseAutoFocus={focusRow}>
           <div className="p-1.5">
             <DialogTitle className="sr-only">Due</DialogTitle>
             <DialogDescription className="sr-only">
@@ -372,10 +432,16 @@ export const useCaptureCommands = (target: CaptureTarget) => {
         </DialogContent>
       </Dialog>
       <AlertDialog onOpenChange={setConfirming} open={confirming}>
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={focusRow}>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
             <AlertDialogDescription>
+              <span
+                className="text-foreground mb-1 line-clamp-2 block font-medium"
+                data-testid="delete-names"
+              >
+                {target.title}
+              </span>
               Its windows and text are removed from this computer. To keep it
               out of the list instead, mark it as done.
             </AlertDialogDescription>
@@ -392,8 +458,10 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   );
 
   return {
+    askDelete: () => setConfirming(true),
     backToList,
     copy,
+    copyEntry,
     dialog,
     done,
     entries,

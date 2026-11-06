@@ -1,6 +1,6 @@
 import { longDate } from "../../shared/dates";
 import { dueDay } from "../../shared/due";
-import { isBlank } from "../../shared/text";
+import { entryText, isBlank } from "../../shared/text";
 import type { CaptureRecord } from "./schema";
 
 /**
@@ -64,3 +64,7 @@ export const formatNote = (
     ...windows,
   ].join("\n");
 };
+
+/** What ⌘C copies of a stored capture: its title, then its description. */
+export const formatEntry = (record: CaptureRecord): string =>
+  entryText(record.relationship, record.description);

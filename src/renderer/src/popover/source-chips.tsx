@@ -105,7 +105,14 @@ const PendingChip = ({ pending }: { pending: PendingSummary }) => (
     className="flex min-w-0 flex-col gap-1"
     data-testid="pending-chip"
   >
-    <span className={cn(TILE_IMAGE, "animate-pulse")} />
+    <span
+      className={cn(
+        TILE_IMAGE,
+        "text-muted-foreground grid animate-pulse place-items-center text-xs"
+      )}
+    >
+      Capturing…
+    </span>
     <span className={TILE_TITLE}>
       {pending === null ? "Adding a window…" : viewTitle(pending.title)}
     </span>
