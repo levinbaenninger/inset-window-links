@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const SRC = import.meta.dirname;
 
-/** Every source file under src, tests left out, as paths relative to the repository. */
+/** Every source file under src, tests left out, as `/` paths relative to the repository. */
 const sources = async (): Promise<Map<string, string>> => {
   const entries = await readdir(SRC, { recursive: true, withFileTypes: true });
 
@@ -22,7 +22,7 @@ const sources = async (): Promise<Map<string, string>> => {
         const file = path.join(entry.parentPath, entry.name);
 
         return [
-          path.relative(path.dirname(SRC), file),
+          path.relative(path.dirname(SRC), file).split(path.sep).join("/"),
           await readFile(file, "utf-8"),
         ] as const;
       })

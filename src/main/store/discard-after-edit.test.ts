@@ -499,7 +499,8 @@ const fault = (code: string) =>
  * A disk that keeps every state a crash could leave. Once `armed`, it copies the whole capture
  * folder after each write, rename and removal lands, one operation at a time so every copy falls
  * between two of them. `hold` stops the first operation it matches until released; `fail` makes
- * the operations it matches throw while set.
+ * the operations it matches throw while set. An operation names its files relative to `root`, with
+ * `/` on every platform.
  */
 const crashDisk = (root: string) => {
   const crashes: string[] = [];
@@ -558,7 +559,8 @@ const crashDisk = (root: string) => {
     }
   };
 
-  const name = (file: string) => path.relative(root, file);
+  const name = (file: string) =>
+    path.relative(root, file).split(path.sep).join("/");
 
   const fs: StoreFs = {
     ...nodeStoreFs,
