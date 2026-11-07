@@ -121,6 +121,7 @@ const PanelScroll = ({
   /** Fades the foot of a long list, so it reads as one that scrolls. */
   fade?: boolean;
 }) => {
+  const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -138,6 +139,48 @@ const PanelScroll = ({
     return () => observer.disconnect();
   }, []);
 
+  // When the panel grows, what shows at its foot stays put and the new room opens above it. Main
+  // grows the panel only after the content has grown, and a field that takes focus meanwhile is
+  // scrolled into the short panel. Kept, that scroll would cut off the windows' tiles, and the
+  // open one's border, at the top of a panel that now has room for them.
+  useEffect(() => {
+    const box = scroll.current;
+
+    if (box === null) {
+      return;
+    }
+
+    let height = box.clientHeight;
+    let top = box.scrollTop;
+
+    // The scroll a resize causes is settled below, from where it stood before.
+    const onScroll = () => {
+      if (box.clientHeight === height) {
+        top = box.scrollTop;
+      }
+    };
+
+    const observer = new ResizeObserver(() => {
+      const grown = box.clientHeight - height;
+
+      height = box.clientHeight;
+
+      if (grown > 0) {
+        box.scrollTop = Math.max(0, top - grown);
+      }
+
+      top = box.scrollTop;
+    });
+
+    box.addEventListener("scroll", onScroll, { passive: true });
+    observer.observe(box);
+
+    return () => {
+      observer.disconnect();
+      box.removeEventListener("scroll", onScroll);
+    };
+  }, []);
+
   return (
     <div
       className={cn(
@@ -146,6 +189,7 @@ const PanelScroll = ({
           "[mask-image:linear-gradient(to_bottom,black_calc(100%-2rem),transparent)]"
       )}
       data-panel-scroll
+      ref={scroll}
     >
       {/* The inset at the top keeps a tile's focus ring and selection border inside the scroll. */}
       <div className={cn("pt-1", fade && "pb-6")} ref={content}>

@@ -809,6 +809,15 @@ const Record = ({
                 onCloseAutoFocus={(event) => {
                   event.preventDefault();
 
+                  // A click elsewhere has already put the keyboard where it was aimed. Escape or a
+                  // pick leaves it nowhere, as what had it is gone, so it goes back to Due.
+                  if (
+                    document.activeElement !== null &&
+                    document.activeElement !== document.body
+                  ) {
+                    return;
+                  }
+
                   const trigger =
                     dueControls.current?.querySelector<HTMLButtonElement>(
                       "[data-testid='due-chip'] button, [data-testid='add-due']"

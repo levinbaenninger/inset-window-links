@@ -703,20 +703,48 @@ const waitForRowFocus = (page: Page, id: string) =>
   );
 
 /**
+ * Page code the ring checks share. `clipsOf` lists the boxes around a node that cut off what
+ * overflows them (they scroll, hide or mask), nearest first, each with the edges of what it
+ * shows. `roomIn` is how far a box sits inside those edges on its tightest side.
+ */
+const RING_GEOMETRY = `
+  const clipsOf = (node) => {
+    const clips = [];
+
+    for (let clip = node.parentElement; clip !== null; clip = clip.parentElement) {
+      const style = getComputedStyle(clip);
+
+      if (style.overflowX === "visible" && style.overflowY === "visible" && (style.maskImage ?? "none") === "none") {
+        continue;
+      }
+
+      const outer = clip.getBoundingClientRect();
+      const left = outer.left + clip.clientLeft;
+      const top = outer.top + clip.clientTop;
+
+      clips.push({ bottom: top + clip.clientHeight, clip, left, right: left + clip.clientWidth, style, top });
+    }
+
+    return clips;
+  };
+  const roomIn = (box, edges) => Math.min(box.top - edges.top, edges.bottom - box.bottom, box.left - edges.left, edges.right - box.right);
+  const shows = (box, edges) => box.bottom > edges.top && box.top < edges.bottom && box.right > edges.left && box.left < edges.right;
+  const nameOf = (control) => (control.getAttribute("aria-label") ?? control.textContent ?? control.tagName).trim().slice(0, 60);
+`;
+
+/**
  * Every control with a ring (a focus ring or a selection border) whose ring a scrolling or masked
  * box around it would cut off, even scrolled as far as it goes that way. A ring is drawn 3 px
- * outside the control, so that much room must lie inside each such box. Controls scrolled partly
- * out of sight are left out: scrolling brings them in.
+ * outside the control, so that much room must lie inside each such box once it is scrolled to
+ * that side. A box further out is not judged for a control a nearer one shows only in part, as
+ * where the control sits in the outer box depends on how far the nearer one scrolls.
  */
 const clippedRings = (page: Page) =>
   page.evaluate<string[]>(`(() => {
+    ${RING_GEOMETRY}
     const RING = 3;
     const ringed = /(?:^|\\s)\\S*ring-(?:\\d|\\[)/u;
-    const clips = (node) => {
-      const style = getComputedStyle(node);
-
-      return style.overflowX !== "visible" || style.overflowY !== "visible" || (style.maskImage ?? "none") !== "none";
-    };
+    const scrolls = (overflow) => overflow === "auto" || overflow === "scroll";
     const cut = [];
 
     for (const control of document.querySelectorAll("button, a[href], input, textarea, select, [tabindex]")) {
@@ -726,30 +754,23 @@ const clippedRings = (page: Page) =>
         continue;
       }
 
-      for (let clip = control.parentElement; clip !== null; clip = clip.parentElement) {
-        if (!clips(clip)) {
-          continue;
-        }
+      for (const edges of clipsOf(control)) {
+        const { clip, style } = edges;
+        const down = scrolls(style.overflowY);
+        const across = scrolls(style.overflowX);
+        const room = Math.min(
+          box.top - edges.top + (down ? clip.scrollTop : 0),
+          edges.bottom - box.bottom + (down ? clip.scrollHeight - clip.clientHeight - clip.scrollTop : 0),
+          box.left - edges.left + (across ? clip.scrollLeft : 0),
+          edges.right - box.right + (across ? clip.scrollWidth - clip.clientWidth - clip.scrollLeft : 0)
+        );
 
-        const outer = clip.getBoundingClientRect();
-        const left = outer.left + clip.clientLeft;
-        const top = outer.top + clip.clientTop;
-        const right = left + clip.clientWidth;
-        const bottom = top + clip.clientHeight;
-
-        if (box.left < left - 0.5 || box.top < top - 0.5 || box.right > right + 0.5 || box.bottom > bottom + 0.5) {
+        if (room < RING - 0.5) {
+          cut.push(nameOf(control));
           break;
         }
 
-        const room = [
-          clip.scrollTop <= 0 ? box.top - top : RING,
-          clip.scrollTop + clip.clientHeight >= clip.scrollHeight - 1 ? bottom - box.bottom : RING,
-          clip.scrollLeft <= 0 ? box.left - left : RING,
-          clip.scrollLeft + clip.clientWidth >= clip.scrollWidth - 1 ? right - box.right : RING,
-        ];
-
-        if (Math.min(...room) < RING - 0.5) {
-          cut.push((control.getAttribute("aria-label") ?? control.textContent ?? control.tagName).trim().slice(0, 60));
+        if (roomIn(box, edges) < -0.5) {
           break;
         }
       }
@@ -757,6 +778,73 @@ const clippedRings = (page: Page) =>
 
     return cut;
   })()`);
+
+/**
+ * Every control drawing a ring right now (a focus ring, or the open tile's selection border) that
+ * shows at least in part, and whose ring a scrolling or masked box around it cuts off where things
+ * stand: "Hide preview of window 1, Office move budget: 6 px short". The ring's reach is read from
+ * the computed outline and box shadows, so this holds whatever draws it.
+ */
+const cutRings = (page: Page) =>
+  page.evaluate<string[]>(`(() => {
+    ${RING_GEOMETRY}
+    const clear = (color) => /^transparent$|,\\s*0\\)$|\\/\\s*0\\)$/u.test(color.trim());
+    const reach = (control) => {
+      const style = getComputedStyle(control);
+
+      if (style.visibility === "hidden" || Number(style.opacity) === 0) {
+        return 0;
+      }
+
+      const rings = style.boxShadow === "none" ? [] : style.boxShadow.split(/,(?![^(]*\\))/u).flatMap((shadow) => {
+        const lengths = (shadow.match(/-?[\\d.]+px/gu) ?? []).map(Number.parseFloat);
+        const [x = 0, y = 0, blur = 0, spread = 0] = lengths;
+        const color = shadow.replace(/\\s-?[\\d.]+px.*$/u, "");
+
+        return shadow.includes("inset") || x !== 0 || y !== 0 || blur !== 0 || clear(color) ? [] : [spread];
+      });
+      const outline = style.outlineStyle === "none" || clear(style.outlineColor) ? 0 : Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset);
+
+      return Math.max(0, outline, ...rings);
+    };
+    const cut = [];
+
+    for (const control of document.querySelectorAll("button, a[href], input, textarea, select, [tabindex]")) {
+      const ring = reach(control);
+      const box = control.getBoundingClientRect();
+
+      if (ring < 0.5 || box.width === 0) {
+        continue;
+      }
+
+      for (const edges of clipsOf(control)) {
+        if (!shows(box, edges)) {
+          break;
+        }
+
+        const short = ring - roomIn(box, edges);
+
+        if (short > 0.5) {
+          cut.push(nameOf(control) + ": " + Math.round(short * 2) / 2 + " px short");
+          break;
+        }
+      }
+    }
+
+    return cut;
+  })()`);
+
+/** Sizes the page to the height it last asked for, as main sizes the capture panel: 720 px at most. */
+const fitPanel = async (page: Page) => {
+  const fitted = await page.evaluate<number | undefined>("globalThis.__fitted");
+
+  const width = page.viewportSize()?.width;
+
+  if (fitted !== undefined && fitted > 0 && width !== undefined) {
+    await page.setViewportSize({ height: Math.min(fitted, 720), width });
+    await page.waitForTimeout(150);
+  }
+};
 
 /**
  * Where the capture's metadata footer sits: last in the capture, within 24 px of the pane's foot
@@ -834,6 +922,26 @@ const focusedDay = (page: Page) =>
   page.evaluate<string | null>(
     `document.activeElement?.closest("[data-testid='due-calendar']") ? document.activeElement.getAttribute("aria-label") : null`
   );
+
+/**
+ * What has the keyboard once the Due popover has gone and handed focus on: its accessible name,
+ * its test id, or "nothing". Two rounds of timers and frames let the popover's own focus return run.
+ */
+const focusOnceClosed = async (page: Page) => {
+  await page
+    .locator("[data-slot='popover-content']")
+    .waitFor({ state: "detached" });
+
+  return page.evaluate<string>(`new Promise((resolve) => {
+    const read = () => {
+      const active = document.activeElement;
+
+      resolve(active === null || active === document.body ? "nothing" : (active.getAttribute("aria-label") ?? active.getAttribute("data-testid") ?? active.tagName));
+    };
+
+    setTimeout(() => requestAnimationFrame(() => setTimeout(() => requestAnimationFrame(read), 0)), 0);
+  })`);
+};
 
 /** The Due the panel last sent main. */
 const sentDue = (page: Page) =>
@@ -1749,6 +1857,19 @@ const SCENES: readonly Scene[] = [
       await waitForFocus(page, "[data-testid='due-chip'] button");
       assert.equal(await sentDue(page), "2026-11-06");
 
+      // The calendar sits in the panel's flow, so nothing takes the keyboard back from a click.
+      await pickDate("[data-testid='due-chip'] button:first-child");
+      await page.locator("#relationship").click();
+      assert.deepEqual(
+        await page.evaluate(
+          `new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve({ calendar: document.querySelector("[data-testid='due-calendar']") !== null, focus: document.activeElement?.id ?? null }))), 0))`
+        ),
+        { calendar: true, focus: "relationship" },
+        "a click on the title keeps the keyboard there, with the calendar still open"
+      );
+      await page.locator("[data-testid='due-chip'] button:first-child").click();
+      await calendar.waitFor({ state: "detached" });
+
       await pickDate("[data-testid='due-chip'] button:first-child");
       assert.equal(
         await focusedDay(page),
@@ -1797,6 +1918,52 @@ const SCENES: readonly Scene[] = [
         "globalThis.__screens.data.captures[0].due === '2026-11-06'"
       );
       await waitForFocus(page, "[data-testid='due-chip'] button");
+
+      await pickDate();
+      await page.getByTestId("record-relationship").click();
+      assert.equal(
+        await focusOnceClosed(page),
+        "What connects these windows?",
+        "a click on the title closes the calendar and leaves the keyboard there"
+      );
+
+      await pickDate();
+      await page.getByRole("textbox", { name: /^Search captures/u }).click();
+      assert.match(
+        await focusOnceClosed(page),
+        /^Search captures/u,
+        "a click on Search closes the calendar and leaves the keyboard there"
+      );
+
+      const pressed = async (key: string) => {
+        await page.keyboard.press(key);
+
+        return page.evaluate<string | null>(
+          `new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(document.querySelector("[data-testid='due-calendar']") === null ? null : document.activeElement?.getAttribute("aria-label") ?? null)), 0))`
+        );
+      };
+
+      await pickDate();
+      assert.deepEqual(
+        [
+          await pressed("Tab"),
+          await pressed("Shift+Tab"),
+          await pressed("Shift+Tab"),
+        ],
+        [
+          "Go to the Previous Month",
+          "Friday, November 6, 2026, selected",
+          "Go to the Next Month",
+        ],
+        "Tab and Shift+Tab go round the open calendar, and the keyboard stays where they put it"
+      );
+      await page.keyboard.press("Escape");
+      assert.match(
+        await focusOnceClosed(page),
+        /\. Change Due$/u,
+        "Escape from the calendar's month buttons gives the keyboard back to Due"
+      );
+
       await pickDate();
     },
     data: { captures: CAPTURES },
@@ -1820,7 +1987,9 @@ const SCENES: readonly Scene[] = [
     /*
      * A window's description in the panel reads as plain text. A click edits it, Return goes back
      * to the text with focus on it, Escape puts back what it said, and leaving the field goes
-     * back to the text too.
+     * back to the text too. The open tile's border shows whole all the while. The draft is taller
+     * than the panel can grow, so the panel scrolls, and the words under the tile open its image
+     * with the field ready before main has grown the panel to fit.
      */
     act: async (page) => {
       const text = page.getByTestId("window-description-text");
@@ -1836,17 +2005,40 @@ const SCENES: readonly Scene[] = [
           `globalThis.__calls.filter((call) => call.method === 'setText').at(-1)?.args[0].viewDescriptions[${JSON.stringify(DRAFT_VIEWS[0]?.id)}]`
         );
 
+      const whole = async (when: string) =>
+        assert.deepEqual(
+          await cutRings(page),
+          [],
+          `the open tile's border and the focus ring show whole ${when}`
+        );
+
       await page
         .getByRole("button", { name: /^Show preview of window 1/u })
         .click();
       await text.waitFor();
       assert.equal(await field.count(), 0, "the description shows as text");
+      await page
+        .getByRole("button", { name: /^Hide preview of window 1/u })
+        .click();
+      await text.waitFor({ state: "detached" });
 
-      await text.click();
+      await page
+        .getByRole("button", { name: /^Edit the description of window 1/u })
+        .click();
       await waitForFocus(page, "[data-testid='window-description']");
+      // The image lays out and the field is brought into the short panel before main grows it.
+      await page.evaluate(
+        `document.querySelector("[data-testid='source-preview']").decode().then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))`
+      );
+      await whole("while the field scrolls into the short panel");
+      await fitPanel(page);
+      await whole("once main has grown the panel around the field");
+
       await page.keyboard.type(" Not this.");
+      await whole("as the field grows");
       await page.keyboard.press("Escape");
       await waitForFocus(page, "[data-testid='window-description-text']");
+      await whole("after Escape");
       assert.deepEqual(
         {
           dismissed: await callCount(page, "dismiss"),
@@ -1858,8 +2050,10 @@ const SCENES: readonly Scene[] = [
       );
 
       await text.click();
+      await whole("while the field is edited again");
       await page.keyboard.press("Tab");
       await text.waitFor();
+      await whole("after Tab leaves the field");
       assert.equal(
         await field.count(),
         0,
@@ -1868,9 +2062,12 @@ const SCENES: readonly Scene[] = [
 
       await text.click();
       await page.keyboard.type(" Delivery is the bigger part.");
+      await whole("as the field takes a second line");
       await page.keyboard.press("Enter");
       await text.waitFor();
       await waitForFocus(page, "[data-testid='window-description-text']");
+      await fitPanel(page);
+      await whole("after Return, with the panel fitted again");
       assert.deepEqual(
         {
           field: await field.count(),
@@ -1882,7 +2079,18 @@ const SCENES: readonly Scene[] = [
       );
       await page.mouse.move(1, 1);
     },
-    data: { draft: draft(FULL_DRAFT) },
+    data: {
+      draft: draft({
+        ...FULL_DRAFT,
+        text: {
+          ...FULL_DRAFT.text,
+          todos: [
+            ...FULL_DRAFT.text.todos,
+            todo(3, "Book the lift with facilities"),
+          ],
+        },
+      }),
+    },
     name: "popover-window-description",
     page: "popover",
   },
@@ -4889,17 +5097,12 @@ const shoot = async (
 
     assert.deepEqual(errors, [], "renderer errors");
 
-    const fitted = await page.evaluate<number | undefined>(
-      "globalThis.__fitted"
+    await fitPanel(page);
+    assert.deepEqual(
+      await cutRings(page),
+      [],
+      "every ring drawn in the shot shows whole"
     );
-
-    if (fitted !== undefined && fitted > 0) {
-      await page.setViewportSize({
-        height: Math.min(fitted, 720),
-        width: size.width,
-      });
-      await page.waitForTimeout(150);
-    }
 
     if (scene.page === "popover") {
       const save = page.getByRole("button", { name: /^Save(?:\s|$)/u }).last();
