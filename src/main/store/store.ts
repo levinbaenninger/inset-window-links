@@ -162,6 +162,11 @@ export class CaptureStore {
   >();
   /** Captures whose Discard marker is confirmed on disk: a start finishes their Discard. */
   readonly #marked = new Set<string>();
+  /**
+   * Captures whose record a save moved aside and couldn't put back: it is still the backup. Their
+   * next write or Discard puts it back first, as a start would.
+   */
+  readonly #aside = new Set<string>();
 
   private constructor(root: string, fs: StoreFs) {
     this.#root = root;
@@ -534,19 +539,20 @@ export class CaptureStore {
           this.#fs.rmrf(`${prev}.tmp`),
         ]);
 
+      const undo = draft === undefined ? this.#undo.get(id) : undefined;
+
+      try {
+        await this.#restore(id);
+        await this.#catchUp(id, undo);
+      } catch (error) {
+        // A record left aside, and a pending backup, stay where they are, for the next try.
+        return { kind: "failed", message: saveProblem(error) };
+      }
+
       if (record === entry.record) {
         // Words it holds already stay, as when changes a Discard couldn't undo are kept: a marker
         // left by that Discard must not undo them later.
         return draft === undefined ? { kind: "ok" } : this.#unmarked(id);
-      }
-
-      const undo = draft === undefined ? this.#undo.get(id) : undefined;
-
-      try {
-        await this.#catchUp(id, undo);
-      } catch (error) {
-        // The pending backup stays where it is, for the next try.
-        return { kind: "failed", message: saveProblem(error) };
       }
 
       try {
@@ -676,26 +682,37 @@ export class CaptureStore {
         this.#undo.delete(id);
       }
 
-      await Promise.allSettled([this.#fs.rename(`${target}.prev`, target)]);
+      await this.#putBack(id);
 
       throw error;
     }
   }
 
   /**
-   * Puts back a record a discarded save had only moved aside. If it can't, the record stays aside,
-   * and the next start reads it from there.
+   * Puts back a record a save had only moved aside. If it can't, the record stays aside: the next
+   * write or Discard of the capture puts it back first, and a start reads it from there.
    */
   async #putBack(id: string): Promise<void> {
     const target = this.#record(id);
 
-    const [back] = await Promise.allSettled([
-      this.#fs.rename(`${target}.prev`, target),
-    ]);
-
-    if (back.status === "rejected") {
-      console.error(`Couldn’t put back the record of ${id}`, back.reason);
+    try {
+      await this.#fs.rename(`${target}.prev`, target);
+    } catch (error) {
+      this.#aside.add(id);
+      console.error(`Couldn’t put back the record of ${id}`, error);
     }
+  }
+
+  /** Puts back a record left aside, if there is one. Throws when it can't, and it stays aside. */
+  async #restore(id: string): Promise<void> {
+    if (!this.#aside.has(id)) {
+      return;
+    }
+
+    const target = this.#record(id);
+
+    await this.#fs.rename(`${target}.prev`, target);
+    this.#aside.delete(id);
   }
 
   /**
@@ -775,6 +792,16 @@ export class CaptureStore {
     }
   }
 
+  async #restored(id: string): Promise<MutationOutcome> {
+    try {
+      await this.#restore(id);
+
+      return { kind: "ok" };
+    } catch (error) {
+      return { kind: "failed", message: saveProblem(error) };
+    }
+  }
+
   async #unmarked(id: string): Promise<MutationOutcome> {
     try {
       await this.#unmark(id);
@@ -794,6 +821,10 @@ export class CaptureStore {
     const undo = this.#undo.get(id);
 
     if (undo?.rev !== rev) {
+      // Nothing of `rev` is on disk, so the saved version is back. A record its failed save left
+      // aside goes back now if it can, or before the next write.
+      await Promise.allSettled([this.#restore(id)]);
+
       return { kind: "ok" };
     }
 
@@ -888,7 +919,13 @@ export class CaptureStore {
     this.#epochs.set(id, this.#epoch(id) + 1);
 
     if (rev === null) {
-      return Promise.resolve({ kind: "ok" });
+      // A start puts a record left aside back too, so quitting first loses nothing.
+      return this.#aside.has(id)
+        ? this.#serial(
+            () => this.#restored(id),
+            () => true
+          )
+        : Promise.resolve({ kind: "ok" });
     }
 
     const undo = this.#undo.get(id);
@@ -985,6 +1022,7 @@ export class CaptureStore {
       this.#undo.delete(id);
       this.#marks.delete(id);
       this.#marked.delete(id);
+      this.#aside.delete(id);
       this.#changed();
       await Promise.allSettled([this.#fs.rmrf(trash)]);
 

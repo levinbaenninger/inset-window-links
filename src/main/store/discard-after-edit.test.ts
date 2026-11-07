@@ -1321,6 +1321,164 @@ const leaveFlow = (drafts: DraftStore) => {
   return { asking, flow, heard };
 };
 
+describe("A save the disk refuses to rename in or to roll back", () => {
+  const INTO_RECORD = new Set([
+    `rename ${ID}/record.json.tmp -> ${ID}/record.json`,
+    `rename ${ID}/record.json.prev -> ${ID}/record.json`,
+  ]);
+
+  /**
+   * Two published captures on a crash disk that refuses both renames into the record, until
+   * `healed`. `now` reads the capture's folder as it is, with no start to recover it.
+   */
+  const refusing = async () => {
+    const crash = await crashSetup();
+
+    const healed = crash.disk.fail((op) => INTO_RECORD.has(op), "EACCES");
+
+    const now = async () => {
+      const file = path.join(crash.root, ID, "record.json");
+      const entry = crash.store.get(ID);
+
+      const read = existsSync(file)
+        ? readVersioned(await readFile(file, "utf-8"))
+        : null;
+
+      return {
+        files: await readdirSorted(path.join(crash.root, ID)),
+        index: entry?.kind === "current" ? entry.record.relationship : null,
+        onDisk: read?.kind === "current" ? read.record.relationship : null,
+      };
+    };
+
+    return { ...crash, healed, now };
+  };
+
+  const NEW_TEXT: DraftText = { ...stored, relationship: "NEW title" };
+
+  /** The page saves NEW title, and the disk refuses to rename it in or to roll it back. */
+  const stranded = async () => {
+    const refused = await refusing();
+
+    refused.drafts.edit(ID, NEW_TEXT, stored);
+    refused.drafts.flush(ID);
+    await until(() => refused.drafts.error(ID) !== undefined, 40);
+    await refused.store.idle();
+
+    return { ...refused, failed: await refused.now() };
+  };
+
+  it("puts the saved record back on Retry once the disk lets it, then saves the words, with no restart", async () => {
+    const { drafts, failed, healed, now } = await stranded();
+
+    const refused = await drafts.retry(ID);
+    const whileRefused = await now();
+
+    healed();
+
+    expect({
+      failed,
+      refused,
+      retried: await drafts.retry(ID),
+      saved: await now(),
+      unsaved: drafts.count,
+      whileRefused,
+    }).toStrictEqual({
+      failed: {
+        files: ["record.json.prev", "views"],
+        index: "SAVED title",
+        onDisk: null,
+      },
+      // Putting the record back is what the disk refused, not a record that isn't there.
+      refused: CAUSE,
+      retried: { kind: "ok" },
+      saved: {
+        files: ["record.json", "record.json.prev", "views"],
+        index: "NEW title",
+        onDisk: "NEW title",
+      },
+      unsaved: 0,
+      whileRefused: {
+        files: ["record.json.prev", "views"],
+        index: "SAVED title",
+        onDisk: null,
+      },
+    });
+  });
+
+  it("puts the saved record back on Discard once the disk lets it, with no restart", async () => {
+    const { drafts, healed, now, store } = await stranded();
+
+    healed();
+    drafts.discard(ID);
+    await settled();
+    await store.idle();
+
+    expect({
+      after: await now(),
+      shown: drafts.shown(ID, stored).relationship,
+      undiscarded: drafts.undiscarded(ID),
+      unsaved: drafts.count,
+    }).toStrictEqual({
+      after: {
+        files: ["record.json", "views"],
+        index: "SAVED title",
+        onDisk: "SAVED title",
+      },
+      shown: "SAVED title",
+      undiscarded: false,
+      unsaved: 0,
+    });
+  });
+
+  it("discards a save whose rename in fails while the Discard waits, shows the saved words, and the next save puts the record back first", async () => {
+    const { disk, drafts, healed, now, store } = await refusing();
+
+    const renamingIn = disk.hold(
+      (op) => op === `rename ${ID}/record.json.tmp -> ${ID}/record.json`
+    );
+
+    drafts.edit(ID, DISCARDED_TEXT, stored);
+    drafts.flush(ID);
+    await renamingIn.reached;
+    drafts.discard(ID);
+    renamingIn.release();
+    await store.idle();
+    await settled();
+
+    const discarded = {
+      folder: await now(),
+      shown: drafts.shown(ID, stored).relationship,
+      undiscarded: drafts.undiscarded(ID),
+      unsaved: drafts.count,
+    };
+
+    healed();
+    drafts.edit(ID, NEW_TEXT, stored);
+    drafts.flush(ID);
+    await until(() => drafts.count === 0, 40);
+    await store.idle();
+
+    expect({ discarded, next: await now() }).toStrictEqual({
+      discarded: {
+        folder: {
+          files: ["record.json.discard", "record.json.prev", "views"],
+          index: "SAVED title",
+          onDisk: null,
+        },
+        shown: "SAVED title",
+        undiscarded: false,
+        unsaved: 0,
+      },
+      next: {
+        files: ["record.json", "record.json.prev", "views"],
+        index: "NEW title",
+        onDisk: "NEW title",
+      },
+    });
+  });
+});
+
 describe("After a Discard that couldn't put the saved version back", () => {
   it("keeps the saved version to put back while the user edits, and the next Discard puts it back", async () => {
     const { drafts, healed, reopenedFields, sent, store } =
