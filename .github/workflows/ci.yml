@@ -31,6 +31,28 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
+  # Release runs `pnpm check` on macOS and Windows before it packages, so pull requests run it there too.
+  platform-check:
+    name: Check (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+          - name: Windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
   package:
     name: Package (${{ matrix.name }})
     needs: check
