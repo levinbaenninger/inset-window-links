@@ -15,7 +15,7 @@ import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { RefObject } from "react";
 
-import { DueOptions } from "@/components/due";
+import { DueCalendar } from "@/components/due";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { libraryApi } from "@/lib/bridge";
 import { formatClock, formatPickHint, plural } from "@/lib/format";
+import { afterMenusClose } from "@/lib/menu-keys";
 
 import type { CopyRequest } from "../../../shared/copy";
 import type { MutationOutcome } from "../../../shared/dto";
@@ -292,10 +293,6 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     drafts.setDue(target.id, due, target.text);
   };
 
-  // A row's keys act on that row once it has focus, which a right-click gives it, and the page's
-  // on the open capture, so every menu shows them.
-  const hint = (id: MenuKeyId) => keys(id);
-
   // The same layout as the Due picker: quick days with their dates, then Pick a date… and Clear.
   const dueMenu: MenuEntry = {
     icon: Calendar03Icon,
@@ -311,7 +308,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
         icon: Calendar03Icon,
         kind: "item",
         label: "Pick a date…",
-        run: () => setPickingDue(true),
+        run: () => afterMenusClose(() => setPickingDue(true)),
       },
       ...(target.text.due === null
         ? []
@@ -433,8 +430,10 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     },
   };
 
+  // A row's keys act on that row once it has focus, which a right-click gives it, and the page's
+  // on the open capture, so every menu shows them.
   const copyNote: MenuItem = {
-    hint: hint("copyNote"),
+    hint: keys("copyNote"),
     icon: TextAlignLeftIcon,
     kind: "item",
     label: "Copy as text",
@@ -447,7 +446,7 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     target.reopenable.length === 0
       ? null
       : {
-          hint: hint("reopen"),
+          hint: keys("reopen"),
           icon: RepeatIcon,
           kind: "item",
           label:
@@ -482,16 +481,35 @@ export const useCaptureCommands = (target: CaptureTarget) => {
 
   const dialog = (
     <>
+      {/* The menu's own Pick a date… has been chosen, so the calendar shows straight away. */}
       <Dialog open={pickingDue} onOpenChange={setPickingDue}>
-        <DialogContent className="w-72" onCloseAutoFocus={focusRow}>
+        <DialogContent
+          className="w-fit"
+          onCloseAutoFocus={focusRow}
+          // The day to start from, the Due or today, takes focus rather than the month buttons.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+
+            if (event.currentTarget instanceof HTMLElement) {
+              event.currentTarget
+                .querySelector<HTMLElement>("[data-day][tabindex='0']")
+                ?.focus();
+            }
+          }}
+        >
           <div className="p-1.5">
             <DialogTitle className="sr-only">Due</DialogTitle>
+            <p
+              aria-hidden
+              className="text-muted-foreground flex h-10 items-center px-2 text-xs font-medium"
+            >
+              Due
+            </p>
             <DialogDescription className="sr-only">
               When should this capture be done by?
             </DialogDescription>
-            <DueOptions
+            <DueCalendar
               due={target.text.due}
-              keys={keys("setDue")}
               now={now}
               onClose={() => setPickingDue(false)}
               onPick={(due) => {

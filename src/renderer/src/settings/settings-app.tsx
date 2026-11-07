@@ -206,7 +206,7 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
                 size="sm"
                 variant="outline"
               >
-                Turn on…
+                Turn on
               </Button>
             )}
           </Row>

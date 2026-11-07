@@ -8,12 +8,12 @@ import { cn } from "cn";
 import { useEffect, useRef, useState } from "react";
 import type { ComponentProps, KeyboardEvent, Ref } from "react";
 
+import { Calendar } from "@/components/ui/calendar";
 import { Kbd } from "@/components/ui/kbd";
 import { formatPickHint } from "@/lib/format";
 
 import type { DueDate, DueState } from "../../../shared/due";
 import {
-  DueDateSchema,
   dueDay,
   dueLabel,
   dueLongLabel,
@@ -21,6 +21,7 @@ import {
   dueSentence,
   dueState,
   toDueDate,
+  weekStartDay,
 } from "../../../shared/due";
 
 const MINUTE = 60_000;
@@ -141,11 +142,87 @@ export const DueChip = ({
 const OPTION =
   "focus-visible:bg-accent hover:bg-accent focus-visible:text-accent-foreground flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none";
 
+const CAPTION = new Intl.DateTimeFormat(undefined, {
+  month: "long",
+  year: "numeric",
+});
+
+const WEEKDAY = new Intl.DateTimeFormat(undefined, { weekday: "narrow" });
+
+const FULL_DATE = new Intl.DateTimeFormat(undefined, { dateStyle: "full" });
+
+const WEEK_START = weekStartDay();
+
+/**
+ * Pick a date…: shadcn's Calendar, as in the Shelf. It focuses the due date, or
+ * today when there is none. The arrow keys move the day, Return picks it, and Escape closes only
+ * the picker, never the panel or the capture behind it.
+ */
+export const DueCalendar = ({
+  due,
+  now,
+  onPick,
+  onClose,
+}: {
+  due: DueDate | null;
+  now: Date;
+  onPick: (due: DueDate) => void;
+  onClose: () => void;
+}) => {
+  const day = due === null ? undefined : dueDay(due);
+
+  return (
+    <div
+      data-testid="due-calendar"
+      // Before the day sees it, and never past the picker to the panel or the page.
+      onKeyDownCapture={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <Calendar
+        autoFocus
+        defaultMonth={day ?? now}
+        formatters={{
+          formatCaption: (month) => CAPTION.format(month),
+          formatWeekdayName: (weekday) => WEEKDAY.format(weekday),
+        }}
+        labels={{
+          labelDayButton: (date, modifiers) =>
+            [
+              FULL_DATE.format(date),
+              modifiers.today === true ? "today" : "",
+              modifiers.selected === true ? "selected" : "",
+            ]
+              .filter((part) => part !== "")
+              .join(", "),
+          labelGrid: (month) => CAPTION.format(month),
+        }}
+        mode="single"
+        onSelect={(picked) => {
+          if (picked === undefined) {
+            onClose();
+          } else {
+            onPick(toDueDate(picked));
+          }
+        }}
+        selected={day}
+        today={now}
+        weekStartsOn={WEEK_START}
+      />
+    </div>
+  );
+};
+
 /**
  * Due's quick choices, laid out alike in all three Inset apps: a "Due" header with its key, Today,
  * Tomorrow, This weekend and Next week with their dates, then Pick a date… and, once set, Clear.
- * The arrow keys move between them and Escape closes. The panel shows it in its own flow, so the
- * panel grows to fit; Recent Captures shows it in a popover.
+ * The arrow keys move between them and Escape closes. Pick a date… shows the calendar in their
+ * place. The panel shows it in its own flow, so the panel grows to fit; Recent Captures shows it
+ * in a popover.
  */
 export const DueOptions = ({
   due,
@@ -162,36 +239,17 @@ export const DueOptions = ({
   onClose: () => void;
 }) => {
   const list = useRef<HTMLFieldSetElement>(null);
-  const dateField = useRef<HTMLInputElement>(null);
   const [picking, setPicking] = useState(false);
-  const [typed, setTyped] = useState(due ?? toDueDate(now));
 
   useEffect(() => {
     list.current?.querySelector<HTMLElement>("[data-option]")?.focus();
   }, []);
 
-  useEffect(() => {
-    if (picking) {
-      dateField.current?.focus();
-
-      try {
-        dateField.current?.showPicker();
-      } catch {
-        // The field alone still takes a typed date.
-      }
-    }
-  }, [picking]);
-
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-
-      if (picking) {
-        setPicking(false);
-      } else {
-        onClose();
-      }
+      onClose();
 
       return;
     }
@@ -210,20 +268,9 @@ export const DueOptions = ({
     const step = event.key === "ArrowDown" ? 1 : -1;
     const next = options[(at + step + options.length) % options.length];
 
-    if (
-      next !== undefined &&
-      !(document.activeElement instanceof HTMLInputElement)
-    ) {
+    if (next !== undefined) {
       event.preventDefault();
       next.focus();
-    }
-  };
-
-  const commitTyped = () => {
-    const parsed = DueDateSchema.safeParse(typed);
-
-    if (parsed.success) {
-      onPick(parsed.data);
     }
   };
 
@@ -241,71 +288,50 @@ export const DueOptions = ({
         Due
         <Kbd>{keys}</Kbd>
       </div>
-      {duePresets(now).map((preset) => (
-        <button
-          aria-pressed={preset.due === due}
-          className={OPTION}
-          data-option
-          key={preset.id}
-          onClick={() => onPick(preset.due)}
-          onKeyDown={onKeyDown}
-          type="button"
-        >
-          <span className="flex-1">{preset.label}</span>
-          <span className="text-muted-foreground text-xs tabular-nums">
-            {formatPickHint(dueDay(preset.due), now)}
-          </span>
-        </button>
-      ))}
-      <div className="bg-border -mx-1 my-1 h-px" />
       {picking ? (
-        <form
-          className="flex items-center gap-1.5 px-1 py-1"
-          onSubmit={(event) => {
-            event.preventDefault();
-            commitTyped();
-          }}
-        >
-          <input
-            aria-label="Date"
-            className="border-input bg-background focus-visible:ring-ring/50 focus-visible:border-ring dark:bg-input/30 h-7 min-w-0 flex-1 rounded-md border px-2 text-sm outline-none focus-visible:ring-3"
-            data-option
-            onChange={(event) => setTyped(event.target.value)}
-            onKeyDown={onKeyDown}
-            ref={dateField}
-            type="date"
-            value={typed}
-          />
-          <button
-            className="bg-primary text-primary-foreground hover:bg-primary/80 focus-visible:ring-ring/50 h-7 rounded-md px-2.5 text-xs font-medium outline-none focus-visible:ring-3"
-            type="submit"
-          >
-            Set
-          </button>
-        </form>
+        <DueCalendar due={due} now={now} onClose={onClose} onPick={onPick} />
       ) : (
-        <button
-          className={OPTION}
-          data-option
-          onClick={() => setPicking(true)}
-          onKeyDown={onKeyDown}
-          type="button"
-        >
-          <HugeiconsIcon icon={Calendar03Icon} size={16} />
-          <span className="flex-1">Pick a date…</span>
-        </button>
-      )}
-      {due !== null && (
-        <button
-          className={cn(OPTION, "text-destructive")}
-          data-option
-          onClick={() => onPick(null)}
-          onKeyDown={onKeyDown}
-          type="button"
-        >
-          <HugeiconsIcon icon={CalendarRemove01Icon} size={16} />
-          <span className="flex-1">Clear</span>
-        </button>
+        <>
+          {duePresets(now).map((preset) => (
+            <button
+              aria-pressed={preset.due === due}
+              className={OPTION}
+              data-option
+              key={preset.id}
+              onClick={() => onPick(preset.due)}
+              onKeyDown={onKeyDown}
+              type="button"
+            >
+              <span className="flex-1">{preset.label}</span>
+              <span className="text-muted-foreground text-xs tabular-nums">
+                {formatPickHint(dueDay(preset.due), now)}
+              </span>
+            </button>
+          ))}
+          <div className="bg-border -mx-1 my-1 h-px" />
+          <button
+            className={OPTION}
+            data-option
+            onClick={() => setPicking(true)}
+            onKeyDown={onKeyDown}
+            type="button"
+          >
+            <HugeiconsIcon icon={Calendar03Icon} size={16} />
+            <span className="flex-1">Pick a date…</span>
+          </button>
+          {due !== null && (
+            <button
+              className={cn(OPTION, "text-destructive")}
+              data-option
+              onClick={() => onPick(null)}
+              onKeyDown={onKeyDown}
+              type="button"
+            >
+              <HugeiconsIcon icon={CalendarRemove01Icon} size={16} />
+              <span className="flex-1">Clear</span>
+            </button>
+          )}
+        </>
       )}
     </fieldset>
   );

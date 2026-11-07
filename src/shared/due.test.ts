@@ -11,6 +11,7 @@ import {
   matchesDue,
   parseQuery,
   toDueDate,
+  weekStartDay,
   withDueFilter,
 } from "./due";
 
@@ -120,6 +121,17 @@ describe(dueLabel, () => {
       dueSentence("2026-11-05", at(5)),
       dueSentence("2026-11-09", at(5), "en-GB"),
     ]).toStrictEqual(["Overdue, was due yesterday", "Due today", "Due Monday"]);
+  });
+});
+
+describe(weekStartDay, () => {
+  it("starts the week on the locale's own first day", () => {
+    expect([
+      weekStartDay("en-US"),
+      weekStartDay("de-CH"),
+      weekStartDay("en-GB"),
+      weekStartDay("ar-EG"),
+    ]).toStrictEqual([0, 1, 1, 6]);
   });
 });
 

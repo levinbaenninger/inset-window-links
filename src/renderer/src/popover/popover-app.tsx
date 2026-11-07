@@ -14,7 +14,7 @@ import { AddChips } from "@/components/add-chips";
 import type { AddField } from "@/components/add-chips";
 import { DueChip, DueOptions, useToday } from "@/components/due";
 import { IconButton } from "@/components/icon-button";
-import { SHORTCUTS_ICON, ShortcutList } from "@/components/shortcut-sheet";
+import { ShortcutList } from "@/components/shortcut-sheet";
 import { TodoEditor } from "@/components/todo-editor";
 import type { TodoEditorHandle } from "@/components/todo-editor";
 import {
@@ -147,7 +147,8 @@ const PanelScroll = ({
       )}
       data-panel-scroll
     >
-      <div className={cn(fade && "pb-6")} ref={content}>
+      {/* The inset at the top keeps a tile's focus ring and selection border inside the scroll. */}
+      <div className={cn("pt-1", fade && "pb-6")} ref={content}>
         {children}
       </div>
     </div>
@@ -155,20 +156,19 @@ const PanelScroll = ({
 };
 
 /**
- * The title strip: it moves the panel, opens the shortcut sheet, and hides the panel. The title
- * dims while another app has the keyboard. The panel can float in front without it, as when
+ * The title strip: it moves the panel and hides it. The shortcut sheet opens with ⌘/ and from the
+ * app and tray menus, so the compact panel has no button for it. The title dims while another app
+ * has the keyboard. The panel can float in front without it, as when
  * Windows keeps another app in front after a capture; its keys, such as Add Windows, then go to
  * that app, so the strip says to click the panel first.
  */
 const PanelHeader = ({
   title,
   platform,
-  onShortcuts,
   keyHint = false,
 }: {
   title: string;
   platform: KeyPlatform;
-  onShortcuts?: () => void;
   /** Says to click the panel while it lacks the keyboard. */
   keyHint?: boolean;
 }) => {
@@ -197,14 +197,6 @@ const PanelHeader = ({
           </span>
         )}
       </span>
-      {onShortcuts !== undefined && (
-        <IconButton
-          icon={SHORTCUTS_ICON}
-          keys={menuKeyLabel("showShortcuts", platform)}
-          label="Keyboard Shortcuts"
-          onClick={onShortcuts}
-        />
-      )}
       <IconButton
         icon={MinusSignIcon}
         keys="Esc"
@@ -397,7 +389,7 @@ const TextBlock = ({
 }) => {
   const description = useRef<HTMLTextAreaElement>(null);
   const steps = useRef<TodoEditorHandle>(null);
-  const dueButton = useRef<HTMLButtonElement>(null);
+  const dueControls = useRef<HTMLDivElement>(null);
   const [describing, setDescribing] = useState(false);
   const [dueOpen, setDueOpen] = useState(false);
   const now = useToday();
@@ -423,9 +415,16 @@ const TextBlock = ({
 
   const focusTitle = () => title.current?.focus();
 
+  /** Focus goes back to the Due control: the chip once a day is set, else + Due. */
   const closeDue = () => {
     setDueOpen(false);
-    requestAnimationFrame(() => (dueButton.current ?? title.current)?.focus());
+    requestAnimationFrame(() => {
+      const trigger = dueControls.current?.querySelector<HTMLElement>(
+        "[data-testid='due-chip'] button, [data-testid='add-due']"
+      );
+
+      (trigger ?? title.current)?.focus();
+    });
   };
 
   useImperativeHandle(handle, () => ({
@@ -546,7 +545,10 @@ const TextBlock = ({
         </div>
       )}
       {(chips.length > 0 || text.due !== null) && (
-        <div className="border-foreground/10 flex flex-wrap items-center gap-1 border-t px-1.5 py-1.5">
+        <div
+          className="border-foreground/10 flex flex-wrap items-center gap-1 border-t px-1.5 py-1.5"
+          ref={dueControls}
+        >
           {text.due !== null && (
             <DueChip
               aria-expanded={dueOpen}
@@ -555,7 +557,6 @@ const TextBlock = ({
               now={now}
               onClear={() => setText({ ...text, due: null })}
               onClick={() => setDueOpen((open) => !open)}
-              ref={dueButton}
             />
           )}
           <AddChips chips={chips} onAdd={add} />
@@ -645,11 +646,7 @@ const ShortcutsSheet = ({
   shortcut: DraftSnapshot["shortcut"];
 }) => (
   <>
-    <PanelHeader
-      onShortcuts={onDone}
-      platform={platform}
-      title="Keyboard Shortcuts"
-    />
+    <PanelHeader platform={platform} title="Keyboard Shortcuts" />
     <PanelScroll fade>
       <div className="px-3.5">
         <ShortcutList
@@ -925,12 +922,7 @@ const DraftForm = ({
 
   return (
     <>
-      <PanelHeader
-        keyHint
-        onShortcuts={() => setSheet(true)}
-        platform={platform}
-        title="New capture"
-      />
+      <PanelHeader keyHint platform={platform} title="New capture" />
       <PanelScroll>
         <div className="flex flex-col gap-3 px-3.5">
           {snapshot.notice !== null && (

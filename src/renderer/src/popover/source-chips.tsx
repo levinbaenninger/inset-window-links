@@ -3,11 +3,10 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "cn";
 import { useEffect, useRef, useState } from "react";
 
-import {
-  DescribeButton,
-  WINDOW_DESCRIPTION_PLACEHOLDER,
-} from "@/components/describe-button";
+import { DescribeButton } from "@/components/describe-button";
 import { Kbd } from "@/components/ui/kbd";
+import { WindowDescription } from "@/components/window-description";
+import type { WindowDescriptionHandle } from "@/components/window-description";
 import { viewTitle } from "@/lib/format";
 
 import type {
@@ -16,7 +15,6 @@ import type {
   ViewSummary,
 } from "../../../shared/dto";
 import type { ViewDescriptions } from "../../../shared/text";
-import { MAX_VIEW_DESCRIPTION } from "../../../shared/text";
 
 const TILE_IMAGE =
   "border-foreground/10 bg-muted aspect-[16/10] w-full overflow-hidden rounded-md border";
@@ -37,7 +35,7 @@ const SourceChip = ({
   open: boolean;
   description: string;
   onToggle: () => void;
-  /** Opens the window's image with its description field focused. */
+  /** Opens the window's image with its description being edited. */
   onDescribe: () => void;
   onRemove: () => void;
 }) => {
@@ -222,12 +220,39 @@ export const SourceChips = ({
   onRemove: (view: ViewSummary) => void;
 }) => {
   const list = useRef<HTMLUListElement>(null);
-  const field = useRef<HTMLTextAreaElement>(null);
+  const description = useRef<WindowDescriptionHandle>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const count = views.length + pending.length;
   const openIndex = views.findIndex((view) => view.id === openId);
   const open = views[openIndex] ?? null;
   const previewAfter = open === null ? -1 : rowEnd(openIndex, views.length);
+
+  // A click anywhere else in the panel (the title, a field, empty space) closes the open window,
+  // so nothing still looks selected. A key that presses a button there leaves it open.
+  useEffect(() => {
+    if (openId === null) {
+      return;
+    }
+
+    const onClick = (event: MouseEvent) => {
+      const { target } = event;
+      const tiles = list.current;
+
+      if (
+        event.detail > 0 &&
+        target instanceof Node &&
+        tiles !== null &&
+        !tiles.contains(target) &&
+        tiles.closest("main")?.contains(target) === true
+      ) {
+        setOpenId(null);
+      }
+    };
+
+    document.addEventListener("click", onClick, true);
+
+    return () => document.removeEventListener("click", onClick, true);
+  }, [openId]);
 
   useEffect(() => {
     const last = list.current?.lastElementChild;
@@ -251,25 +276,18 @@ export const SourceChips = ({
         src={open.imageUrl}
         width={open.width}
       />
-      <textarea
-        aria-label={`Description of window ${openIndex + 1}, ${viewTitle(open.title)}`}
-        className="placeholder:text-muted-foreground border-foreground/10 field-sizing-content max-h-[calc(4lh+1rem)] min-h-[calc(1lh+1rem)] resize-none border-t bg-transparent px-3 py-2 text-sm outline-none"
-        data-testid="window-description"
-        key={open.id}
-        maxLength={MAX_VIEW_DESCRIPTION}
-        onChange={(event) => onDescribe(open, event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Escape" && !event.nativeEvent.isComposing) {
-            event.preventDefault();
-            event.stopPropagation();
-            event.currentTarget.blur();
-          }
-        }}
-        placeholder={WINDOW_DESCRIPTION_PLACEHOLDER}
-        ref={field}
-        rows={1}
-        value={descriptions[open.id] ?? ""}
-      />
+      <div className="border-foreground/10 flex flex-col border-t">
+        <WindowDescription
+          addClassName="mx-2.5 my-1.5"
+          // Four lines at most: the text clamps where the field starts to scroll.
+          className="min-h-[calc(1lh+1rem)] px-3 py-2 text-sm [button&]:line-clamp-4 [textarea&]:max-h-[calc(4lh+1rem)]"
+          key={open.id}
+          name={`window ${openIndex + 1}, ${viewTitle(open.title)}`}
+          onChange={(value) => onDescribe(open, value)}
+          ref={description}
+          value={descriptions[open.id] ?? ""}
+        />
+      </div>
     </li>
   );
 
@@ -291,7 +309,7 @@ export const SourceChips = ({
             key={view.id}
             onDescribe={() => {
               setOpenId(view.id);
-              requestAnimationFrame(() => field.current?.focus());
+              requestAnimationFrame(() => description.current?.edit());
             }}
             onRemove={() => onRemove(view)}
             onToggle={() => setOpenId(open?.id === view.id ? null : view.id)}

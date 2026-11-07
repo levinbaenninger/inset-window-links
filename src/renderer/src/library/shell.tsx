@@ -63,8 +63,9 @@ const SideLists = ({
             <span className="text-muted-foreground text-xs tabular-nums">
               {count}
             </span>
+            {/* The chevron's stroke ends flush with the due chips in the rows above. */}
             <HugeiconsIcon
-              className="text-muted-foreground"
+              className="text-muted-foreground -mr-1.25"
               icon={ArrowRight01Icon}
               size={14}
             />
@@ -214,7 +215,7 @@ export const Shell = () => {
               query={query}
             />
           </div>
-          <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+          <nav className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-3">
             {sideList !== undefined && (
               <button
                 className={ROW}

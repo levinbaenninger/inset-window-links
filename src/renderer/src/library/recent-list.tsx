@@ -398,7 +398,12 @@ const CurrentRow = ({
 
   return (
     <li>
+      {/*
+       * Not modal, so a click on search or another field while the menu is open goes there and
+       * the row lets go; a click on empty space only closes the menu, and focus comes back here.
+       */}
       <ContextMenu
+        modal={false}
         onOpenChange={(open) => {
           setMenuOpen(open);
 

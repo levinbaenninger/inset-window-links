@@ -99,6 +99,31 @@ export const duePresets = (now: Date): readonly DuePreset[] => {
   ];
 };
 
+type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+const WEEKDAYS: readonly Weekday[] = [0, 1, 2, 3, 4, 5, 6];
+
+/** What Intl.Locale tells of a week; older engines name it a property, newer a method. */
+interface WeekInfoLocale {
+  readonly getWeekInfo?: () => { readonly firstDay: number };
+  readonly weekInfo?: { readonly firstDay: number };
+}
+
+/**
+ * The day a locale's weeks start on, as Date#getDay counts (Sunday is 0), so the calendar's
+ * columns match the system: Monday in most of Europe, Sunday in the US. Monday when the engine
+ * can't say. The same rule as the Shelf's.
+ */
+export const weekStartDay = (locale?: string): Weekday => {
+  const info: Intl.Locale & WeekInfoLocale = new Intl.Locale(
+    locale ?? new Intl.DateTimeFormat().resolvedOptions().locale
+  );
+
+  const first = info.getWeekInfo?.().firstDay ?? info.weekInfo?.firstDay ?? 1;
+
+  return WEEKDAYS[first % WEEK] ?? MONDAY;
+};
+
 /** How a due date reads against today: the chip's colour comes from this. */
 export type DueState = "overdue" | "today" | "upcoming";
 

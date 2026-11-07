@@ -24,10 +24,6 @@ import type { KeyboardEvent } from "react";
 
 import { AddChips } from "@/components/add-chips";
 import type { AddField } from "@/components/add-chips";
-import {
-  DescribeButton,
-  WINDOW_DESCRIPTION_PLACEHOLDER,
-} from "@/components/describe-button";
 import { DueChip, DueOptions, useToday } from "@/components/due";
 import { IconButton } from "@/components/icon-button";
 import { TodoEditor } from "@/components/todo-editor";
@@ -44,6 +40,7 @@ import {
   PopoverAnchor,
   PopoverContent,
 } from "@/components/ui/popover";
+import { WindowDescription } from "@/components/window-description";
 import { libraryApi } from "@/lib/bridge";
 import { useCommands } from "@/lib/commands";
 import { formatWhen, viewTitle } from "@/lib/format";
@@ -64,7 +61,6 @@ import type { DraftText, Todo } from "../../../shared/text";
 import {
   MAX_DESCRIPTION,
   MAX_RELATIONSHIP,
-  MAX_VIEW_DESCRIPTION,
   storedText,
 } from "../../../shared/text";
 import type { Feedback } from "./capture-commands";
@@ -120,7 +116,7 @@ const OriginButton = ({
   return (
     <button
       aria-label={`${ORIGIN_VERB[origin.kind]}: ${origin.label}`}
-      className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex max-w-1/2 min-w-0 shrink-0 items-center gap-1 rounded-sm px-0.5 text-xs outline-none focus-visible:ring-3"
+      className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 -mr-0.5 flex max-w-1/2 min-w-0 shrink-0 items-center gap-1 rounded-sm px-0.5 text-xs outline-none focus-visible:ring-3"
       onClick={onOpen}
       title={`${ORIGIN_VERB[origin.kind]}: ${origin.detail}`}
       type="button"
@@ -172,8 +168,8 @@ const fieldKeys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
 
 /**
  * A window as a card: its image opens the viewer, its origin opens the window again. Its
- * description sits under the title; until there is one, a quiet "+ Description" under the title
- * adds it.
+ * description sits under the title as plain text, edited in place on a click; until there is
+ * one, a quiet "+ Description" under the title adds it.
  */
 const SourceCard = ({
   captureId,
@@ -194,9 +190,6 @@ const SourceCard = ({
   onReopen: (view: ViewSummary) => void;
   onCopyImage: () => Promise<boolean>;
 }) => {
-  const field = useRef<HTMLTextAreaElement>(null);
-  const [adding, setAdding] = useState(false);
-  const shown = adding || description !== "";
   const name = `window ${index + 1}, ${viewTitle(view.title)}`;
 
   return (
@@ -227,7 +220,8 @@ const SourceCard = ({
         </Link>
         <CopyImage onCopy={onCopyImage} />
       </div>
-      <div className="flex min-w-0 items-center gap-2 px-0.5">
+      {/* The origin ends flush with the image's right edge. */}
+      <div className="flex min-w-0 items-center gap-2 pl-0.5">
         <p
           className="min-w-0 flex-1 truncate text-sm font-medium"
           data-testid="record-source-title"
@@ -247,37 +241,14 @@ const SourceCard = ({
           />
         )}
       </div>
-      {shown ? (
-        <textarea
-          aria-label={`Description of ${name}`}
-          className={cn(
-            FIELD,
-            "placeholder:text-muted-foreground text-muted-foreground focus:text-foreground -mt-1 field-sizing-content resize-none bg-transparent text-sm leading-relaxed outline-none"
-          )}
-          data-testid="window-description"
-          maxLength={MAX_VIEW_DESCRIPTION}
-          onBlur={() => {
-            setAdding(false);
-            onLeave();
-          }}
-          onChange={(event) => onDescribe(event.target.value)}
-          onKeyDown={fieldKeys}
-          placeholder={WINDOW_DESCRIPTION_PLACEHOLDER}
-          ref={field}
-          rows={1}
-          value={description}
-        />
-      ) : (
-        <DescribeButton
-          className="-mt-1.5"
-          description={description}
-          label={name}
-          onClick={() => {
-            setAdding(true);
-            requestAnimationFrame(() => field.current?.focus());
-          }}
-        />
-      )}
+      <WindowDescription
+        addClassName="-mt-1.5"
+        className="-mx-1.5 -mt-1 rounded-md px-1.5 text-sm leading-relaxed transition-colors"
+        name={name}
+        onChange={onDescribe}
+        onLeave={onLeave}
+        value={description}
+      />
     </li>
   );
 };
@@ -657,13 +628,7 @@ const Record = ({
   return (
     <>
       <PaneHeader>
-        <p className="text-muted-foreground mr-auto truncate text-xs">
-          {formatWhen(detail.createdAt)}
-          {detail.updatedAt === detail.createdAt
-            ? ""
-            : ` · edited ${formatWhen(detail.updatedAt)}`}
-          <StatusNote status={detail.status} />
-        </p>
+        <span className="flex-1" />
         {shown !== null && (
           <HeaderFeedback
             feedback={shown}
@@ -677,7 +642,9 @@ const Record = ({
             isDone ? commands.backToList.run() : commands.done.run()
           }
         />
+        {/* Not modal: a click on search or a field while it is open goes there. */}
         <DropdownMenu
+          modal={false}
           onOpenChange={(open) => {
             setMoreOpen(open);
 
@@ -718,7 +685,7 @@ const Record = ({
         data-copy-entry
         ref={page}
       >
-        <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 pt-2 pb-10">
+        <div className="mx-auto flex min-h-full max-w-3xl flex-col gap-6 px-8 pt-2 pb-4">
           <div className="flex flex-col gap-2">
             <div className="flex flex-col gap-1">
               {/* Leaving a field saves at once instead of after the pause. */}
@@ -892,6 +859,16 @@ const Record = ({
               ))}
             </ul>
           </section>
+          <footer
+            className="text-muted-foreground/80 mt-auto pt-4 text-xs"
+            data-testid="record-footer"
+          >
+            Captured {formatWhen(detail.createdAt)}
+            {detail.updatedAt === detail.createdAt
+              ? ""
+              : ` · edited ${formatWhen(detail.updatedAt)}`}
+            <StatusNote status={detail.status} />
+          </footer>
         </div>
       </main>
     </>

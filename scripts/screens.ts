@@ -702,9 +702,336 @@ const waitForRowFocus = (page: Page, id: string) =>
     `focus on the row of ${id}`
   );
 
+/**
+ * Every control with a ring (a focus ring or a selection border) whose ring a scrolling or masked
+ * box around it would cut off, even scrolled as far as it goes that way. A ring is drawn 3 px
+ * outside the control, so that much room must lie inside each such box. Controls scrolled partly
+ * out of sight are left out: scrolling brings them in.
+ */
+const clippedRings = (page: Page) =>
+  page.evaluate<string[]>(`(() => {
+    const RING = 3;
+    const ringed = /(?:^|\\s)\\S*ring-(?:\\d|\\[)/u;
+    const clips = (node) => {
+      const style = getComputedStyle(node);
+
+      return style.overflowX !== "visible" || style.overflowY !== "visible" || (style.maskImage ?? "none") !== "none";
+    };
+    const cut = [];
+
+    for (const control of document.querySelectorAll("button, a[href], input, textarea, select, [tabindex]")) {
+      const box = control.getBoundingClientRect();
+
+      if (control.tabIndex < 0 || control.matches(":disabled") || box.width === 0 || !ringed.test(control.getAttribute("class") ?? "")) {
+        continue;
+      }
+
+      for (let clip = control.parentElement; clip !== null; clip = clip.parentElement) {
+        if (!clips(clip)) {
+          continue;
+        }
+
+        const outer = clip.getBoundingClientRect();
+        const left = outer.left + clip.clientLeft;
+        const top = outer.top + clip.clientTop;
+        const right = left + clip.clientWidth;
+        const bottom = top + clip.clientHeight;
+
+        if (box.left < left - 0.5 || box.top < top - 0.5 || box.right > right + 0.5 || box.bottom > bottom + 0.5) {
+          break;
+        }
+
+        const room = [
+          clip.scrollTop <= 0 ? box.top - top : RING,
+          clip.scrollTop + clip.clientHeight >= clip.scrollHeight - 1 ? bottom - box.bottom : RING,
+          clip.scrollLeft <= 0 ? box.left - left : RING,
+          clip.scrollLeft + clip.clientWidth >= clip.scrollWidth - 1 ? right - box.right : RING,
+        ];
+
+        if (Math.min(...room) < RING - 0.5) {
+          cut.push((control.getAttribute("aria-label") ?? control.textContent ?? control.tagName).trim().slice(0, 60));
+          break;
+        }
+      }
+    }
+
+    return cut;
+  })()`);
+
+/**
+ * Where the capture's metadata footer sits: last in the capture, within 24 px of the pane's foot
+ * once scrolled to the end, and nowhere in the header any more. Scrolls back to the top after.
+ */
+const footerPlace = (page: Page) =>
+  page.evaluate<{
+    header: boolean;
+    last: boolean;
+    room: boolean;
+    text: string;
+  }>(`(() => {
+    const pane = document.querySelector("main[data-copy-entry]");
+    const footer = document.querySelector("[data-testid='record-footer']");
+    const header = document.querySelector("button[aria-label='More']")?.closest("header")?.textContent ?? "";
+
+    pane.scrollTop = pane.scrollHeight;
+    const gap = pane.getBoundingClientRect().bottom - footer.getBoundingClientRect().bottom;
+    pane.scrollTop = 0;
+
+    return {
+      header: /AM|PM/u.test(header),
+      last: footer === footer.parentElement.lastElementChild,
+      room: gap >= 0 && gap <= 24,
+      text: footer.textContent,
+    };
+  })()`);
+
+/**
+ * How far each trailing action stops short of the edge it should end on, in CSS pixels: a window's
+ * origin button against its image, and the Snoozed and Done chevrons (the stroke's end) against
+ * the due chips in the rows above.
+ */
+const trailingEdges = (page: Page) =>
+  page.evaluate<{ origins: number[]; chevrons: number[] }>(`(() => {
+    const half = (value) => Math.round(value * 2) / 2;
+    const chip = document.querySelector("[data-testid='due-badge']").getBoundingClientRect().right;
+    const stroke = (1.5 * 14) / 24 / 2;
+
+    return {
+      chevrons: [...document.querySelectorAll("aside footer li svg path")].map(
+        (path) => half(chip - path.getBoundingClientRect().right - stroke)
+      ),
+      origins: [...document.querySelectorAll("[data-testid='record-source']")].map((card) => {
+        const image = card.querySelector("a").getBoundingClientRect().right;
+        const origin = card.querySelector("button[aria-label^='Open the']");
+
+        return half(image - origin.lastElementChild.getBoundingClientRect().right);
+      }),
+    };
+  })()`);
+
+/** A next step's row: how far apart the centres of its circle, field and × are, and its height. */
+const stepRow = (page: Page, label: string) =>
+  page.evaluate<{ spread: number; height: number }>(`(() => {
+    const field = document.querySelector(${JSON.stringify(`[aria-label='${label}']`)});
+    const row = field.closest("li");
+    const centre = (node) => {
+      const box = node.getBoundingClientRect();
+
+      return box.top + box.height / 2;
+    };
+    const centres = [row.querySelector("[role='checkbox']"), field, row.querySelector("button[aria-label^='Remove']")].map(centre);
+
+    return {
+      height: row.getBoundingClientRect().height,
+      spread: Math.max(...centres) - Math.min(...centres),
+    };
+  })()`);
+
+const MENU_GONE = "document.querySelector('[role=menu]') === null";
+
+/** The day in the Due calendar that has focus, by its accessible name, or null. */
+const focusedDay = (page: Page) =>
+  page.evaluate<string | null>(
+    `document.activeElement?.closest("[data-testid='due-calendar']") ? document.activeElement.getAttribute("aria-label") : null`
+  );
+
+/** The Due the panel last sent main. */
+const sentDue = (page: Page) =>
+  page.evaluate<string | null>(
+    "globalThis.__calls.filter((call) => call.method === 'setText').at(-1)?.args[0].due ?? null"
+  );
+
+/** The accessible names of the capture panel's header buttons, in order. */
+const headerButtons = (page: Page) =>
+  page
+    .locator("header")
+    .first()
+    .getByRole("button")
+    .evaluateAll((buttons) =>
+      buttons.map((button) => button.getAttribute("aria-label"))
+    );
+
 const SCENES: readonly Scene[] = [
+  {
+    act: async (page) => {
+      assert.deepEqual(
+        await clippedRings(page),
+        [],
+        "no ring is cut off with every tile closed"
+      );
+      await page
+        .getByRole("button", { name: /^Show preview of window 1/u })
+        .click();
+      await page.getByTestId("source-preview").waitFor();
+      assert.deepEqual(
+        await clippedRings(page),
+        [],
+        "the open tile's border and every focus ring fit inside the panel"
+      );
+      await page
+        .getByRole("button", { name: /^Hide preview of window 1/u })
+        .evaluate((node) => node.focus({ focusVisible: true }));
+    },
+    data: { draft: draft(FULL_DRAFT) },
+    name: "popover-tile-ring",
+    page: "popover",
+  },
+  {
+    /*
+     * A click elsewhere in the panel lets go of the open window: on empty space, and on the
+     * title, which then takes the keyboard. A key that presses a button elsewhere leaves it open.
+     */
+    act: async (page) => {
+      const preview = page.getByTestId("source-preview");
+
+      const open = async () => {
+        await page
+          .getByRole("button", { name: /^Show preview of window 1/u })
+          .click();
+        await preview.waitFor();
+      };
+
+      await open();
+
+      const footer = await page.locator("main footer").last().boundingBox();
+
+      assert.ok(footer !== null);
+      await page.mouse.click(
+        footer.x + footer.width / 2,
+        footer.y + footer.height / 2
+      );
+      await preview.waitFor({ state: "detached" });
+      assert.equal(
+        await page.evaluate<string>(
+          "document.activeElement === document.body ? 'nothing' : document.activeElement.outerHTML.slice(0, 120)"
+        ),
+        "nothing",
+        "a click on empty space lets go of the window and of the focus"
+      );
+
+      await open();
+      await page
+        .getByTestId("due-chip")
+        .getByRole("button")
+        .first()
+        .evaluate((node) => node.focus());
+      await page.keyboard.press("Enter");
+      await page.getByTestId("due-options").waitFor();
+      await page.keyboard.press("Escape");
+      await page.getByTestId("due-options").waitFor({ state: "detached" });
+      await waitForFocus(page, "[data-testid='due-chip'] button");
+      assert.equal(
+        await preview.count(),
+        1,
+        "a key that presses a button elsewhere leaves the window open"
+      );
+
+      await page.locator("#relationship").click();
+      await preview.waitFor({ state: "detached" });
+      await waitForFocus(page, "#relationship");
+      assert.equal(
+        await page.locator("[aria-expanded='true']").count(),
+        0,
+        "no tile stays selected"
+      );
+      await page.mouse.move(1, 1);
+    },
+    data: { draft: draft(FULL_DRAFT) },
+    name: "popover-click-away",
+    page: "popover",
+  },
+  {
+    /*
+     * A click elsewhere lets go of what has focus. Search takes it from a row, empty space takes
+     * it from a field. With a row's menu open, empty space only closes the menu and focus comes
+     * back to the row (Round 4); search or a field takes the focus. The ⋯ menu does the same.
+     */
+    act: async (page) => {
+      const rows = page.getByTestId("recent-item");
+      const search = page.getByRole("textbox", { name: /^Search captures/u });
+      const title = page.getByTestId("record-relationship");
+      const menu = page.getByRole("menu");
+
+      const where = () =>
+        page.evaluate<string>(`(() => {
+          const active = document.activeElement;
+
+          if (active === document.body) return "nothing";
+          if (active.closest("[data-testid='recent-item']") !== null) return "row";
+          if (active.matches("input[aria-label^='Search captures']")) return "search";
+          if (active.matches("[data-testid='record-relationship']")) return "title";
+
+          return active.outerHTML.slice(0, 60);
+        })()`);
+
+      await rows.nth(0).focus();
+      await search.click();
+      assert.equal(await where(), "search", "search takes focus from a row");
+
+      await title.click();
+      await page.mouse.click(820, 540);
+      assert.equal(
+        await where(),
+        "nothing",
+        "empty space takes it from a field"
+      );
+
+      // A person never clicks within a frame of a menu opening; the menu listens for clicks
+      // outside it only once it has settled.
+      await rows.nth(1).click({ button: "right" });
+      await menu.waitFor();
+      await page.waitForTimeout(150);
+      // Empty sidebar space, left of where the menu opens.
+      await page.mouse.click(30, 460);
+      await until(page, MENU_GONE, "the row menu closing on empty space");
+      await waitForRowFocus(page, uuid(2));
+
+      await rows.nth(1).click({ button: "right" });
+      await menu.waitFor();
+      await page.waitForTimeout(150);
+      await search.click();
+      await until(page, MENU_GONE, "the row menu closing on a click on search");
+      await page.waitForTimeout(200);
+      assert.equal(
+        await where(),
+        "search",
+        "with a row's menu open, a click on search goes there"
+      );
+
+      await page.getByRole("button", { name: "More" }).click();
+      await menu.waitFor();
+      await page.waitForTimeout(150);
+      // The title's start, clear of the menu.
+      await title.click({ position: { x: 24, y: 12 } });
+      await until(
+        page,
+        MENU_GONE,
+        "the ⋯ menu closing on a click on the title"
+      );
+      await page.waitForTimeout(200);
+      assert.equal(
+        await where(),
+        "title",
+        "with the ⋯ menu open, a click on a field goes there"
+      );
+
+      await page.mouse.click(820, 540);
+      assert.equal(await where(), "nothing");
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(2)}`,
+    name: "library-click-away",
+    page: "library",
+  },
   { data: { draft: draft() }, name: "popover-empty", page: "popover" },
   {
+    act: async (page) => {
+      assert.deepEqual(
+        await headerButtons(page),
+        ["Hide panel"],
+        "the compact panel's header has no Keyboard Shortcuts button"
+      );
+    },
     data: { draft: draft(FULL_DRAFT) },
     name: "popover-filled",
     page: "popover",
@@ -1212,12 +1539,46 @@ const SCENES: readonly Scene[] = [
     platforms: ["macos"],
   },
   {
+    act: async (page) => {
+      assert.deepEqual(
+        await footerPlace(page),
+        {
+          header: false,
+          last: true,
+          room: true,
+          text: "Captured Today, 10:42 AM",
+        },
+        "after a long capture, the footer is the last thing, at the foot of the scroll"
+      );
+      const edges = await trailingEdges(page);
+
+      assert.ok(
+        [...edges.origins, ...edges.chevrons].every(
+          (gap) => Math.abs(gap) <= 1
+        ) &&
+          edges.origins.length === 3 &&
+          edges.chevrons.length === 2,
+        `trailing actions end flush right: ${JSON.stringify(edges)}`
+      );
+    },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
     name: "library-capture",
     page: "library",
   },
   {
+    act: async (page) => {
+      assert.deepEqual(
+        await footerPlace(page),
+        {
+          header: false,
+          last: true,
+          room: true,
+          text: "Captured Today, 9:05 AM",
+        },
+        "under a short capture, the footer sits at the bottom of the pane"
+      );
+    },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(2)}`,
     name: "library-capture-short",
@@ -1231,6 +1592,44 @@ const SCENES: readonly Scene[] = [
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
     name: "library-sidebar-hidden",
+    page: "library",
+  },
+  {
+    /*
+     * A next step being edited: its circle, its field and its × share one centre line, and the
+     * row is as tall as when it is only shown.
+     */
+    act: async (page) => {
+      const step = page.getByRole("textbox", {
+        name: "Next step 2",
+        exact: true,
+      });
+
+      await step.click();
+      const editing = await stepRow(page, "Next step 2");
+
+      await page.mouse.click(820, 600);
+      const shown = await stepRow(page, "Next step 2");
+
+      assert.ok(
+        editing.spread <= 0.5 && editing.height === shown.height,
+        `one centre line, no jump: ${JSON.stringify({ editing, shown })}`
+      );
+
+      await page
+        .getByRole("button", { exact: true, name: "Next step" })
+        .click();
+      await waitForFocus(page, "[aria-label='Next step 4']");
+      const added = await stepRow(page, "Next step 4");
+
+      assert.ok(
+        added.spread <= 0.5 && added.height === shown.height,
+        `a new step too: ${JSON.stringify(added)}`
+      );
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-step-editing",
     page: "library",
   },
   {
@@ -1263,7 +1662,21 @@ const SCENES: readonly Scene[] = [
   },
   {
     act: async (page) => {
+      assert.deepEqual(
+        await clippedRings(page),
+        [],
+        "no ring is cut off in the sidebar or the capture"
+      );
       await page.getByRole("button", { name: /^Done/u }).click();
+      await page.getByRole("button", { exact: true, name: "Done" }).waitFor();
+      assert.deepEqual(
+        await clippedRings(page),
+        [],
+        "the back row at the top of the Done list keeps its ring"
+      );
+      await page
+        .getByRole("button", { exact: true, name: "Done" })
+        .evaluate((node) => node.focus({ focusVisible: true }));
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(4)}`,
@@ -1298,6 +1711,100 @@ const SCENES: readonly Scene[] = [
     page: "popover",
   },
   {
+    /*
+     * Pick a date… in the panel: the calendar focuses today, the arrows move the day, Escape
+     * closes only the calendar and gives focus back to + Due, and Return picks the day.
+     */
+    act: async (page) => {
+      const calendar = page.getByTestId("due-calendar");
+
+      const pickDate = async (trigger: string) => {
+        await page.locator(trigger).click();
+        await page.getByRole("button", { name: "Pick a date…" }).click();
+        await calendar.waitFor();
+      };
+
+      await pickDate("[data-testid='add-due']");
+      assert.equal(await focusedDay(page), "Thursday, November 5, 2026, today");
+      await page.keyboard.press("ArrowRight");
+      assert.equal(await focusedDay(page), "Friday, November 6, 2026");
+      await page.keyboard.press("ArrowDown");
+      assert.equal(await focusedDay(page), "Friday, November 13, 2026");
+      await page.keyboard.press("Escape");
+      await calendar.waitFor({ state: "detached" });
+      await waitForFocus(page, "[data-testid='add-due']");
+      assert.deepEqual(
+        {
+          dismissed: await callCount(page, "dismiss"),
+          due: await sentDue(page),
+        },
+        { dismissed: 0, due: null },
+        "Escape closes only the calendar: the panel stays, with no Due"
+      );
+
+      await pickDate("[data-testid='add-due']");
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Enter");
+      await calendar.waitFor({ state: "detached" });
+      await waitForFocus(page, "[data-testid='due-chip'] button");
+      assert.equal(await sentDue(page), "2026-11-06");
+
+      await pickDate("[data-testid='due-chip'] button:first-child");
+      assert.equal(
+        await focusedDay(page),
+        "Friday, November 6, 2026, selected"
+      );
+    },
+    data: { draft: draft(TITLE_ONLY_DRAFT) },
+    name: "popover-due-calendar",
+    page: "popover",
+  },
+  {
+    act: async (page) => {
+      const calendar = page.getByTestId("due-calendar");
+      const chip = page.getByTestId("due-chip").getByRole("button").first();
+
+      const pickDate = async () => {
+        await chip.click();
+        await page.getByRole("button", { name: "Pick a date…" }).click();
+        await calendar.waitFor();
+      };
+
+      await pickDate();
+      assert.equal(
+        await focusedDay(page),
+        "Thursday, November 5, 2026, today, selected"
+      );
+      await page.keyboard.press("ArrowRight");
+      assert.equal(await focusedDay(page), "Friday, November 6, 2026");
+      await page.keyboard.press("ArrowLeft");
+      await page.keyboard.press("ArrowLeft");
+      assert.equal(await focusedDay(page), "Wednesday, November 4, 2026");
+      await page.keyboard.press("Escape");
+      await calendar.waitFor({ state: "detached" });
+      await waitForFocus(page, "[data-testid='due-chip'] button");
+      assert.equal(
+        await page.getByTestId("record-relationship").count(),
+        1,
+        "Escape closes only the calendar; the capture stays open"
+      );
+
+      await pickDate();
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Enter");
+      await calendar.waitFor({ state: "detached" });
+      await page.waitForFunction(
+        "globalThis.__screens.data.captures[0].due === '2026-11-06'"
+      );
+      await waitForFocus(page, "[data-testid='due-chip'] button");
+      await pickDate();
+    },
+    data: { captures: CAPTURES },
+    hash: `/captures/${uuid(1)}`,
+    name: "library-due-calendar",
+    page: "library",
+  },
+  {
     act: async (page) => {
       await page.getByTestId("add-due").click();
       await page.getByTestId("due-options").waitFor();
@@ -1310,11 +1817,70 @@ const SCENES: readonly Scene[] = [
     page: "popover",
   },
   {
+    /*
+     * A window's description in the panel reads as plain text. A click edits it, Return goes back
+     * to the text with focus on it, Escape puts back what it said, and leaving the field goes
+     * back to the text too.
+     */
     act: async (page) => {
+      const text = page.getByTestId("window-description-text");
+      const field = page.getByTestId("window-description");
+
+      const said =
+        "The total row is CHF 260 over the cap; chairs and delivery cause it.";
+
+      const committed = `${said} Delivery is the bigger part.`;
+
+      const sent = () =>
+        page.evaluate<string | undefined>(
+          `globalThis.__calls.filter((call) => call.method === 'setText').at(-1)?.args[0].viewDescriptions[${JSON.stringify(DRAFT_VIEWS[0]?.id)}]`
+        );
+
       await page
         .getByRole("button", { name: /^Show preview of window 1/u })
         .click();
-      await page.getByTestId("window-description").waitFor();
+      await text.waitFor();
+      assert.equal(await field.count(), 0, "the description shows as text");
+
+      await text.click();
+      await waitForFocus(page, "[data-testid='window-description']");
+      await page.keyboard.type(" Not this.");
+      await page.keyboard.press("Escape");
+      await waitForFocus(page, "[data-testid='window-description-text']");
+      assert.deepEqual(
+        {
+          dismissed: await callCount(page, "dismiss"),
+          sent: await sent(),
+          text: await text.textContent(),
+        },
+        { dismissed: 0, sent: said, text: said },
+        "Escape puts back what it said, and the panel stays"
+      );
+
+      await text.click();
+      await page.keyboard.press("Tab");
+      await text.waitFor();
+      assert.equal(
+        await field.count(),
+        0,
+        "leaving the field goes back to the text"
+      );
+
+      await text.click();
+      await page.keyboard.type(" Delivery is the bigger part.");
+      await page.keyboard.press("Enter");
+      await text.waitFor();
+      await waitForFocus(page, "[data-testid='window-description-text']");
+      assert.deepEqual(
+        {
+          field: await field.count(),
+          sent: await sent(),
+          text: await text.textContent(),
+        },
+        { field: 0, sent: committed, text: committed },
+        "Return goes back to the text, with what was typed"
+      );
+      await page.mouse.move(1, 1);
     },
     data: { draft: draft(FULL_DRAFT) },
     name: "popover-window-description",
@@ -1322,7 +1888,18 @@ const SCENES: readonly Scene[] = [
   },
   {
     act: async (page) => {
-      await page.getByRole("button", { name: "Keyboard Shortcuts" }).click();
+      // ⌘/ opens it, as the app and tray menus do.
+      await sendCommand(page, "showShortcuts");
+      await page.getByTestId("shortcut-list").waitFor();
+      assert.deepEqual(
+        await headerButtons(page),
+        ["Hide panel"],
+        "the sheet's header has no button for itself either"
+      );
+      await page.keyboard.press("Escape");
+      await page.getByTestId("shortcut-list").waitFor({ state: "detached" });
+      await waitForFocus(page, "#relationship");
+      await sendCommand(page, "showShortcuts");
       await page.getByTestId("shortcut-list").waitFor();
     },
     data: { draft: draft(FULL_DRAFT) },
@@ -1449,8 +2026,11 @@ const SCENES: readonly Scene[] = [
     act: async (page) => {
       await page.getByTestId("due-chip").getByRole("button").first().click();
       await page.getByRole("button", { name: "Pick a date…" }).click();
-      await page.getByLabel("Date", { exact: true }).fill("2026-11-19");
-      await page.getByRole("button", { name: "Set", exact: true }).click();
+      await page.getByTestId("due-calendar").waitFor();
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+      assert.equal(await focusedDay(page), "Thursday, November 19, 2026");
+      await page.keyboard.press("Enter");
       await page.waitForFunction(
         "globalThis.__screens.data.captures[0].due === '2026-11-19'"
       );
@@ -1500,12 +2080,45 @@ const SCENES: readonly Scene[] = [
   },
   {
     act: async (page) => {
-      await page.getByTestId("recent-item").nth(1).click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Due", exact: true }).hover();
-      await page
-        .getByRole("menuitem", { name: "Pick a date…", exact: true })
-        .click();
-      await page.getByRole("dialog").waitFor();
+      const calendar = page.getByTestId("due-calendar");
+
+      const pickDate = async () => {
+        await page.getByTestId("recent-item").nth(1).click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Due", exact: true }).hover();
+        await page
+          .getByRole("menuitem", { name: "Pick a date…", exact: true })
+          .click();
+        await calendar.waitFor();
+      };
+
+      // The menu's Pick a date… opens the calendar at once, on the row's own Due.
+      await pickDate();
+      assert.equal(
+        await focusedDay(page),
+        "Tuesday, November 3, 2026, selected"
+      );
+      await page.keyboard.press("ArrowRight");
+      assert.equal(await focusedDay(page), "Wednesday, November 4, 2026");
+      await page.keyboard.press("Escape");
+      await calendar.waitFor({ state: "detached" });
+      await waitForRowFocus(page, uuid(2));
+      assert.equal(
+        await page.evaluate<string>(
+          "globalThis.__screens.data.captures[1].due"
+        ),
+        "2026-11-03",
+        "Escape picks nothing"
+      );
+
+      await pickDate();
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Enter");
+      await calendar.waitFor({ state: "detached" });
+      await page.waitForFunction(
+        "globalThis.__screens.data.captures[1].due === '2026-11-04'"
+      );
+      await waitForRowFocus(page, uuid(2));
+      await pickDate();
     },
     data: { captures: CAPTURES },
     hash: `/captures/${uuid(1)}`,
@@ -1514,13 +2127,52 @@ const SCENES: readonly Scene[] = [
   },
   {
     act: async (page) => {
-      await page.getByTestId("describe-window").first().click();
-      const description = page.getByTestId("window-description").first();
+      const field = page.getByTestId("window-description");
+      const text = page.getByTestId("window-description-text");
+      const add = page.getByTestId("describe-window").first();
+      const words = "The lift booking needs an earlier key handover.";
 
-      await description.fill("The lift booking needs an earlier key handover.");
-      await description.press("Escape");
-      await page.waitForFunction(
-        "globalThis.__screens.data.captures[1].views[0].description === 'The lift booking needs an earlier key handover.'"
+      const saved = (value: string) =>
+        page.waitForFunction(
+          `globalThis.__screens.data.captures[1].views[0].description === ${JSON.stringify(value)}`
+        );
+
+      await add.click();
+      await waitForFocus(page, "[data-testid='window-description']");
+      await field.fill("Something else");
+      await field.press("Escape");
+      await saved("");
+      assert.deepEqual(
+        {
+          field: await field.count(),
+          focused: await add.evaluate((node) => node.matches(":focus")),
+          path: await page.evaluate<string>("location.hash"),
+        },
+        { field: 0, focused: true, path: `#/captures/${uuid(2)}` },
+        "Escape puts back the empty description and keeps the capture open"
+      );
+
+      await add.click();
+      await field.fill("First words");
+      await page.getByTestId("record-relationship").click();
+      await text.waitFor();
+      await saved("First words");
+      assert.equal(
+        await field.count(),
+        0,
+        "a click elsewhere goes back to plain text"
+      );
+
+      await text.click();
+      await field.fill(words);
+      await field.press("Enter");
+      await text.waitFor();
+      await waitForFocus(page, "[data-testid='window-description-text']");
+      await saved(words);
+      assert.deepEqual(
+        { field: await field.count(), text: await text.textContent() },
+        { field: 0, text: words },
+        "Return goes back to plain text"
       );
     },
     data: { captures: CAPTURES },
@@ -2053,9 +2705,10 @@ const SCENES: readonly Scene[] = [
       );
 
       await openMenu();
-      // The menu starts listening for presses outside it a moment after it opens.
+      // The menu starts listening for presses outside it a moment after it opens. Empty sidebar
+      // space, left of the menu: a click on a control would take the focus there instead.
       await page.waitForTimeout(200);
-      await page.mouse.click(760, 520);
+      await page.mouse.click(30, 460);
       await closedOnB("a click outside");
       await seedClipboard(page);
       await page.keyboard.press("Meta+C");
@@ -2723,7 +3376,7 @@ const SCENES: readonly Scene[] = [
       const title = page.getByTestId("record-relationship");
       const description = page.getByTestId("description");
       const step = page.getByRole("textbox", { name: "Next step 2" });
-      const windowDescription = page.getByTestId("window-description").first();
+      const windowText = page.getByTestId("window-description-text").first();
 
       const rowTitle = page
         .getByTestId("recent-item")
@@ -2740,7 +3393,7 @@ const SCENES: readonly Scene[] = [
         row: (await rowTitle.textContent()) ?? "",
         step: await step.inputValue(),
         title: await title.inputValue(),
-        window: await windowDescription.inputValue(),
+        window: (await windowText.textContent()) ?? "",
       });
 
       const saved = {
@@ -2760,7 +3413,8 @@ const SCENES: readonly Scene[] = [
         await title.fill(`${mark} title`);
         await description.fill(`${mark} description`);
         await step.fill(`${mark} step`);
-        await windowDescription.fill(`${mark} window`);
+        await windowText.click();
+        await page.getByTestId("window-description").fill(`${mark} window`);
         await title.focus();
       };
 

@@ -60,6 +60,18 @@ const menus: MountedMenu[] = [];
 const shownMenu = (): MountedMenu | undefined =>
   menus.findLast((menu) => menu.content.current !== null);
 
+/**
+ * Runs `run` once no menu is on screen, not even fading out. A dialog that a menu item opens waits
+ * for this, or the closing menu hands focus back to its owner after the dialog has taken it.
+ */
+export const afterMenusClose = (run: () => void): void => {
+  if (shownMenu() === undefined) {
+    run();
+  } else {
+    requestAnimationFrame(() => afterMenusClose(run));
+  }
+};
+
 /** Open, not on its way out: a key that closed a menu is not run again as it fades. */
 const isOpen = (menu: MountedMenu): boolean =>
   menu.content.current?.dataset["state"] === "open";

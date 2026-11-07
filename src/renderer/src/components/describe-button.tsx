@@ -1,6 +1,7 @@
 import { Add01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "cn";
+import type { Ref } from "react";
 
 import { isBlank } from "../../../shared/text";
 
@@ -15,12 +16,14 @@ export const DescribeButton = ({
   label,
   onClick,
   className,
+  ref,
 }: {
   description: string;
   /** "window 2, Budget", for the accessible name. */
   label: string;
   onClick: () => void;
-  className?: string;
+  className?: string | undefined;
+  ref?: Ref<HTMLButtonElement>;
 }) => {
   const described = !isBlank(description);
 
@@ -34,6 +37,7 @@ export const DescribeButton = ({
       )}
       data-testid="describe-window"
       onClick={onClick}
+      ref={ref}
       title={described ? description.trim() : "Describe this window"}
       type="button"
     >
