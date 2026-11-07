@@ -23,7 +23,7 @@ const STRAIGHT = [
 const isScript = (text: string): boolean => /;\s*\n/u.test(text);
 
 /** The syntax nodes that hold text, as that text: a string, a template’s part, or JSX text. */
-const TextNodeSchema = z.union([
+const TextNodeSchema = z.discriminatedUnion("type", [
   z
     .object({
       start: z.number(),
@@ -43,29 +43,50 @@ const TextNodeSchema = z.union([
     .transform(({ start, value }) => ({ start, text: value.cooked })),
 ]);
 
+// Most visited values are not text; use null fallbacks instead of allocating validation errors.
+const OptionalTextNodeSchema = TextNodeSchema.nullable().catch(null);
+const BigIntSchema = z.bigint().nullable().catch(null);
+
 /** Every string, template part and JSX text in a file, with its line. */
 const texts = (file: string, code: string) => {
   const found: { line: number; text: string }[] = [];
 
   // Serializing the syntax tree visits every node in it.
   JSON.stringify(parseSync(file, code).program, (_key: string, node) => {
-    const parsed = TextNodeSchema.safeParse(node);
+    const parsed = OptionalTextNodeSchema.parse(node);
 
-    if (parsed.success) {
+    if (parsed) {
       found.push({
-        line: code.slice(0, parsed.data.start).split("\n").length,
-        text: parsed.data.text,
+        line: code.slice(0, parsed.start).split("\n").length,
+        text: parsed.text,
       });
     }
 
     // A BigInt literal’s value can’t be serialized; it holds no text anyway.
-    return z.bigint().safeParse(node).success ? null : node;
+    return BigIntSchema.parse(node) === null ? node : null;
   });
 
   return found;
 };
 
 describe("typography", () => {
+  it("extracts text and line numbers while ignoring non-text syntax", () => {
+    const code = [
+      'const literal = "A literal";',
+      `const template = \`Before \${1n} after\`;`,
+      'const element = <span title="A title">Some JSX</span>;',
+      "const other = [null, true, 42, 0n, /pattern/];",
+    ].join("\n");
+
+    expect(texts("fixture.tsx", code)).toStrictEqual([
+      { line: 1, text: "A literal" },
+      { line: 2, text: "Before " },
+      { line: 2, text: " after" },
+      { line: 3, text: "A title" },
+      { line: 3, text: "Some JSX" },
+    ]);
+  });
+
   it("uses typographic apostrophes and quotes in every string the app shows", async () => {
     const entries = await readdir(SRC, {
       recursive: true,
