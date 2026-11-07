@@ -1,11 +1,12 @@
 import { z } from "zod";
 
+import { DueDateSchema } from "../../shared/due";
 import { DraftIdSchema, ViewIdSchema } from "../../shared/ids";
 import { ACTIVE, CaptureStatusSchema } from "../../shared/status";
-import { isBlank, TodoSchema } from "../../shared/text";
+import { isBlank, MAX_VIEW_DESCRIPTION, TodoSchema } from "../../shared/text";
 import type { Todo } from "../../shared/text";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 const FallbackReasonSchema = z.enum([
   "probeUnavailable",
@@ -61,8 +62,13 @@ const V1ViewSchema = z.object({
   width: z.int().positive(),
 });
 
-export const SavedViewSchema = V1ViewSchema.extend({
+const V2ViewSchema = V1ViewSchema.extend({
   origin: ViewOriginSchema.nullable(),
+});
+
+/** Since version 5 a view carries an optional description: what matters in that window. */
+export const SavedViewSchema = V2ViewSchema.extend({
+  description: z.string().max(MAX_VIEW_DESCRIPTION),
 });
 
 export type SavedView = z.infer<typeof SavedViewSchema>;
@@ -84,7 +90,7 @@ const V2RecordSchema = z.object({
   schemaVersion: z.literal(2),
   todos: z.array(TodoSchema),
   updatedAt: z.iso.datetime(),
-  views: z.array(SavedViewSchema).min(1),
+  views: z.array(V2ViewSchema).min(1),
 });
 
 const V3RecordSchema = V2RecordSchema.extend({
@@ -92,9 +98,16 @@ const V3RecordSchema = V2RecordSchema.extend({
   schemaVersion: z.literal(3),
 });
 
-export const CaptureRecordSchema = V3RecordSchema.extend({
-  schemaVersion: z.literal(CURRENT_SCHEMA_VERSION),
+const V4RecordSchema = V3RecordSchema.extend({
+  schemaVersion: z.literal(4),
   status: CaptureStatusSchema,
+});
+
+/** Version 5 adds a due date to the capture and a description to each view. */
+export const CaptureRecordSchema = V4RecordSchema.extend({
+  due: DueDateSchema.nullable(),
+  schemaVersion: z.literal(CURRENT_SCHEMA_VERSION),
+  views: z.array(SavedViewSchema).min(1),
 });
 
 export type CaptureRecord = z.infer<typeof CaptureRecordSchema>;
@@ -113,31 +126,37 @@ export const todosFromNextStep = (nextStep: string): Todo[] =>
       text: (groups["text"] ?? "").trim(),
     }));
 
-const upgradeV1 = (record: z.infer<typeof V1RecordSchema>): CaptureRecord => ({
-  createdAt: record.createdAt,
-  description: "",
-  id: record.id,
-  relationship: record.relationship,
+/** Views before version 5 had no description. */
+const describedViews = (
+  views: readonly z.infer<typeof V2ViewSchema>[]
+): SavedView[] => views.map((view) => ({ ...view, description: "" }));
+
+/** Version 4 lacked only the due date and the views' descriptions. */
+const upgradeV4 = (record: z.infer<typeof V4RecordSchema>): CaptureRecord => ({
+  ...record,
+  due: null,
   schemaVersion: CURRENT_SCHEMA_VERSION,
-  status: ACTIVE,
-  todos: todosFromNextStep(record.nextStep),
-  updatedAt: record.updatedAt,
-  views: record.views.map((view) => ({ ...view, origin: null })),
+  views: describedViews(record.views),
 });
 
-/** A version 2 record had no description; versions 2 and 3 had no status, so they are in the list. */
-const upgradeV2 = (record: z.infer<typeof V2RecordSchema>): CaptureRecord => ({
-  ...record,
-  description: "",
-  schemaVersion: CURRENT_SCHEMA_VERSION,
-  status: ACTIVE,
-});
+/** Versions 2 and 3 had no status, so they are in the list. */
+const upgradeV3 = (record: z.infer<typeof V3RecordSchema>): CaptureRecord =>
+  upgradeV4({ ...record, schemaVersion: 4, status: ACTIVE });
 
-const upgradeV3 = (record: z.infer<typeof V3RecordSchema>): CaptureRecord => ({
-  ...record,
-  schemaVersion: CURRENT_SCHEMA_VERSION,
-  status: ACTIVE,
-});
+/** A version 2 record had no description. */
+const upgradeV2 = (record: z.infer<typeof V2RecordSchema>): CaptureRecord =>
+  upgradeV3({ ...record, description: "", schemaVersion: 3 });
+
+const upgradeV1 = (record: z.infer<typeof V1RecordSchema>): CaptureRecord =>
+  upgradeV2({
+    createdAt: record.createdAt,
+    id: record.id,
+    relationship: record.relationship,
+    schemaVersion: 2,
+    todos: todosFromNextStep(record.nextStep),
+    updatedAt: record.updatedAt,
+    views: record.views.map((view) => ({ ...view, origin: null })),
+  });
 
 const VersionPeekSchema = z.object({ schemaVersion: z.number() });
 
@@ -194,6 +213,14 @@ export const readVersioned = (json: string): VersionedRead => {
 
     return old.success
       ? { kind: "current", record: upgradeV3(old.data) }
+      : { detail: old.error.message, kind: "unreadable" };
+  }
+
+  if (schemaVersion === 4) {
+    const old = V4RecordSchema.safeParse(parsed.value);
+
+    return old.success
+      ? { kind: "current", record: upgradeV4(old.data) }
       : { detail: old.error.message, kind: "unreadable" };
   }
 

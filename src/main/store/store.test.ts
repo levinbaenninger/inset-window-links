@@ -31,8 +31,9 @@ const newCapture = (): NewCapture => {
     createdAt: "2026-10-21T12:00:00.000Z",
     description: "",
     id: CAPTURE_ID,
+    due: null,
     relationship: "The budget cap in the sheet limits the quote in the mail.",
-    schemaVersion: 4,
+    schemaVersion: 5,
     status: { kind: "active" },
     todos: [{ done: false, id: "t1", text: "Ask Dana" }],
     updatedAt: "2026-10-21T12:00:00.000Z",
@@ -43,6 +44,7 @@ const newCapture = (): NewCapture => {
       },
       appName: "TextEdit",
       capturedAt: `2026-10-21T11:5${index}:00.000Z`,
+      description: "",
       height: 505,
       id,
       origin: null,
@@ -65,6 +67,15 @@ const listNames = async (dir: string) => {
 };
 
 const reopen = (root: string) => CaptureStore.open(root, nodeStoreFs);
+
+/** A capture's words with a due date, as the page saves them. */
+const dueText = (due: string | null) => ({
+  description: "",
+  due,
+  relationship: "Typed with a due date",
+  todos: [],
+  viewDescriptions: {},
+});
 
 describe(CaptureStore, () => {
   let root = "";
@@ -121,6 +132,74 @@ describe(CaptureStore, () => {
     expect(capture.record.views).toHaveLength(3);
   });
 
+  it("says why each kind of write failed in plain words, never the raw error", async () => {
+    let code: string | null = "ENOSPC";
+
+    const fail = () =>
+      code === null
+        ? null
+        : Object.assign(new Error(`${code}: write '/x/record.json.tmp'`), {
+            code,
+          });
+
+    const coded: StoreFs = {
+      ...nodeStoreFs,
+      rename: (from, to) => {
+        const error = fail();
+
+        return error === null
+          ? nodeStoreFs.rename(from, to)
+          : Promise.reject(error);
+      },
+      writeFileDurable: (file, data) => {
+        const error = fail();
+
+        return error === null
+          ? nodeStoreFs.writeFileDurable(file, data)
+          : Promise.reject(error);
+      },
+    };
+
+    const store = await CaptureStore.open(root, coded);
+    const now = new Date("2026-11-06T09:00:00.000Z");
+    const published = await store.publish(newCapture());
+
+    code = null;
+    await store.publish(newCapture());
+    code = "EROFS";
+
+    const status = await store.setStatus(CAPTURE_ID, {
+      at: now.toISOString(),
+      kind: "done",
+    });
+
+    code = "EIO";
+
+    const text = await store.updateText(
+      CAPTURE_ID,
+      {
+        description: "",
+        due: null,
+        relationship: "A new title",
+        todos: [],
+        viewDescriptions: {},
+      },
+      now,
+      100
+    );
+
+    code = "EACCES";
+
+    const removed = await store.remove(CAPTURE_ID);
+
+    expect([published, status, text, removed]).toStrictEqual([
+      { kind: "failed", message: "The disk is full." },
+      { kind: "failed", message: "The disk is read-only." },
+      { kind: "failed", message: "Couldn’t save (EIO)." },
+      { kind: "failed", message: "Inset can’t write to its data folder." },
+    ]);
+  });
+
   it("succeeds when the same capture is retried after a failed write", async () => {
     let failing = true;
 
@@ -155,13 +234,16 @@ describe(CaptureStore, () => {
       CAPTURE_ID,
       {
         description: "  Delivery comes three days late.\n",
+        due: null,
         relationship: "Edited thought",
         todos: [
           { done: false, id: "t1", text: " Ask Dana today " },
           { done: false, id: "t2", text: "  " },
         ],
+        viewDescriptions: {},
       },
-      new Date("2026-10-22T08:00:00.000Z")
+      new Date("2026-10-22T08:00:00.000Z"),
+      101
     );
 
     const reopened = await reopen(root);
@@ -191,8 +273,13 @@ describe(CaptureStore, () => {
         id: CAPTURE_ID,
         text: {
           description: "\n  Chairs are CHF 280 over.\nDelivery adds CHF 980.  ",
+          due: "2026-10-24",
           relationship: "The quote breaks the furniture cap",
           todos: [{ done: false, id: "t1", text: "  " }],
+          viewDescriptions: {
+            [VIEW_IDS[0] ?? ""]: "  The cap is in cell C7.\n",
+            [VIEW_IDS[2] ?? ""]: "A window removed again",
+          },
         },
         views: [
           {
@@ -224,12 +311,16 @@ describe(CaptureStore, () => {
         entry.record.relationship,
         entry.record.description,
         entry.record.todos,
+        entry.record.due,
+        entry.record.views.map((view) => view.description),
       ]
     ).toStrictEqual([
-      4,
+      5,
       "The quote breaks the furniture cap",
       "Chairs are CHF 280 over.\nDelivery adds CHF 980.",
       [],
+      "2026-10-24",
+      ["The cap is in cell C7."],
     ]);
   });
 
@@ -239,8 +330,8 @@ describe(CaptureStore, () => {
     await store.publish(newCapture());
 
     const outcomes = [
-      await store.setTodoDone(CAPTURE_ID, "t1", true),
-      await store.setTodoDone(CAPTURE_ID, "nope", true),
+      await store.setTodoDone(CAPTURE_ID, "t1", true, 102),
+      await store.setTodoDone(CAPTURE_ID, "nope", true, 103),
     ];
 
     const reopened = await reopen(root);
@@ -257,13 +348,21 @@ describe(CaptureStore, () => {
 
   it("reads a version 1 record, turning its next step into to-dos, and writes the current version on edit", async () => {
     const { record } = newCapture();
-    const { description: _description, todos: _todos, ...rest } = record;
+
+    const {
+      description: _description,
+      due: _due,
+      todos: _todos,
+      ...rest
+    } = record;
 
     const v1 = {
       ...rest,
       nextStep: "- [ ] Ask Dana\n\n- [x] Find the old quote\nCall the vendor",
       schemaVersion: 1,
-      views: record.views.map(({ origin: _origin, ...view }) => view),
+      views: record.views.map(
+        ({ description: _about, origin: _origin, ...view }) => view
+      ),
     };
 
     await mkdir(path.join(root, CAPTURE_ID, "views"), { recursive: true });
@@ -287,7 +386,7 @@ describe(CaptureStore, () => {
       ]
     ).toStrictEqual([null, ""]);
 
-    await store.setTodoDone(CAPTURE_ID, "v1-1", true);
+    await store.setTodoDone(CAPTURE_ID, "v1-1", true, 104);
 
     const written: unknown = JSON.parse(
       await readFile(path.join(root, CAPTURE_ID, "record.json"), "utf-8")
@@ -295,7 +394,8 @@ describe(CaptureStore, () => {
 
     expect(written).toMatchObject({
       description: "",
-      schemaVersion: 4,
+      due: null,
+      schemaVersion: 5,
       status: { kind: "active" },
     });
     expect(written).not.toHaveProperty("nextStep");
@@ -303,8 +403,20 @@ describe(CaptureStore, () => {
 
   it("reads a version 2 record with an empty description and rewrites it only when edited", async () => {
     const { record } = newCapture();
-    const { description: _description, status: _status, ...rest } = record;
-    const v2Json = JSON.stringify({ ...rest, schemaVersion: 2 });
+
+    const {
+      description: _description,
+      due: _due,
+      status: _status,
+      ...rest
+    } = record;
+
+    const v2Json = JSON.stringify({
+      ...rest,
+      schemaVersion: 2,
+      views: record.views.map(({ description: _about, ...view }) => view),
+    });
+
     const file = path.join(root, CAPTURE_ID, "record.json");
 
     await mkdir(path.join(root, CAPTURE_ID, "views"), { recursive: true });
@@ -321,7 +433,7 @@ describe(CaptureStore, () => {
         entry.record.todos,
       ]
     ).toStrictEqual([
-      4,
+      5,
       "",
       "The budget cap in the sheet limits the quote in the mail.",
       [{ done: false, id: "t1", text: "Ask Dana" }],
@@ -332,17 +444,20 @@ describe(CaptureStore, () => {
       CAPTURE_ID,
       {
         description: "Dana said the cap is firm.",
+        due: null,
         relationship: record.relationship,
         todos: record.todos,
+        viewDescriptions: {},
       },
-      new Date("2026-10-22T08:00:00.000Z")
+      new Date("2026-10-22T08:00:00.000Z"),
+      105
     );
 
     const written: unknown = JSON.parse(await readFile(file, "utf-8"));
 
     expect(written).toMatchObject({
       description: "Dana said the cap is firm.",
-      schemaVersion: 4,
+      schemaVersion: 5,
       status: { kind: "active" },
       updatedAt: "2026-10-22T08:00:00.000Z",
     });
@@ -350,8 +465,14 @@ describe(CaptureStore, () => {
 
   it("reads a version 3 record as in the list, and writes its status once it is snoozed", async () => {
     const { record } = newCapture();
-    const { status: _status, ...rest } = record;
-    const v3Json = JSON.stringify({ ...rest, schemaVersion: 3 });
+    const { due: _due, status: _status, ...rest } = record;
+
+    const v3Json = JSON.stringify({
+      ...rest,
+      schemaVersion: 3,
+      views: record.views.map(({ description: _about, ...view }) => view),
+    });
+
     const file = path.join(root, CAPTURE_ID, "record.json");
 
     await mkdir(path.join(root, CAPTURE_ID, "views"), { recursive: true });
@@ -371,10 +492,105 @@ describe(CaptureStore, () => {
     });
 
     expect(JSON.parse(await readFile(file, "utf-8"))).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       status: { kind: "snoozed", until: "2026-10-22T07:00:00.000Z" },
       updatedAt: "2026-10-21T12:00:00.000Z",
     });
+  });
+
+  it("reads a version 4 record with no due date and no window descriptions, and keeps the file until an edit", async () => {
+    const { record } = newCapture();
+    const { due: _due, ...rest } = record;
+
+    const v4Json = JSON.stringify({
+      ...rest,
+      schemaVersion: 4,
+      views: record.views.map(({ description: _about, ...view }) => view),
+    });
+
+    const file = path.join(root, CAPTURE_ID, "record.json");
+
+    await mkdir(path.join(root, CAPTURE_ID, "views"), { recursive: true });
+    await writeFile(file, v4Json);
+
+    const store = await CaptureStore.open(root, nodeStoreFs);
+    const entry = store.get(CAPTURE_ID);
+
+    expect(
+      entry?.kind === "current" && [
+        entry.record.schemaVersion,
+        entry.record.due,
+        entry.record.views.map((view) => view.description),
+        entry.record.relationship,
+        entry.record.todos,
+      ]
+    ).toStrictEqual([5, null, ["", "", ""], record.relationship, record.todos]);
+    await expect(readFile(file, "utf-8")).resolves.toBe(v4Json);
+
+    await store.updateText(
+      CAPTURE_ID,
+      {
+        description: "",
+        due: "2030-01-01",
+        relationship: record.relationship,
+        todos: record.todos,
+        viewDescriptions: { [VIEW_IDS[1] ?? ""]: " Second window matters " },
+      },
+      new Date("2026-10-22T08:00:00.000Z"),
+      106
+    );
+    await store.updateText(
+      CAPTURE_ID,
+      {
+        description: "",
+        due: "2026-10-24",
+        relationship: record.relationship,
+        todos: record.todos,
+        viewDescriptions: { [VIEW_IDS[1] ?? ""]: " Second window matters " },
+      },
+      new Date("2026-10-22T09:00:00.000Z"),
+      2
+    );
+
+    // SAFETY: the store just wrote this file as a version 5 record, which has these fields.
+    const written = JSON.parse(await readFile(file, "utf-8")) as {
+      due: string | null;
+      schemaVersion: number;
+      updatedAt: string;
+      views: { description: string }[];
+    };
+
+    expect([
+      written.schemaVersion,
+      written.due,
+      written.views.map((view) => view.description),
+      written.updatedAt,
+    ]).toStrictEqual([
+      5,
+      "2026-10-24",
+      ["", "Second window matters", ""],
+      "2026-10-22T09:00:00.000Z",
+    ]);
+  });
+
+  it("saves the due date with the words, and clears it the same way, across a restart", async () => {
+    const store = await CaptureStore.open(root, nodeStoreFs);
+
+    await store.publish(newCapture());
+    await store.updateText(CAPTURE_ID, dueText("2026-11-07"), new Date(), 1);
+
+    const afterSet = await reopen(root);
+    const set = afterSet.get(CAPTURE_ID);
+
+    await store.updateText(CAPTURE_ID, dueText(null), new Date(), 2);
+
+    const afterClear = await reopen(root);
+    const cleared = afterClear.get(CAPTURE_ID);
+
+    expect([
+      set?.kind === "current" && [set.record.relationship, set.record.due],
+      cleared?.kind === "current" && cleared.record.due,
+    ]).toStrictEqual([["Typed with a due date", "2026-11-07"], null]);
   });
 
   it("wakes a snoozed capture only while it is still snoozed until that time", async () => {
@@ -409,8 +625,15 @@ describe(CaptureStore, () => {
 
     const saving = store.updateText(
       CAPTURE_ID,
-      { description: "", relationship: "Written before quit", todos: [] },
-      new Date("2026-10-22T08:00:00.000Z")
+      {
+        description: "",
+        due: null,
+        relationship: "Written before quit",
+        todos: [],
+        viewDescriptions: {},
+      },
+      new Date("2026-10-22T08:00:00.000Z"),
+      108
     );
 
     const busyWhileSaving = store.busy;
@@ -463,7 +686,7 @@ describe(CaptureStore, () => {
 
     const futureJson = JSON.stringify({
       id,
-      schemaVersion: 5,
+      schemaVersion: 6,
       thought: "from the future",
     });
 
@@ -476,18 +699,25 @@ describe(CaptureStore, () => {
     const outcomes = [
       await store.updateText(
         futureId,
-        { description: "", relationship: "x", todos: [] },
-        new Date()
+        {
+          description: "",
+          due: null,
+          relationship: "x",
+          todos: [],
+          viewDescriptions: {},
+        },
+        new Date(),
+        109
       ),
       await store.remove(futureId),
     ];
 
     expect(store.list()).toStrictEqual([
-      { id, kind: "unsupported", version: 5 },
+      { id, kind: "unsupported", version: 6 },
     ]);
     expect(outcomes).toStrictEqual([
-      { kind: "readOnly", version: 5 },
-      { kind: "readOnly", version: 5 },
+      { kind: "readOnly", version: 6 },
+      { kind: "readOnly", version: 6 },
     ]);
     await expect(
       readFile(path.join(root, id, "record.json"), "utf-8")

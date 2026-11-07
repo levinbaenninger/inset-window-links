@@ -14,6 +14,8 @@ import { z } from "zod";
 import { IconButton } from "@/components/icon-button";
 import { libraryApi } from "@/lib/bridge";
 
+import { menuKeyLabel } from "../../../shared/shortcuts";
+
 export const SIDEBAR = { default: 320, max: 440, min: 220 } as const;
 
 /** Dragging the edge this far left of the narrowest width folds the sidebar away. */
@@ -69,16 +71,9 @@ export const useSidebar = (): SidebarControl => {
 
 const mac = (): boolean => libraryApi().platform === "macos";
 
-/** ⌃⌘S on macOS, as in Finder and Mail; Ctrl+B on Windows. */
-const isToggleKey = (event: globalThis.KeyboardEvent): boolean =>
-  mac()
-    ? event.ctrlKey && event.metaKey && event.key.toLowerCase() === "s"
-    : event.ctrlKey &&
-      !event.shiftKey &&
-      !event.altKey &&
-      event.key.toLowerCase() === "b";
-
-export const toggleKeyLabel = (): string => (mac() ? "⌃⌘S" : "Ctrl+B");
+/** ⌃⌘S on macOS, as in Finder and Mail; Ctrl+B on Windows. The key arrives as a menu command. */
+export const toggleKeyLabel = (): string =>
+  menuKeyLabel("toggleSidebar", mac() ? "macos" : "windows");
 
 export const SidebarProvider = ({ children }: { children: ReactNode }) => {
   const [state, setState] = useState(load);
@@ -102,19 +97,6 @@ export const SidebarProvider = ({ children }: { children: ReactNode }) => {
         : { collapsed: false, width: clampWidth(width) }
     );
   }, []);
-
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (isToggleKey(event)) {
-        event.preventDefault();
-        toggle();
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [toggle]);
 
   const control = useMemo(
     () => ({ resize, show, state, toggle }),

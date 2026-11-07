@@ -3,6 +3,7 @@ import type {
   PopoverBridge,
   SettingsBridge,
 } from "../../../shared/api";
+import type { KeyPlatform } from "../../../shared/shortcuts";
 
 declare global {
   interface Window {
@@ -14,6 +15,9 @@ declare global {
 export const markPlatform = (): void => {
   document.documentElement.dataset["platform"] = window.inset.platform;
 };
+
+/** The platform whose keys the page answers; every role's bridge carries it. */
+export const keyPlatform = (): KeyPlatform => window.inset.platform;
 
 // SAFETY: the preload exposes `inset` with only this window's role API, and main loads popover.html only in the popover role.
 export const popoverApi = (): PopoverBridge => window.inset as PopoverBridge;

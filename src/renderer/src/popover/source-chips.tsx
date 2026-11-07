@@ -3,15 +3,18 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "cn";
 import { useEffect, useRef, useState } from "react";
 
+import { DescribeButton } from "@/components/describe-button";
 import { Kbd } from "@/components/ui/kbd";
+import { WindowDescription } from "@/components/window-description";
+import type { WindowDescriptionHandle } from "@/components/window-description";
 import { viewTitle } from "@/lib/format";
 
-import type { ShortcutStatus, ViewSummary } from "../../../shared/dto";
-
-export interface PendingView {
-  title: string | null;
-  appName: string | null;
-}
+import type {
+  PendingSummary,
+  ShortcutStatus,
+  ViewSummary,
+} from "../../../shared/dto";
+import type { ViewDescriptions } from "../../../shared/text";
 
 const TILE_IMAGE =
   "border-foreground/10 bg-muted aspect-[16/10] w-full overflow-hidden rounded-md border";
@@ -22,20 +25,25 @@ const SourceChip = ({
   view,
   index,
   open,
+  description,
   onToggle,
+  onDescribe,
   onRemove,
 }: {
   view: ViewSummary;
   index: number;
   open: boolean;
+  description: string;
   onToggle: () => void;
+  /** Opens the window's image with its description being edited. */
+  onDescribe: () => void;
   onRemove: () => void;
 }) => {
   const title = viewTitle(view.title);
 
   return (
     <li
-      className="group relative flex min-w-0 flex-col gap-1"
+      className="group relative flex min-w-0 flex-col"
       data-testid="source-chip"
       data-view-id={view.id}
     >
@@ -57,7 +65,7 @@ const SourceChip = ({
         />
       </button>
       <span
-        className={TILE_TITLE}
+        className={cn(TILE_TITLE, "mt-1")}
         data-testid="source-chip-title"
         title={[
           title,
@@ -71,6 +79,11 @@ const SourceChip = ({
       >
         {title}
       </span>
+      <DescribeButton
+        description={description}
+        label={`window ${index + 1}, ${title}`}
+        onClick={onDescribe}
+      />
       <button
         aria-label={`Remove window ${index + 1}, ${title}`}
         className="bg-background/90 text-foreground hover:bg-destructive hover:border-destructive focus-visible:ring-ring/50 border-foreground/10 absolute top-1 right-1 grid size-6 place-items-center rounded-full border opacity-0 outline-none group-focus-within:opacity-100 group-hover:opacity-100 hover:text-white focus-visible:ring-3"
@@ -83,15 +96,24 @@ const SourceChip = ({
   );
 };
 
-/** The window being captured, shown before its image exists so the press is answered at once. */
-const PendingChip = ({ pending }: { pending: PendingView }) => (
+/** A window being captured, shown before its image exists so the press is answered at once. */
+const PendingChip = ({ pending }: { pending: PendingSummary }) => (
   <li
     aria-busy
     className="flex min-w-0 flex-col gap-1"
     data-testid="pending-chip"
   >
-    <span className={TILE_IMAGE} />
-    <span className={TILE_TITLE}>{viewTitle(pending.title)}</span>
+    <span
+      className={cn(
+        TILE_IMAGE,
+        "text-muted-foreground grid animate-pulse place-items-center text-xs"
+      )}
+    >
+      Capturing…
+    </span>
+    <span className={TILE_TITLE}>
+      {pending === null ? "Adding a window…" : viewTitle(pending.title)}
+    </span>
   </li>
 );
 
@@ -104,10 +126,12 @@ const PendingChip = ({ pending }: { pending: PendingView }) => (
 const AddTile = ({
   layout,
   shortcut,
+  addKeys,
   onAdd,
 }: {
   layout: AddLayout;
   shortcut: ShortcutStatus;
+  addKeys: string;
   onAdd: () => void;
 }) => {
   const bar = layout !== "cell";
@@ -127,8 +151,8 @@ const AddTile = ({
         onClick={onAdd}
         title={
           shortcut.kind === "registered"
-            ? undefined
-            : `${shortcut.label} is taken by another app`
+            ? `Pick windows from a list (${addKeys}), or press ${shortcut.label} in any window`
+            : `Pick windows from a list (${addKeys}). ${shortcut.label} is taken by another app`
         }
         type="button"
       >
@@ -154,35 +178,81 @@ const AddTile = ({
 
 type AddLayout = "first" | "bar" | "cell";
 
-const addLayout = (count: number): AddLayout => {
+const COLUMNS = 3;
+
+/** The last view in the open view's row, after which its image and description open. */
+const rowEnd = (openIndex: number, views: number) =>
+  Math.min((Math.floor(openIndex / COLUMNS) + 1) * COLUMNS, views) - 1;
+
+/** The Add tile takes a cell beside the last tile, or a bar of its own when it starts a row. */
+const addLayout = (count: number, startsRow: boolean): AddLayout => {
   if (count === 0) {
     return "first";
   }
 
-  return count % 3 === 0 ? "bar" : "cell";
+  return startsRow || count % COLUMNS === 0 ? "bar" : "cell";
 };
 
 /**
- * The windows as tiles, three to a row, with Add windows last. Past three rows the tiles scroll
- * inside themselves, keeping the newest in sight. A tile opens its whole image below.
+ * The windows as tiles, three to a row, with Add windows last. Each tile names its window and
+ * shows its description, or + Description. A tile opens its image under its own row, with the
+ * description field, so the field sits by the window it describes. Past three rows the tiles
+ * scroll inside themselves, keeping the newest in sight.
  */
 export const SourceChips = ({
   views,
   pending,
   shortcut,
+  addKeys,
+  descriptions,
   onAdd,
+  onDescribe,
   onRemove,
 }: {
   views: readonly ViewSummary[];
-  pending: PendingView | null;
+  /** Windows still being captured, each with its title once known. */
+  pending: readonly PendingSummary[];
   shortcut: ShortcutStatus;
+  addKeys: string;
+  descriptions: ViewDescriptions;
   onAdd: () => void;
+  onDescribe: (view: ViewSummary, description: string) => void;
   onRemove: (view: ViewSummary) => void;
 }) => {
   const list = useRef<HTMLUListElement>(null);
+  const description = useRef<WindowDescriptionHandle>(null);
   const [openId, setOpenId] = useState<string | null>(null);
-  const count = views.length + (pending === null ? 0 : 1);
-  const open = views.find((view) => view.id === openId) ?? null;
+  const count = views.length + pending.length;
+  const openIndex = views.findIndex((view) => view.id === openId);
+  const open = views[openIndex] ?? null;
+  const previewAfter = open === null ? -1 : rowEnd(openIndex, views.length);
+
+  // A click anywhere else in the panel (the title, a field, empty space) closes the open window,
+  // so nothing still looks selected. A key that presses a button there leaves it open.
+  useEffect(() => {
+    if (openId === null) {
+      return;
+    }
+
+    const onClick = (event: MouseEvent) => {
+      const { target } = event;
+      const tiles = list.current;
+
+      if (
+        event.detail > 0 &&
+        target instanceof Node &&
+        tiles !== null &&
+        !tiles.contains(target) &&
+        tiles.closest("main")?.contains(target) === true
+      ) {
+        setOpenId(null);
+      }
+    };
+
+    document.addEventListener("click", onClick, true);
+
+    return () => document.removeEventListener("click", onClick, true);
+  }, [openId]);
 
   useEffect(() => {
     const last = list.current?.lastElementChild;
@@ -192,38 +262,77 @@ export const SourceChips = ({
     }
   }, [count]);
 
-  return (
-    <section
-      aria-label="Windows in this capture"
-      className="flex flex-col gap-2"
+  const preview = open !== null && (
+    <li
+      className="border-foreground/10 bg-background mac:dark:bg-card col-span-3 flex flex-col overflow-hidden rounded-lg border"
+      key="preview"
     >
+      {/* verify-desktop reads the image's size through this test id. */}
+      <img
+        alt={`Capture of ${viewTitle(open.title)}`}
+        className="bg-muted max-h-32 w-full object-contain"
+        data-testid="source-preview"
+        height={open.height}
+        src={open.imageUrl}
+        width={open.width}
+      />
+      <div className="border-foreground/10 flex flex-col border-t">
+        <WindowDescription
+          addClassName="mx-2.5 my-1.5"
+          // Four lines at most: the text clamps where the field starts to scroll.
+          className="min-h-[calc(1lh+1rem)] px-3 py-2 text-sm [button&]:line-clamp-4 [textarea&]:max-h-[calc(4lh+1rem)]"
+          key={open.id}
+          name={`window ${openIndex + 1}, ${viewTitle(open.title)}`}
+          onChange={(value) => onDescribe(open, value)}
+          ref={description}
+          value={descriptions[open.id] ?? ""}
+        />
+      </div>
+    </li>
+  );
+
+  return (
+    <section aria-label="Windows in this capture">
+      {/* Many windows scroll inside the grid; with an image open the panel scrolls instead,
+          so the image, its field and Add windows stay in one piece. */}
       <ul
-        className="-m-1 grid max-h-[22.5rem] grid-cols-3 gap-x-2 gap-y-3 overflow-y-auto p-1"
+        className={cn(
+          "-m-1 grid grid-cols-3 gap-x-2 gap-y-3 p-1",
+          open === null && "max-h-[24rem] overflow-y-auto"
+        )}
         ref={list}
       >
-        {views.map((view, index) => (
+        {views.map((view, index) => [
           <SourceChip
+            description={descriptions[view.id] ?? ""}
             index={index}
             key={view.id}
+            onDescribe={() => {
+              setOpenId(view.id);
+              requestAnimationFrame(() => description.current?.edit());
+            }}
             onRemove={() => onRemove(view)}
             onToggle={() => setOpenId(open?.id === view.id ? null : view.id)}
             open={open?.id === view.id}
             view={view}
-          />
+          />,
+          index === previewAfter ? preview : null,
+        ])}
+        {pending.map((item, index) => (
+          <PendingChip key={index} pending={item} />
         ))}
-        {pending === null ? null : <PendingChip pending={pending} />}
-        <AddTile layout={addLayout(count)} onAdd={onAdd} shortcut={shortcut} />
-      </ul>
-      {open !== null && (
-        <img
-          alt={`Capture of ${viewTitle(open.title)}`}
-          className="border-foreground/10 bg-muted max-h-64 w-full rounded-lg border object-contain"
-          data-testid="source-preview"
-          height={open.height}
-          src={open.imageUrl}
-          width={open.width}
+        <AddTile
+          addKeys={addKeys}
+          layout={addLayout(
+            count,
+            previewAfter === views.length - 1 &&
+              pending.length === 0 &&
+              views.length % COLUMNS !== 0
+          )}
+          onAdd={onAdd}
+          shortcut={shortcut}
         />
-      )}
+      </ul>
     </section>
   );
 };

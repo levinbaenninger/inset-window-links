@@ -9,15 +9,28 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 import { IconButton } from "@/components/icon-button";
+import { Button } from "@/components/ui/button";
 import { libraryApi } from "@/lib/bridge";
-import { formatDateTime, viewTitle } from "@/lib/format";
+import { formatWhen, viewTitle } from "@/lib/format";
 
 import type { CaptureDetail, ViewSummary } from "../../../shared/dto";
+import type { RetryKind } from "./copy-gate";
+import {
+  copyCapture,
+  lasts,
+  notCopiedText,
+  retryLabel,
+  retryOf,
+  retryText,
+} from "./copy-gate";
+import { reasonOf } from "./drafts";
+import { drafts } from "./page-drafts";
 
 const FEEDBACK_MS = 2000;
+const FAILURE_MS = 6000;
 
 /** The capture's windows along the foot of the viewer; the open one is marked. */
 const Filmstrip = ({
@@ -73,9 +86,29 @@ export const ImageViewer = ({
 }) => {
   const navigate = useNavigate();
   const [copied, setCopied] = useState(false);
+
+  /**
+   * Why the last copy put nothing on the clipboard, such as an edit that could not be saved. One
+   * whose Retry saves stays until the words are saved or given up.
+   */
+  const [refused, setRefused] = useState<{
+    text: string;
+    retry: RetryKind | null;
+  } | null>(null);
+
   const [reopened, setReopened] = useState<string | null>(null);
   const [actualSize, setActualSize] = useState(false);
   const captureId = detail.id;
+
+  const unsavedWords = useSyncExternalStore(
+    drafts.subscribe,
+    () => drafts.draft(captureId) !== undefined
+  );
+
+  if (lasts(refused?.retry) && !unsavedWords) {
+    setRefused(null);
+  }
+
   const view = detail.views[index];
   const previous = detail.views[index - 1];
   const next = detail.views[index + 1];
@@ -94,6 +127,17 @@ export const ImageViewer = ({
 
   useEffect(() => {
     const onKeyDown = async (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        document.querySelector('[role="dialog"], [role="menu"]') !== null
+      ) {
+        return;
+      }
+
       if (event.key === "Escape") {
         await go();
       }
@@ -125,15 +169,53 @@ export const ImageViewer = ({
   const cssHeight = Math.round(view.height / window.devicePixelRatio);
 
   const copy = async () => {
-    await libraryApi().copyImage(captureId, view.id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), FEEDBACK_MS);
+    const result = await copyCapture(
+      captureId,
+      { kind: "image", viewId: view.id },
+      libraryApi(),
+      drafts
+    );
+
+    if (result.kind === "copied") {
+      setRefused(null);
+      setCopied(true);
+      setTimeout(() => setCopied(false), FEEDBACK_MS);
+
+      return;
+    }
+
+    const retry = retryOf(result, captureId, drafts);
+
+    setRefused({ retry, text: notCopiedText(result, "viewer") });
+
+    if (!lasts(retry)) {
+      setTimeout(() => setRefused(null), FAILURE_MS);
+    }
+  };
+
+  /** Saves the words the copy was refused for; the user then copies again. */
+  const retrySave = async () => {
+    setRefused(null);
+    setReopened("Saving…");
+
+    const outcome = await drafts.retry(captureId);
+
+    if (outcome.kind === "ok") {
+      setReopened("Saved. You can copy it now.");
+      setTimeout(() => setReopened(null), FEEDBACK_MS);
+    } else {
+      setReopened(null);
+      setRefused({
+        retry: "save",
+        text: `Still not saved. ${reasonOf(outcome)}`,
+      });
+    }
   };
 
   const reopen = async () => {
     const { failed } = await libraryApi().reopen(captureId, [view.id]);
 
-    setReopened(failed === 0 ? "Opened" : "Couldn't open");
+    setReopened(failed === 0 ? "Opened" : "Couldn’t open");
     setTimeout(() => setReopened(null), FEEDBACK_MS);
   };
 
@@ -159,7 +241,7 @@ export const ImageViewer = ({
             )}
           </p>
           <p className="text-muted-foreground truncate text-xs">
-            {[view.appName, formatDateTime(view.capturedAt)]
+            {[view.appName, formatWhen(view.capturedAt)]
               .filter((part) => part !== null)
               .join(" · ")}
           </p>
@@ -168,6 +250,28 @@ export const ImageViewer = ({
           <output className="text-muted-foreground mr-1 text-xs">
             {reopened}
           </output>
+        )}
+        {refused !== null && (
+          <output
+            className="text-destructive mr-1 line-clamp-2 max-w-1/2 min-w-0 text-xs leading-tight"
+            data-testid="viewer-feedback"
+            title={refused.text}
+          >
+            {refused.text}
+          </output>
+        )}
+        {refused !== null && refused.retry !== null && (
+          <Button
+            aria-label={retryLabel(refused.retry)}
+            className="mr-1"
+            onClick={() => {
+              void (refused.retry === "copy" ? copy() : retrySave());
+            }}
+            size="xs"
+            variant="outline"
+          >
+            {retryText(refused.retry)}
+          </Button>
         )}
         {view.origin !== null && (
           <IconButton

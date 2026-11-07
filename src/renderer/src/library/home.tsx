@@ -5,6 +5,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { libraryApi } from "@/lib/bridge";
 
 import icon from "../../../../build/icon.png";
+import { menuKeyLabel } from "../../../shared/shortcuts";
 import { PaneHeader } from "./pane-header";
 
 const root = getRouteApi("__root__");
@@ -15,15 +16,35 @@ const root = getRouteApi("__root__");
  */
 export const Home = () => {
   const { items, shortcut } = root.useLoaderData();
-  const mac = libraryApi().platform === "macos";
+  const { platform } = libraryApi();
+  const mac = platform === "macos";
 
-  const steps = [
+  // The capture shortcut works from any app; the rest only while an Inset window is in front,
+  // which is easy to miss when they share one list.
+  const groups = [
     {
-      keys: shortcut.kind === "registered" ? shortcut.label : null,
-      text: "Add the window in front",
+      steps: [
+        {
+          keys: shortcut.kind === "registered" ? shortcut.label : null,
+          text: "Add the window in front",
+        },
+      ],
+      title: "From any app",
     },
-    { keys: mac ? "⇧⌘N" : "Ctrl+Shift+N", text: "Pick several windows" },
-    { keys: mac ? "⌘↵" : "Ctrl+Enter", text: "Save" },
+    {
+      steps: [
+        {
+          keys: menuKeyLabel("addWindows", platform),
+          text: "Pick several windows",
+        },
+        { keys: mac ? "⌘↵" : "Ctrl+Enter", text: "Save" },
+        {
+          keys: menuKeyLabel("showShortcuts", platform),
+          text: "All keyboard shortcuts",
+        },
+      ],
+      title: "In the capture panel",
+    },
   ];
 
   return (
@@ -37,17 +58,30 @@ export const Home = () => {
         <h1 className="max-w-80 text-lg font-semibold text-balance">
           Keep a thought with its windows
         </h1>
-        <ul className="flex w-full max-w-64 flex-col gap-2.5 text-left text-sm">
-          {steps.map((step) => (
-            <li
-              className="flex items-center justify-between gap-3"
-              key={step.text}
+        <div className="flex w-full max-w-64 flex-col gap-4 text-left">
+          {groups.map((group) => (
+            <section
+              aria-label={group.title}
+              className="flex flex-col gap-2"
+              key={group.title}
             >
-              <span className="text-muted-foreground">{step.text}</span>
-              {step.keys === null ? null : <Kbd>{step.keys}</Kbd>}
-            </li>
+              <h2 className="text-muted-foreground text-xs font-medium">
+                {group.title}
+              </h2>
+              <ul className="flex flex-col gap-2.5 text-sm">
+                {group.steps.map((step) => (
+                  <li
+                    className="flex items-center justify-between gap-3"
+                    key={step.text}
+                  >
+                    <span>{step.text}</span>
+                    {step.keys === null ? null : <Kbd>{step.keys}</Kbd>}
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
         <Button onClick={() => libraryApi().newCapture()}>New capture</Button>
         {items.length === 0 && !mac && (
           <p className="text-muted-foreground max-w-80 text-xs text-balance">

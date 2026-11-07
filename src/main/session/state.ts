@@ -73,11 +73,30 @@ export type Activity =
       candidates: readonly FallbackCandidate[] | "loading";
     }
   | { kind: "saving"; after: "stay" | Exit }
-  | { kind: "confirmingQuit"; resumeTo: Resumable; exit: Exit };
+  /** Save was chosen at quit while a window was still landing: the save starts once it lands. */
+  | { kind: "savingWhenLanded"; resumeTo: Resumable; exit: Exit }
+  | { kind: "confirmingQuit"; resumeTo: Resumable; exit: Exit }
+  /**
+   * The save a quit or restart waits for is still on its way after SETTLE_MS: the quit prompt
+   * asks again. Retry waits once more, Cancel lets it carry on without quitting, Discard drops it.
+   */
+  | { kind: "saveLate"; exit: Exit };
+
+/**
+ * A window capture that was still running when Add Windows took the panel over. It keeps going
+ * and its window joins the draft when it lands, whatever the panel shows by then.
+ */
+export interface BackgroundCapture {
+  token: CaptureToken;
+  via: "direct" | "chosen";
+  pending: PendingSource | null;
+}
 
 export interface SessionState {
   draft: Draft;
   activity: Activity;
+  /** Captures still landing behind the chooser or the draft, oldest first. */
+  background: readonly BackgroundCapture[];
   notice: Notice | null;
 }
 
@@ -108,6 +127,8 @@ export type SessionEvent =
   | { type: "discardRequested" }
   | { type: "quitRequested"; relaunch?: true }
   | { type: "quitChosen"; choice: QuitChoice }
+  /** SETTLE_MS passed since a quit or restart began waiting for a save. */
+  | { type: "saveWaitEnded" }
   | { type: "permissionRechecked"; granted: boolean };
 
 /** "keep" shows the popover where it is, or on the cursor's display when hidden. */
@@ -130,5 +151,9 @@ export type SessionEffect =
   | { type: "togglePopover" }
   | { type: "hidePopover" }
   | { type: "publish"; draft: Draft }
+  /** A quit or restart waits for the save: after SETTLE_MS it is told saveWaitEnded. */
+  | { type: "limitSaveWait" }
+  /** The draft was discarded while its save was on its way: that save must not land. */
+  | { type: "withdraw"; draftId: DraftId }
   | { type: "askQuit" }
   | { type: "exitApp"; relaunch?: true };

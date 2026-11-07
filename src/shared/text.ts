@@ -1,10 +1,23 @@
 import { z } from "zod";
 
+import type { DueDate } from "./due";
+import { DueDateSchema } from "./due";
+import { ViewIdSchema } from "./ids";
+import type { ViewId } from "./ids";
+
+/** A capture's own words, title then description: what ⌘C copies when no text is selected. */
+export const entryText = (title: string, description: string): string =>
+  [title.trim(), description.trim()].filter((part) => part !== "").join("\n\n");
+
 /** Main rejects longer text, so the text fields stop at the same lengths. */
 export const MAX_RELATIONSHIP = 10_000;
 export const MAX_DESCRIPTION = 10_000;
 export const MAX_TODO = 500;
 export const MAX_TODOS = 30;
+export const MAX_VIEW_DESCRIPTION = 2000;
+
+/** A draft holds at most this many windows' descriptions; main caps a capture's views alike. */
+export const MAX_VIEWS = 100;
 
 export const TodoIdSchema = z.string().regex(/^[\w-]{1,64}$/u);
 
@@ -17,19 +30,66 @@ export const TodoSchema = z.object({
 /** One thing to do next. A capture keeps a short list of them, checked off later in Recent Captures. */
 export type Todo = z.infer<typeof TodoSchema>;
 
+/** What matters in each window, by the view's id. A window without one has no entry or "". */
+export const ViewDescriptionsSchema = z
+  .record(ViewIdSchema, z.string().max(MAX_VIEW_DESCRIPTION))
+  .refine((map) => Object.keys(map).length <= MAX_VIEWS, "Too many windows");
+
+export type ViewDescriptions = z.infer<typeof ViewDescriptionsSchema>;
+
+export const removeViewDescription = (
+  descriptions: ViewDescriptions,
+  id: ViewId
+): ViewDescriptions => {
+  const { [id]: _removed, ...remaining } = descriptions;
+
+  return remaining;
+};
+
 export const DraftTextSchema = z.object({
   /** Optional free text below the thought. Defaults so a sender that predates it still validates. */
   description: z.string().max(MAX_DESCRIPTION).default(""),
+  /** When the capture should be done by. Recent Captures sets it on its own; see setDue. */
+  due: DueDateSchema.nullable().default(null),
   relationship: z.string().max(MAX_RELATIONSHIP),
   todos: z.array(TodoSchema).max(MAX_TODOS),
+  viewDescriptions: ViewDescriptionsSchema.default({}),
 });
 
 export type DraftText = z.infer<typeof DraftTextSchema>;
 
+/** A saved capture's text, as it arrives in main to be saved or copied: its title is never blank. */
+export const EditedTextSchema = DraftTextSchema.extend({
+  relationship: z.string().trim().min(1).max(MAX_RELATIONSHIP),
+});
+
+/** A saved capture's fields that a draft edits, as the list, the capture's page and main all have them. */
+interface Editable {
+  description: string;
+  due: DueDate | null;
+  relationship: string;
+  todos: readonly Todo[];
+  views: readonly { id: ViewId; description: string }[];
+}
+
+/** A saved capture's fields as a draft holds them: what it shows when nothing is unsaved. */
+export const storedText = (capture: Editable): DraftText => ({
+  description: capture.description,
+  due: capture.due,
+  relationship: capture.relationship,
+  todos: [...capture.todos],
+  // SAFETY: the keys are the views' own ids.
+  viewDescriptions: Object.fromEntries(
+    capture.views.map((view) => [view.id, view.description])
+  ) as ViewDescriptions,
+});
+
 export const blankText: DraftText = {
   description: "",
+  due: null,
   relationship: "",
   todos: [],
+  viewDescriptions: {},
 };
 
 export const isBlank = (value: string): boolean => value.trim() === "";
@@ -40,11 +100,27 @@ export const keptTodos = (todos: readonly Todo[]): Todo[] =>
     isBlank(todo.text) ? [] : [{ ...todo, text: todo.text.trim() }]
   );
 
-/** Any typed text counts, the description too, though only the thought makes a draft saveable. */
+/** The descriptions worth keeping, trimmed and in a fixed order, so two copies compare equal. */
+export const keptViewDescriptions = (
+  descriptions: ViewDescriptions
+): ViewDescriptions =>
+  // SAFETY: the keys come from a ViewDescriptions, so they are view ids already.
+  Object.fromEntries(
+    Object.entries(descriptions)
+      .map(([id, text]) => [id, text.trim()] as const)
+      .toSorted(([a], [b]) => a.localeCompare(b))
+  ) as ViewDescriptions;
+
+/**
+ * Anything added counts, a description, a window's description or a due date too, though only
+ * the thought makes a draft saveable.
+ */
 export const hasTyped = (text: DraftText): boolean =>
   !isBlank(text.relationship) ||
   !isBlank(text.description) ||
-  keptTodos(text.todos).length > 0;
+  keptTodos(text.todos).length > 0 ||
+  text.due !== null ||
+  Object.values(text.viewDescriptions).some((value) => !isBlank(value));
 
 export type Saveability =
   | { kind: "ok" }

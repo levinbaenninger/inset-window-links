@@ -11,10 +11,31 @@ import { cn } from "cn";
 import { Select as SelectPrimitive } from "radix-ui";
 import * as React from "react";
 
+import { useMenuHold } from "@/lib/menu-keys";
+
+/** Main leaves every key to the page while the list is open (lib/menu-keys.ts). */
 function Select({
+  defaultOpen,
+  onOpenChange,
+  open,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Root>) {
-  return <SelectPrimitive.Root data-slot="select" {...props} />;
+  const [ownOpen, setOwnOpen] = React.useState(defaultOpen ?? false);
+
+  useMenuHold(open ?? ownOpen);
+
+  return (
+    <SelectPrimitive.Root
+      data-slot="select"
+      defaultOpen={defaultOpen}
+      onOpenChange={(next) => {
+        setOwnOpen(next);
+        onOpenChange?.(next);
+      }}
+      open={open}
+      {...props}
+    />
+  );
 }
 
 function SelectGroup({

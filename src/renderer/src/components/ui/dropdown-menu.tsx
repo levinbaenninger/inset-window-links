@@ -6,10 +6,33 @@ import { cn } from "cn";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import * as React from "react";
 
+import { keyPlatform } from "@/lib/bridge";
+import type { MenuKeyHandler } from "@/lib/menu-keys";
+import { menuKeyDown, useMenuHold, useMountedMenu } from "@/lib/menu-keys";
+
+/** Main leaves every key to the page while any menu is open (lib/menu-keys.ts). */
 function DropdownMenu({
+  defaultOpen,
+  onOpenChange,
+  open,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
+  const [ownOpen, setOwnOpen] = React.useState(defaultOpen ?? false);
+
+  useMenuHold(open ?? ownOpen);
+
+  return (
+    <DropdownMenuPrimitive.Root
+      data-slot="dropdown-menu"
+      defaultOpen={defaultOpen}
+      onOpenChange={(next) => {
+        setOwnOpen(next);
+        onOpenChange?.(next);
+      }}
+      open={open}
+      {...props}
+    />
+  );
 }
 
 function DropdownMenuPortal({
@@ -35,12 +58,32 @@ function DropdownMenuContent({
   className,
   align = "start",
   sideOffset = 4,
+  onMenuKey,
+  onKeyDownCapture,
+  onKeyDown,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
+  /** Runs the keys the menu shows for its owner; see menu-keys. */
+  onMenuKey?: MenuKeyHandler;
+}) {
+  const content = React.useRef<HTMLDivElement>(null);
+
+  useMountedMenu(content, onMenuKey);
+
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
+        ref={content}
+        onKeyDownCapture={(event) => {
+          onKeyDownCapture?.(event);
+          menuKeyDown(event, onMenuKey, keyPlatform());
+        }}
+        onKeyDown={(event) => {
+          onKeyDown?.(event);
+          // The menu has had the key; the page under it never gets it.
+          event.stopPropagation();
+        }}
         sideOffset={sideOffset}
         align={align}
         className={cn(
@@ -200,7 +243,7 @@ function DropdownMenuShortcut({
     <span
       data-slot="dropdown-menu-shortcut"
       className={cn(
-        "text-muted-foreground group-focus/dropdown-menu-item:text-accent-foreground ml-auto text-xs tracking-widest",
+        "text-muted-foreground group-focus/dropdown-menu-item:text-accent-foreground ml-auto text-xs tabular-nums",
         className
       )}
       {...props}
