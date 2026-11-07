@@ -1,9 +1,18 @@
 import type { Notice } from "../../shared/dto";
 import type { DraftId } from "../../shared/ids";
 import type { DraftText } from "../../shared/text";
-import { blankText, hasTyped, isBlank, saveability } from "../../shared/text";
+import {
+  blankText,
+  hasTyped,
+  isBlank,
+  removeViewDescription,
+  saveability,
+} from "../../shared/text";
 import type {
   Activity,
+  BackgroundCapture,
+  CapturedView,
+  CaptureOutcome,
   CaptureToken,
   Draft,
   Exit,
@@ -28,6 +37,7 @@ const freshDraft = (id: DraftId): Draft => ({ id, text: blankText, views: [] });
 
 export const initialSession = (id: DraftId): SessionState => ({
   activity: { kind: "idle" },
+  background: [],
   draft: freshDraft(id),
   notice: null,
 });
@@ -58,9 +68,22 @@ const exitApp = (exit: Exit): SessionEffect =>
     ? { relaunch: true, type: "exitApp" }
     : { type: "exitApp" };
 
+/** A save a quit or restart waits for is waited for SETTLE_MS at most, then the prompt asks again. */
 const startSave = (state: SessionState, after: "stay" | Exit): Transition => [
   { ...state, activity: { after, kind: "saving" }, notice: null },
-  [{ draft: state.draft, type: "publish" }],
+  after === "stay"
+    ? [{ draft: state.draft, type: "publish" }]
+    : [{ draft: state.draft, type: "publish" }, { type: "limitSaveWait" }],
+];
+
+/** Gives up a draft whose save is on its way: it never lands, and the panel or the app moves on. */
+const withdrawn = (
+  state: SessionState,
+  ids: IdSource,
+  then: SessionEffect
+): Transition => [
+  initialSession(ids.draftId()),
+  [{ draftId: state.draft.id, type: "withdraw" }, then],
 ];
 
 const restart = (ids: IdSource, effect: SessionEffect): Transition => [
@@ -68,11 +91,127 @@ const restart = (ids: IdSource, effect: SessionEffect): Transition => [
   [effect],
 ];
 
+/** A window capture still running carries on in the background, so what takes over loses nothing. */
+const withCaptureParked = (state: SessionState): SessionState => {
+  const { activity } = state;
+
+  return activity.kind === "capturing"
+    ? {
+        ...state,
+        background: [
+          ...state.background,
+          {
+            pending: activity.pending,
+            token: activity.token,
+            via: activity.via,
+          },
+        ],
+      }
+    : state;
+};
+
+const withViews = (
+  state: SessionState,
+  views: readonly CapturedView[]
+): SessionState => ({
+  ...state,
+  draft: { ...state.draft, views: [...state.draft.views, ...views] },
+});
+
+/**
+ * A capture that Add Windows overtook lands in the draft as it would have, but quietly: the
+ * chooser or the text being typed keeps focus. A hidden panel shows without taking focus, so the
+ * window is seen to arrive. One that could not find its window adds nothing, since the user is
+ * already picking from the list.
+ */
+const onBackgroundFinished = (
+  state: SessionState,
+  entry: BackgroundCapture,
+  outcome: CaptureOutcome
+): Transition => {
+  const rest: SessionState = {
+    ...state,
+    background: state.background.filter((item) => item !== entry),
+  };
+
+  const shown: readonly SessionEffect[] = [
+    { anchor: { kind: "keep" }, type: "previewPopover" },
+  ];
+
+  switch (outcome.kind) {
+    case "captured": {
+      return [withViews(rest, [outcome.view]), shown];
+    }
+
+    case "capturedMany": {
+      const added = withViews(rest, outcome.views);
+
+      return [
+        outcome.missing > 0
+          ? { ...added, notice: { kind: "sourceVanished" } }
+          : added,
+        outcome.views.length > 0 ? shown : [],
+      ];
+    }
+
+    case "permissionDenied": {
+      return [
+        { ...rest, notice: { kind: "permissionDenied", stillDenied: false } },
+        shown,
+      ];
+    }
+
+    case "needsChoice": {
+      return entry.via === "chosen"
+        ? [{ ...rest, notice: { kind: "sourceVanished" } }, shown]
+        : unchanged(rest);
+    }
+
+    default: {
+      return unchanged(rest);
+    }
+  }
+};
+
+/**
+ * Once the last window has landed, a save chosen at quit goes ahead. If the draft can still not
+ * be saved, say because that window could not be captured, the panel says why and the app stays.
+ */
+const saveIfLanded = ([state, effects]: Transition): Transition => {
+  const { activity } = state;
+
+  if (activity.kind !== "savingWhenLanded" || state.background.length > 0) {
+    return [state, effects];
+  }
+
+  const check = saveability(state.draft.views.length, state.draft.text);
+
+  if (check.kind === "ok") {
+    const [saving, publish] = startSave(state, activity.exit);
+
+    return [saving, [...effects, ...publish]];
+  }
+
+  return [
+    {
+      ...state,
+      activity: activity.resumeTo,
+      notice: state.notice ?? { kind: check.reason },
+    },
+    [{ anchor: { kind: "keep" }, type: "showPopover" }],
+  ];
+};
+
 const onCaptureFinished = (
   state: SessionState,
   event: EventOf<"captureFinished">
 ): Transition => {
   const { activity } = state;
+  const behind = state.background.find((item) => item.token === event.token);
+
+  if (behind !== undefined) {
+    return saveIfLanded(onBackgroundFinished(state, behind, event.outcome));
+  }
 
   if (activity.kind !== "capturing" || activity.token !== event.token) {
     return unchanged(state);
@@ -165,14 +304,36 @@ const onCaptureFinished = (
   }
 };
 
+/** What happens once the save lands: stay, or the quit or restart it was waited for. */
+const afterSave = (activity: Activity): "stay" | Exit | null => {
+  switch (activity.kind) {
+    case "saving": {
+      return activity.after;
+    }
+
+    // The prompt asked again, but the user asked to quit and nothing is lost by now.
+    case "saveLate": {
+      return activity.exit;
+    }
+
+    default: {
+      return null;
+    }
+  }
+};
+
 const onSaveFinished = (
   state: SessionState,
   event: EventOf<"saveFinished">,
   ids: IdSource
 ): Transition => {
-  const { activity } = state;
+  const after = afterSave(state.activity);
 
-  if (activity.kind !== "saving" || event.draftId !== state.draft.id) {
+  if (
+    after === null ||
+    event.draftId !== state.draft.id ||
+    event.result.kind === "withdrawn"
+  ) {
     return unchanged(state);
   }
 
@@ -188,10 +349,20 @@ const onSaveFinished = (
 
   return restart(
     ids,
-    activity.after === "stay"
-      ? { type: "hidePopover" }
-      : exitApp(activity.after)
+    after === "stay" ? { type: "hidePopover" } : exitApp(after)
   );
+};
+
+/** The save a quit or restart waits for is late: the prompt asks again rather than exit. */
+const onSaveWaitEnded = (state: SessionState): Transition => {
+  const { activity } = state;
+
+  return activity.kind === "saving" && activity.after !== "stay"
+    ? [
+        { ...state, activity: { exit: activity.after, kind: "saveLate" } },
+        [{ type: "askQuit" }],
+      ]
+    : unchanged(state);
 };
 
 const onQuitRequested = (
@@ -203,15 +374,22 @@ const onQuitRequested = (
 
   if (activity.kind === "saving") {
     return activity.after === "stay"
-      ? [{ ...state, activity: { after: exit, kind: "saving" } }, []]
+      ? [
+          { ...state, activity: { after: exit, kind: "saving" } },
+          [{ type: "limitSaveWait" }],
+        ]
       : unchanged(state);
   }
 
-  if (activity.kind === "confirmingQuit") {
+  if (activity.kind === "confirmingQuit" || activity.kind === "saveLate") {
     return unchanged(state);
   }
 
-  if (!isMeaningful(state.draft)) {
+  // A window still being captured is unsaved work too. Quitting again while a save waits for one
+  // asks again, so Discard can still end a capture that never lands.
+  const parked = withCaptureParked(state);
+
+  if (!isMeaningful(parked.draft) && parked.background.length === 0) {
     return [state, [exitApp(exit)]];
   }
 
@@ -219,9 +397,37 @@ const onQuitRequested = (
     activity.kind === "saveFailed" ? activity : ({ kind: "idle" } as const);
 
   return [
-    { ...state, activity: { exit, kind: "confirmingQuit", resumeTo } },
+    { ...parked, activity: { exit, kind: "confirmingQuit", resumeTo } },
     [{ type: "askQuit" }],
   ];
+};
+
+/** The prompt after a late save: Retry waits again, Cancel stays with the save going on. */
+const onLateChosen = (
+  state: SessionState,
+  exit: Exit,
+  event: EventOf<"quitChosen">,
+  ids: IdSource
+): Transition => {
+  switch (event.choice) {
+    case "discard": {
+      return withdrawn(state, ids, exitApp(exit));
+    }
+
+    case "cancel": {
+      return unchanged({
+        ...state,
+        activity: { after: "stay", kind: "saving" },
+      });
+    }
+
+    default: {
+      return [
+        { ...state, activity: { after: exit, kind: "saving" } },
+        [{ type: "limitSaveWait" }],
+      ];
+    }
+  }
 };
 
 const onQuitChosen = (
@@ -230,6 +436,10 @@ const onQuitChosen = (
   ids: IdSource
 ): Transition => {
   const { activity } = state;
+
+  if (activity.kind === "saveLate") {
+    return onLateChosen(state, activity.exit, event, ids);
+  }
 
   if (activity.kind !== "confirmingQuit") {
     return unchanged(state);
@@ -246,15 +456,36 @@ const onQuitChosen = (
       return unchanged(resumed);
     }
 
+    // A window still landing counts as one: the save waits for it rather than leave it out.
     case "save": {
-      const check = saveability(state.draft.views.length, state.draft.text);
+      const landing = state.background.length;
 
-      return check.kind === "ok"
-        ? startSave(resumed, activity.exit)
-        : [
-            { ...resumed, notice: { kind: check.reason } },
-            [{ anchor: { kind: "keep" }, type: "showPopover" }],
-          ];
+      const check = saveability(
+        state.draft.views.length + landing,
+        state.draft.text
+      );
+
+      if (check.kind !== "ok") {
+        return [
+          { ...resumed, notice: { kind: check.reason } },
+          [{ anchor: { kind: "keep" }, type: "showPopover" }],
+        ];
+      }
+
+      return landing > 0
+        ? [
+            {
+              ...state,
+              activity: {
+                exit: activity.exit,
+                kind: "savingWhenLanded",
+                resumeTo: activity.resumeTo,
+              },
+              notice: null,
+            },
+            [],
+          ]
+        : startSave(resumed, activity.exit);
     }
 
     default: {
@@ -293,6 +524,18 @@ const onCaptureIdentified = (
 ): Transition => {
   const { activity } = state;
 
+  if (state.background.some((item) => item.token === event.token)) {
+    return [
+      {
+        ...state,
+        background: state.background.map((item) =>
+          item.token === event.token ? { ...item, pending: event.source } : item
+        ),
+      },
+      [],
+    ];
+  }
+
   if (activity.kind !== "capturing" || activity.token !== event.token) {
     return unchanged(state);
   }
@@ -330,8 +573,14 @@ const onShowDraft = (state: SessionState): Transition =>
       ]
     : unchanged(state);
 
+/**
+ * Add Windows opens at once, also while a window is still being captured: that capture carries on
+ * behind the list and lands in the draft when it is done, so neither key press is lost.
+ */
 const onChooserRequested = (state: SessionState, ids: IdSource): Transition => {
-  if (!canEditDraft(state.activity)) {
+  const { activity } = state;
+
+  if (!canEditDraft(activity) && activity.kind !== "capturing") {
     return unchanged(state);
   }
 
@@ -339,7 +588,7 @@ const onChooserRequested = (state: SessionState, ids: IdSource): Transition => {
 
   return [
     {
-      ...state,
+      ...withCaptureParked(state),
       activity: {
         candidates: "loading",
         kind: "choosing",
@@ -401,14 +650,30 @@ const onViewRemoved = (
 
   const views = state.draft.views.filter((view) => view.id !== event.viewId);
 
-  return [{ ...state, draft: { ...state.draft, views } }, []];
+  const viewDescriptions = removeViewDescription(
+    state.draft.text.viewDescriptions,
+    event.viewId
+  );
+
+  return [
+    {
+      ...state,
+      draft: {
+        ...state.draft,
+        views,
+        text: { ...state.draft.text, viewDescriptions },
+      },
+    },
+    [],
+  ];
 };
 
 const onTextChanged = (
   state: SessionState,
   event: EventOf<"textChanged">
 ): Transition => {
-  if (state.activity.kind === "saving") {
+  // While a quit save waits for a window, edits still count: the save has not been sent yet.
+  if (state.activity.kind === "saving" || state.activity.kind === "saveLate") {
     return unchanged(state);
   }
 
@@ -420,11 +685,12 @@ const onTextChanged = (
     : [next, []];
 };
 
+/** A window still landing would be lost to a save, so Save waits for it; the panel says so. */
 const onSaveRequested = (
   state: SessionState,
   event: EventOf<"saveRequested">
 ): Transition => {
-  if (!isResumable(state.activity)) {
+  if (!isResumable(state.activity) || state.background.length > 0) {
     return unchanged(state);
   }
 
@@ -436,10 +702,31 @@ const onSaveRequested = (
     : [{ ...next, notice: { kind: check.reason } }, []];
 };
 
-const onDiscard = (state: SessionState, ids: IdSource): Transition =>
-  canEditDraft(state.activity)
+/**
+ * Discard while a quit save waits for a window ends the quit there, without saving. Discard while
+ * a save is on its way withdraws it, and a quit or restart it was waited for goes ahead.
+ */
+const onDiscard = (state: SessionState, ids: IdSource): Transition => {
+  const { activity } = state;
+
+  if (activity.kind === "savingWhenLanded") {
+    return restart(ids, exitApp(activity.exit));
+  }
+
+  const after = afterSave(activity);
+
+  if (after !== null) {
+    return withdrawn(
+      state,
+      ids,
+      after === "stay" ? { type: "hidePopover" } : exitApp(after)
+    );
+  }
+
+  return canEditDraft(activity)
     ? restart(ids, { type: "hidePopover" })
     : unchanged(state);
+};
 
 const onPermissionRechecked = (
   state: SessionState,
@@ -517,6 +804,10 @@ export const reduce = (
 
     case "quitChosen": {
       return onQuitChosen(state, event, ids);
+    }
+
+    case "saveWaitEnded": {
+      return onSaveWaitEnded(state);
     }
 
     case "permissionRechecked": {

@@ -5,6 +5,7 @@ import { app, BrowserWindow, nativeTheme, screen } from "electron";
 import { pushChannels } from "../../shared/channels";
 import type { DraftSnapshot } from "../../shared/dto";
 import type { Settings } from "../../shared/settings";
+import type { PageCommand } from "../../shared/shortcuts";
 import type { PopoverAnchor } from "../session/state";
 import { cursorWorkArea } from "./cursor-display";
 import type { Point } from "./placement";
@@ -126,6 +127,9 @@ export class PopoverWindow {
         hideIfStillBlurred();
       }
     });
+    // A click into the panel gives its window focus; the page must have it too, since the menu
+    // keys on Windows reach only the page in focus.
+    this.#win.on("focus", () => this.#win.webContents.focus());
     this.#win.on("hide", () => {
       for (const listener of this.#hiddenListeners) {
         listener();
@@ -262,8 +266,33 @@ export class PopoverWindow {
 
     this.#raise();
     this.#win.show();
-    this.#win.focus();
+    this.#focus();
     this.#win.webContents.send(pushChannels.focusInput);
+  }
+
+  /**
+   * Gives the panel's page the keyboard, not only its window: on Windows the menu keys, such as
+   * Ctrl+Shift+N, arrive through before-input-event, which fires only for the page in focus.
+   * Windows can refuse focus to an app that is not in front (its foreground lock), as after a
+   * slow capture; the panel then asks once more and logs a refusal, and its page says to click it.
+   */
+  #focus() {
+    this.#win.focus();
+    this.#win.webContents.focus();
+
+    if (mac || this.#win.isFocused()) {
+      return;
+    }
+
+    this.#win.moveTop();
+    this.#win.focus();
+    this.#win.webContents.focus();
+
+    if (!this.#win.isFocused()) {
+      console.warn(
+        "The capture panel is shown without keyboard focus: Windows kept another app in front."
+      );
+    }
   }
 
   /** Focused hides, visible but unfocused gets focus, hidden shows on the cursor's display. */
@@ -330,6 +359,11 @@ export class PopoverWindow {
 
   push(snapshot: DraftSnapshot): void {
     this.#win.webContents.send(pushChannels.draft, snapshot);
+  }
+
+  /** A menu key for the panel's page, such as the description or the due date. */
+  command(command: PageCommand): void {
+    this.#win.webContents.send(pushChannels.command, command);
   }
 
   isVisible(): boolean {

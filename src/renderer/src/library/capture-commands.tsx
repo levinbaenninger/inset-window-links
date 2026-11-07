@@ -1,16 +1,21 @@
 import {
   AlarmClockIcon,
+  Calendar03Icon,
+  CalendarRemove01Icon,
   CheckmarkCircle02Icon,
   Copy01Icon,
   Delete02Icon,
   RepeatIcon,
+  TextAlignLeftIcon,
   Undo02Icon,
 } from "@hugeicons/core-free-icons";
 import type { Add01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { RefObject } from "react";
 
+import { DueCalendar } from "@/components/due";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,6 +35,12 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
@@ -38,18 +49,43 @@ import {
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import { libraryApi } from "@/lib/bridge";
-import { formatClock, plural } from "@/lib/format";
+import { formatClock, formatPickHint, plural } from "@/lib/format";
+import { afterMenusClose } from "@/lib/menu-keys";
 
+import type { CopyRequest } from "../../../shared/copy";
 import type { MutationOutcome } from "../../../shared/dto";
+import type { DueDate } from "../../../shared/due";
+import { dueDay, duePresets } from "../../../shared/due";
 import type { CaptureId, ViewId } from "../../../shared/ids";
+import type { MenuKeyId } from "../../../shared/shortcuts";
+import { menuKeyLabel } from "../../../shared/shortcuts";
 import type {
   CaptureStatus,
   SnoozePreset,
   StatusRequest,
 } from "../../../shared/status";
 import { ACTIVE, snoozePresets } from "../../../shared/status";
+import type { DraftText } from "../../../shared/text";
+import type { RetryKind } from "./copy-gate";
+import { copyCapture, lasts, refusalOf, retryOf } from "./copy-gate";
+import { reasonOf } from "./drafts";
+import { drafts } from "./page-drafts";
+import { neighborRow, ROW_SELECTOR } from "./row-keys";
 
 const FEEDBACK_MS = 2000;
+const FAILURE_MS = 6000;
+const SAVING = "Saving…";
+
+/** A short answer to a command, shown beside the capture; failed ones in the destructive colour. */
+export interface Feedback {
+  text: string;
+  failed: boolean;
+  /**
+   * A refused copy's Retry, or Keep changes. One that saves the capture's unsaved words lasts until
+   * they are saved or given up; one that copies again goes like any failure.
+   */
+  retry?: { run: () => void; kind: RetryKind } | undefined;
+}
 
 type Icon = typeof Add01Icon;
 
@@ -59,21 +95,42 @@ interface MenuItem {
   /** Left out inside a submenu, whose trigger carries the icon. */
   icon?: Icon;
   /** Shown at the right of the item, such as when a snooze ends. */
-  hint?: string;
+  hint?: string | undefined;
   destructive?: boolean;
   run: () => Promise<void> | void;
 }
 
+interface Separator {
+  kind: "separator";
+  id: string;
+}
+
 export type MenuEntry =
   | MenuItem
-  | { kind: "submenu"; label: string; icon: Icon; items: readonly MenuItem[] }
-  | { kind: "separator"; id: string };
+  | {
+      kind: "submenu";
+      label: string;
+      icon: Icon;
+      items: readonly (MenuItem | Separator)[];
+    }
+  | Separator;
 
 export interface CaptureTarget {
   id: CaptureId;
+  /** The words on screen, which the Delete confirm names. */
+  title: string;
   status: CaptureStatus;
+  /**
+   * The capture's fields as shown, its due date too: the draft's, else the saved ones. A Due
+   * picked from the menu joins the capture's draft, so one that can't be saved stays unsaved.
+   */
+  text: DraftText;
   /** The windows Reopen can bring back. */
   reopenable: readonly ViewId[];
+  /** Where the menu opens: on a row of the list, where Space and ⌫ work too, or on the capture's page. */
+  from: "row" | "page";
+  /** The row, which gets focus back when a dialog its menu opened closes. */
+  row?: RefObject<HTMLElement | null>;
 }
 
 /** "Opened 3 windows", or how many could not be. */
@@ -98,7 +155,7 @@ const outcomeMessage = (outcome: MutationOutcome): string | null => {
     }
 
     case "readOnly": {
-      return "This capture can't be changed.";
+      return "This capture can’t be changed.";
     }
 
     default: {
@@ -112,9 +169,19 @@ const presetHint = (preset: SnoozePreset): string => {
   const clock = formatClock(preset.until.toISOString());
 
   return preset.id === "nextWeek"
-    ? `${preset.until.toLocaleDateString([], { weekday: "short" })} ${clock}`
+    ? `${preset.until.toLocaleDateString(undefined, { weekday: "short" })} ${clock}`
     : clock;
 };
+
+/** The menu key that does the same to the open capture. */
+const keys = (id: MenuKeyId) => menuKeyLabel(id, libraryApi().platform);
+
+/** ⌫ on a Mac; Windows answers Backspace and Delete alike and names the key it labels Delete. */
+const deleteKey = (): string =>
+  libraryApi().platform === "macos" ? "⌫" : "Delete";
+
+const copyKey = (): string =>
+  libraryApi().platform === "macos" ? "⌘C" : "Ctrl+C";
 
 /**
  * Everything that can be done to one capture, once: the right-click menu in the sidebar and the
@@ -125,30 +192,93 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   const router = useRouter();
   const { captureId: openId } = useParams({ strict: false });
   const [confirming, setConfirming] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const [pickingDue, setPickingDue] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
   /** When the snooze times were worked out; a menu asks again each time it opens. */
   const [now, setNow] = useState(() => new Date());
+  /** The row that takes focus once this one is deleted. */
+  const afterDelete = useRef<HTMLElement | null>(null);
 
-  const say = (message: string | null) => {
-    setFeedback(message);
+  /** Whether the capture holds words main doesn't have yet. */
+  const unsavedWords = useSyncExternalStore(
+    drafts.subscribe,
+    () => drafts.draft(target.id) !== undefined
+  );
 
-    if (message !== null) {
-      setTimeout(() => setFeedback(null), FEEDBACK_MS);
+  // A failure stays longer, so it is read before it goes; a newer answer restarts the wait. On a
+  // row, a refusal with Retry stays until the words are saved or given up: the row has no other
+  // Retry, and an action should not run away.
+  const lasting = lasts(feedback?.retry?.kind) && target.from === "row";
+
+  useEffect(() => {
+    if (feedback === null || lasting) {
+      return;
+    }
+
+    // Saving after a refused copy answers within SETTLE_MS, so its note stays until it does.
+    const timer = setTimeout(
+      () => setFeedback(null),
+      feedback.failed || feedback.text === SAVING ? FAILURE_MS : FEEDBACK_MS
+    );
+
+    return () => clearTimeout(timer);
+  }, [feedback, lasting]);
+
+  if (lasts(feedback?.retry?.kind) && !unsavedWords) {
+    setFeedback(null);
+  }
+
+  const say = (text: string) => setFeedback({ failed: false, text });
+
+  /**
+   * A dialog opened from a row gives focus back to it, or to the row after it once Delete took it
+   * out of the list, unless focus has moved on to another row. The dialog belongs to the row, so it
+   * can close by leaving the page together with it.
+   */
+  const focusRow = (event: Event) => {
+    if (target.row === undefined) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const row = target.row.current;
+    const to = row?.isConnected === true ? row : afterDelete.current;
+    const onRow = document.activeElement?.closest(ROW_SELECTOR) ?? null;
+
+    if (to?.isConnected === true && onRow === null) {
+      to.focus();
+    }
+  };
+
+  /** Shows what went wrong, or nothing when the call went through. */
+  const report = (outcome: MutationOutcome) => {
+    const text = outcomeMessage(outcome);
+
+    if (text !== null) {
+      setFeedback({ failed: true, text });
     }
   };
 
   const setStatus = async (status: StatusRequest) => {
-    say(outcomeMessage(await libraryApi().setStatus(target.id, status)));
+    report(await libraryApi().setStatus(target.id, status));
   };
 
   const remove = async () => {
+    const row = target.row?.current;
+    const next = row === null || row === undefined ? null : neighborRow(row);
     const outcome = await libraryApi().remove(target.id);
 
     if (outcome.kind !== "ok" && outcome.kind !== "missing") {
-      say(outcomeMessage(outcome));
+      report(outcome);
 
       return;
     }
+
+    // Its unsaved words have nowhere to go now.
+    drafts.forget(target.id);
+    afterDelete.current = next;
+    next?.focus();
 
     if (openId === target.id) {
       // "/" opens the newest capture, so the list must no longer hold this one.
@@ -158,6 +288,43 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   };
 
   const { status } = target;
+
+  const setDue = (due: DueDate | null) => {
+    drafts.setDue(target.id, due, target.text);
+  };
+
+  // The same layout as the Due picker: quick days with their dates, then Pick a date… and Clear.
+  const dueMenu: MenuEntry = {
+    icon: Calendar03Icon,
+    items: [
+      ...duePresets(now).map((preset) => ({
+        hint: formatPickHint(dueDay(preset.due), now),
+        kind: "item" as const,
+        label: preset.label,
+        run: () => setDue(preset.due),
+      })),
+      { id: "pick", kind: "separator" },
+      {
+        icon: Calendar03Icon,
+        kind: "item",
+        label: "Pick a date…",
+        run: () => afterMenusClose(() => setPickingDue(true)),
+      },
+      ...(target.text.due === null
+        ? []
+        : [
+            {
+              destructive: true,
+              icon: CalendarRemove01Icon,
+              kind: "item" as const,
+              label: "Clear",
+              run: () => setDue(null),
+            },
+          ]),
+    ],
+    kind: "submenu",
+    label: "Due",
+  };
 
   const snooze: MenuEntry = {
     icon: AlarmClockIcon,
@@ -172,6 +339,8 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     label: status.kind === "snoozed" ? "Snooze again" : "Snooze",
   };
 
+  // Space marks a focused row done, but inside a menu Space picks the highlighted item, so no
+  // item shows it.
   const done: MenuItem = {
     icon: CheckmarkCircle02Icon,
     kind: "item",
@@ -192,39 +361,117 @@ export const useCaptureCommands = (target: CaptureTarget) => {
     snoozed: [backToList, snooze, done],
   };
 
-  const entries: readonly MenuEntry[] = [
-    ...(target.reopenable.length > 0
-      ? [
-          {
-            icon: RepeatIcon,
-            kind: "item" as const,
-            label:
-              target.reopenable.length === 1 ? "Reopen window" : "Reopen all",
-            run: async () => {
-              const { failed } = await libraryApi().reopen(
-                target.id,
-                target.reopenable
-              );
+  /** Saves the words a copy was refused for, and says how that went: the user then copies again. */
+  const retrySave = async () => {
+    setFeedback({ failed: false, text: SAVING });
 
-              say(reopenedMessage(target.reopenable.length, failed));
-            },
+    const outcome = await drafts.retry(target.id);
+
+    if (outcome.kind === "ok") {
+      say("Saved. You can copy it now.");
+    } else {
+      setFeedback({
+        failed: true,
+        retry: {
+          kind: "save",
+          run: () => {
+            void retrySave();
           },
-        ]
-      : []),
-    {
-      icon: Copy01Icon,
-      kind: "item",
-      label: "Copy as text",
-      run: async () => {
-        await libraryApi().copyNote(target.id);
-        say("Copied");
-      },
+        },
+        text: `Still not saved. ${reasonOf(outcome)}`,
+      });
+    }
+  };
+
+  /**
+   * Copies through the gate; when what is typed could not be saved, copies nothing, says why, and
+   * offers Retry.
+   */
+  const copy = async (request: CopyRequest): Promise<boolean> => {
+    const result = await copyCapture(target.id, request, libraryApi(), drafts);
+
+    if (result.kind === "copied") {
+      say("Copied");
+
+      return true;
+    }
+
+    const { retry, text } = refusalOf(
+      result,
+      target.from,
+      retryOf(result, target.id, drafts)
+    );
+
+    setFeedback({
+      failed: true,
+      retry:
+        retry === null
+          ? undefined
+          : {
+              kind: retry,
+              run: () => {
+                void (retry === "copy" ? copy(request) : retrySave());
+              },
+            },
+      text,
+    });
+
+    return false;
+  };
+
+  /** ⌘C: the title and description, as the Edit menu's Copy and the key copy them. */
+  const copyEntry: MenuItem = {
+    hint: copyKey(),
+    icon: Copy01Icon,
+    kind: "item",
+    label: "Copy",
+    run: async () => {
+      await copy({ kind: "entry" });
     },
+  };
+
+  // A row's keys act on that row once it has focus, which a right-click gives it, and the page's
+  // on the open capture, so every menu shows them.
+  const copyNote: MenuItem = {
+    hint: keys("copyNote"),
+    icon: TextAlignLeftIcon,
+    kind: "item",
+    label: "Copy as text",
+    run: async () => {
+      await copy({ kind: "note" });
+    },
+  };
+
+  const reopen: MenuItem | null =
+    target.reopenable.length === 0
+      ? null
+      : {
+          hint: keys("reopen"),
+          icon: RepeatIcon,
+          kind: "item",
+          label:
+            target.reopenable.length === 1 ? "Reopen window" : "Reopen all",
+          run: async () => {
+            const { failed } = await libraryApi().reopen(
+              target.id,
+              target.reopenable
+            );
+
+            say(reopenedMessage(target.reopenable.length, failed));
+          },
+        };
+
+  const entries: readonly MenuEntry[] = [
+    ...(reopen === null ? [] : [reopen]),
+    copyEntry,
+    copyNote,
     { id: "status", kind: "separator" },
+    dueMenu,
     ...byStatus[status.kind],
     { id: "delete", kind: "separator" },
     {
       destructive: true,
+      hint: target.from === "row" ? deleteKey() : undefined,
       icon: Delete02Icon,
       kind: "item",
       label: "Delete…",
@@ -233,32 +480,85 @@ export const useCaptureCommands = (target: CaptureTarget) => {
   ];
 
   const dialog = (
-    <AlertDialog onOpenChange={setConfirming} open={confirming}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Its windows and text are removed from this computer. To keep it out
-            of the list instead, mark it as done.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={remove} variant="destructive">
-            Delete
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <>
+      {/* The menu's own Pick a date… has been chosen, so the calendar shows straight away. */}
+      <Dialog open={pickingDue} onOpenChange={setPickingDue}>
+        <DialogContent
+          className="w-fit"
+          onCloseAutoFocus={focusRow}
+          // The day to start from, the Due or today, takes focus rather than the month buttons.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+
+            if (event.currentTarget instanceof HTMLElement) {
+              event.currentTarget
+                .querySelector<HTMLElement>("[data-day][tabindex='0']")
+                ?.focus();
+            }
+          }}
+        >
+          <div className="p-1.5">
+            <DialogTitle className="sr-only">Due</DialogTitle>
+            <p
+              aria-hidden
+              className="text-muted-foreground flex h-10 items-center px-2 text-xs font-medium"
+            >
+              Due
+            </p>
+            <DialogDescription className="sr-only">
+              When should this capture be done by?
+            </DialogDescription>
+            <DueCalendar
+              due={target.text.due}
+              now={now}
+              onClose={() => setPickingDue(false)}
+              onPick={(due) => {
+                setPickingDue(false);
+                setDue(due);
+              }}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog onOpenChange={setConfirming} open={confirming}>
+        <AlertDialogContent onCloseAutoFocus={focusRow}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span
+                className="text-foreground mb-1 line-clamp-2 block font-medium"
+                data-testid="delete-names"
+              >
+                {target.title}
+              </span>
+              Its windows and text are removed from this computer. To keep it
+              out of the list instead, mark it as done.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={remove} variant="destructive">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 
   return {
+    askDelete: () => setConfirming(true),
     backToList,
+    copyEntry,
+    /** The image buttons' copy; true once it is on the clipboard. */
+    copyImage: (viewId: ViewId) => copy({ kind: "image", viewId }),
+    copyNote,
     dialog,
     done,
     entries,
     feedback,
     onMenuOpen: () => setNow(new Date()),
+    reopen,
   };
 };
 
@@ -322,7 +622,13 @@ export const MenuEntries = ({
               {entry.label}
             </SubTrigger>
             <SubContent>
-              {entry.items.map((item) => renderItem(parts, item))}
+              {entry.items.map((item) =>
+                item.kind === "separator" ? (
+                  <Separator key={item.id} />
+                ) : (
+                  renderItem(parts, item)
+                )
+              )}
             </SubContent>
           </Sub>
         );

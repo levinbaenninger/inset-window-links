@@ -1,7 +1,5 @@
-import { readFile } from "node:fs/promises";
-
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
-import { app, clipboard, ClipboardItem, ipcMain, nativeImage } from "electron";
+import { app, ipcMain, nativeImage } from "electron";
 import { z } from "zod";
 
 import type { SettingsApi } from "../../shared/api";
@@ -12,24 +10,28 @@ import type {
   settingsChannels,
 } from "../../shared/channels";
 import { channelName } from "../../shared/channels";
+import { CopyRequestSchema, CopyTicketSchema } from "../../shared/copy";
 import type { CaptureDetail, CaptureListItem } from "../../shared/dto";
 import {
   CandidateIdSchema,
   DraftIdSchema,
   ViewIdSchema,
 } from "../../shared/ids";
+import type { LeaveAnswer } from "../../shared/leave";
+import { LeaveAnswerSchema, UnsavedCountSchema } from "../../shared/leave";
 import { SettingsChangeSchema } from "../../shared/settings";
 import { StatusRequestSchema, statusFor } from "../../shared/status";
 import {
   DraftTextSchema,
-  MAX_RELATIONSHIP,
+  EditedTextSchema,
   TodoIdSchema,
 } from "../../shared/text";
 import { openScreenSettings } from "../capture/capturer";
+import { writeClip } from "../clipboard";
 import { reopenOrigin } from "../reopen";
 import type { SessionController } from "../session/controller";
 import { originSummary, summarizeViews } from "../session/snapshot";
-import { formatNote } from "../store/note";
+import { copyCapture, CopyStarts } from "../store/copy";
 import type { CaptureStore, StoreEntry } from "../store/store";
 import type { RendererPage } from "../windows/renderer-page";
 import { shortcutStatus } from "../windows/shortcut";
@@ -58,6 +60,9 @@ export const trustedSender =
       page.matches(frame.url)
     );
   };
+
+/** The page's number for one save of a capture's draft. */
+const RevSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 
 const invoke = <S extends z.ZodTuple, R>(
   schema: S,
@@ -175,6 +180,7 @@ const listItem = (entry: StoreEntry): CaptureListItem => {
   return {
     createdAt: record.createdAt,
     description: record.description,
+    due: record.due,
     id: record.id,
     kind: "current",
     relationship: record.relationship,
@@ -185,6 +191,7 @@ const listItem = (entry: StoreEntry): CaptureListItem => {
     todos: record.todos,
     views: record.views.map((view) => ({
       appName: view.appName,
+      description: view.description,
       height: view.height,
       id: view.id,
       imageUrl: imageUrl({
@@ -208,6 +215,7 @@ const detail = (entry: StoreEntry | undefined): CaptureDetail | null => {
   return {
     createdAt: record.createdAt,
     description: record.description,
+    due: record.due,
     id: record.id,
     relationship: record.relationship,
     status: record.status,
@@ -219,12 +227,11 @@ const detail = (entry: StoreEntry | undefined): CaptureDetail | null => {
   };
 };
 
-const EditedTextSchema = DraftTextSchema.extend({
-  relationship: z.string().trim().min(1).max(MAX_RELATIONSHIP),
-});
-
 export interface LibraryActions {
   startDrag: (file: string, icon: Electron.NativeImage) => void;
+  menuOpen: (open: boolean) => void;
+  reportUnsaved: (count: number) => void;
+  answerLeave: (answer: LeaveAnswer) => void;
   newCapture: () => void;
   addWindows: () => void;
   openSettings: () => void;
@@ -235,34 +242,40 @@ export const registerLibraryChannels = (
   actions: LibraryActions,
   trusted: TrustCheck
 ): void => {
+  const starts = new CopyStarts(store);
+
   const table: Table<typeof libraryChannels> = {
     addWindows: send(z.tuple([]), actions.addWindows),
-    copyImage: invoke(
-      z.tuple([DraftIdSchema, ViewIdSchema]),
-      async (captureId, viewId) => {
-        const file = store.imagePath(captureId, viewId);
-
-        if (file !== null) {
-          const png = new Blob([await readFile(file)], { type: "image/png" });
-
-          await clipboard.write([new ClipboardItem({ "image/png": png })]);
-        }
-      }
+    answerLeave: send(z.tuple([LeaveAnswerSchema]), actions.answerLeave),
+    beginCopy: send(z.tuple([CopyTicketSchema, DraftIdSchema]), (ticket, id) =>
+      starts.begin(ticket, id)
     ),
-    copyNote: invoke(z.tuple([DraftIdSchema]), async (captureId) => {
-      const entry = store.get(captureId);
-
-      // Electron's clipboard writes resolve later; the page says Copied only once this has.
-      if (entry?.kind === "current") {
-        await clipboard.writeText(
-          formatNote(
-            entry.record,
-            app.getLocale(),
-            Intl.DateTimeFormat().resolvedOptions().timeZone
-          )
-        );
-      }
-    }),
+    // The page's copy gate asks only once the words it copies are saved.
+    copy: invoke(
+      z.tuple([
+        CopyTicketSchema,
+        DraftIdSchema,
+        CopyRequestSchema,
+        EditedTextSchema.nullable(),
+      ]),
+      (ticket, captureId, request, text) =>
+        copyCapture(
+          store,
+          starts,
+          ticket,
+          captureId,
+          request,
+          text,
+          writeClip,
+          {
+            locale: app.getLocale(),
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          }
+        )
+    ),
+    discard: invoke(z.tuple([DraftIdSchema, RevSchema.nullable()]), (id, rev) =>
+      store.discard(id, rev)
+    ),
     dragImage: send(
       z.tuple([DraftIdSchema, ViewIdSchema]),
       (captureId, viewId) => {
@@ -280,8 +293,11 @@ export const registerLibraryChannels = (
       detail(store.get(captureId))
     ),
     list: invoke(z.tuple([]), () => store.list().map(listItem)),
+    menuOpen: send(z.tuple([z.boolean()]), actions.menuOpen),
     newCapture: send(z.tuple([]), actions.newCapture),
     openSettings: send(z.tuple([]), actions.openSettings),
+    owedDiscards: invoke(z.tuple([]), () => store.owed()),
+    reportUnsaved: send(z.tuple([UnsavedCountSchema]), actions.reportUnsaved),
     remove: invoke(z.tuple([DraftIdSchema]), (captureId) =>
       store.remove(captureId)
     ),
@@ -315,13 +331,15 @@ export const registerLibraryChannels = (
       }
     ),
     setTodoDone: invoke(
-      z.tuple([DraftIdSchema, TodoIdSchema, z.boolean()]),
-      (captureId, todoId, done) => store.setTodoDone(captureId, todoId, done)
+      z.tuple([DraftIdSchema, TodoIdSchema, z.boolean(), RevSchema]),
+      (captureId, todoId, done, rev) =>
+        store.setTodoDone(captureId, todoId, done, rev)
     ),
     shortcut: invoke(z.tuple([]), () => shortcutStatus()),
     updateText: invoke(
-      z.tuple([DraftIdSchema, EditedTextSchema]),
-      (captureId, text) => store.updateText(captureId, text, new Date())
+      z.tuple([DraftIdSchema, EditedTextSchema, RevSchema]),
+      (captureId, text, rev) =>
+        store.updateText(captureId, text, new Date(), rev)
     ),
   };
 
@@ -347,6 +365,7 @@ export const registerSettingsChannels = (
       actions.fitHeight
     ),
     getView: invoke(z.tuple([]), actions.getView),
+    menuOpen: send(z.tuple([z.boolean()]), actions.menuOpen),
     setOpenAtLogin: invoke(z.tuple([z.boolean()]), actions.setOpenAtLogin),
     update: invoke(z.tuple([SettingsChangeSchema]), (change) =>
       actions.update(change)

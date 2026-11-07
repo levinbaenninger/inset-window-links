@@ -3,6 +3,7 @@ import { app, BrowserWindow } from "electron";
 import type { DraftSnapshot } from "../../shared/dto";
 import type { CaptureId } from "../../shared/ids";
 import { newDraftId } from "../../shared/ids";
+import { SETTLE_MS } from "../../shared/leave";
 import type { WindowCapturer } from "../capture/capturer";
 import { capturePlatform, screenAccess } from "../capture/capturer";
 import type { ImageRef } from "../ipc/image-url";
@@ -15,6 +16,7 @@ import { toNewCapture, toSnapshot } from "./snapshot";
 import type {
   CaptureOutcome,
   Draft,
+  Exit,
   PendingSource,
   QuitChoice,
   SessionEffect,
@@ -24,26 +26,45 @@ import type {
 
 const ids: IdSource = { draftId: newDraftId, token: () => crypto.randomUUID() };
 
+/** Recent Captures, as far as quitting goes. */
+export interface QuitGate {
+  /** `go` at once unless the page holds words that may not be saved; else what its prompt answers. */
+  letQuit: () => Promise<"go" | "stay">;
+  /** The app is exiting now: closing the window must not hold, or Electron would cancel the quit. */
+  quitting: () => void;
+}
+
 export class SessionController {
   readonly #capturer: WindowCapturer;
   readonly #store: CaptureStore;
   readonly #popover: PopoverWindow;
   readonly #savedListeners = new Set<(captureId: CaptureId) => void>();
+  readonly #library: QuitGate;
   #state: SessionState = initialSession(newDraftId());
   #exiting = false;
+  /** An exit waiting for Recent Captures to let go: a second one joins it rather than run twice. */
+  #waiting: Exit | null = null;
+  /** Set while the quit is asked for again once Recent Captures let go, so it then exits at once. */
+  #released = false;
+  /** Ends the wait of a quit or restart for its save; the latest wait replaces any before it. */
+  #saveWait: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     capturer: WindowCapturer,
     store: CaptureStore,
-    popover: PopoverWindow
+    popover: PopoverWindow,
+    library: QuitGate
   ) {
     this.#capturer = capturer;
     this.#store = store;
     this.#popover = popover;
+    this.#library = library;
 
     // Any way the quit prompt goes away other than its buttons counts as Cancel, so quitting never sticks.
     popover.onHidden(() => {
-      if (this.#state.activity.kind === "confirmingQuit") {
+      const { kind } = this.#state.activity;
+
+      if (kind === "confirmingQuit" || kind === "saveLate") {
         this.chooseQuit("cancel");
       }
     });
@@ -197,20 +218,34 @@ export class SessionController {
         break;
       }
 
+      case "limitSaveWait": {
+        clearTimeout(this.#saveWait);
+        this.#saveWait = setTimeout(
+          () => this.dispatch({ type: "saveWaitEnded" }),
+          SETTLE_MS
+        );
+        break;
+      }
+
+      case "withdraw": {
+        this.#store.withdraw(effect.draftId);
+        break;
+      }
+
       case "askQuit": {
         this.#popover.showAt({ kind: "keep" });
         break;
       }
 
       case "exitApp": {
-        this.#exiting = true;
-        this.#popover.allowClose();
+        const exit = effect.relaunch === true ? "relaunch" : "quit";
 
-        if (effect.relaunch === true) {
-          app.relaunch();
+        if (this.#released) {
+          this.#exit(exit);
+        } else {
+          void this.#holdExit(exit);
         }
 
-        setImmediate(() => app.quit());
         break;
       }
 
@@ -218,6 +253,55 @@ export class SessionController {
         break;
       }
     }
+  }
+
+  /**
+   * The panel's draft is settled; Recent Captures may still hold words that couldn't be saved.
+   * Once it lets go, the quit is asked for again, since a capture may have started meanwhile:
+   * the reducer exits at once only when there is still nothing to lose. A Cancel there keeps
+   * the panel's choice: a draft saved or discarded stays so.
+   */
+  async #holdExit(exit: Exit) {
+    if (this.#waiting !== null) {
+      this.#waiting = exit === "relaunch" ? exit : this.#waiting;
+
+      return;
+    }
+
+    this.#waiting = exit;
+
+    const answer = await this.#library.letQuit();
+    const wanted = this.#waiting;
+
+    this.#waiting = null;
+
+    if (answer === "stay") {
+      return;
+    }
+
+    this.#released = true;
+    this.dispatch(
+      wanted === "relaunch"
+        ? { relaunch: true, type: "quitRequested" }
+        : { type: "quitRequested" }
+    );
+    this.#released = false;
+  }
+
+  #exit(exit: Exit) {
+    if (this.#exiting) {
+      return;
+    }
+
+    this.#exiting = true;
+    this.#popover.allowClose();
+    this.#library.quitting();
+
+    if (exit === "relaunch") {
+      app.relaunch();
+    }
+
+    setImmediate(() => app.quit());
   }
 
   async #capture(token: string, run: () => Promise<CaptureOutcome>) {

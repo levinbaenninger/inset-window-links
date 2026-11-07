@@ -1,51 +1,27 @@
-export const formatDateTime = (iso: string): string =>
-  new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+import {
+  clockTime,
+  dayAndTime,
+  dayHeading,
+  shortDate,
+} from "../../../shared/dates";
 
 export const viewTitle = (title: string | null): string =>
   title ?? "Untitled window";
 
 /** "2:05 PM" or "14:05", as the system writes the time. */
-export const formatClock = (iso: string): string =>
-  new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-
-const startOfDay = (date: Date): number =>
-  new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-
-const DAY_MS = 86_400_000;
+export const formatClock = (iso: string): string => clockTime(new Date(iso));
 
 /** "Today", "Yesterday" or "Tomorrow", then the weekday and date, so a list reads by recency. */
-export const formatDay = (iso: string, now: Date = new Date()): string => {
-  const date = new Date(iso);
-  const days = Math.round((startOfDay(now) - startOfDay(date)) / DAY_MS);
+export const formatDay = (iso: string, now: Date = new Date()): string =>
+  dayHeading(new Date(iso), now);
 
-  if (days === 0) {
-    return "Today";
-  }
+/** "Tomorrow, 9:00": a day and a time, for when a capture was made or a snooze ends. */
+export const formatWhen = (iso: string, now: Date = new Date()): string =>
+  dayAndTime(new Date(iso), now);
 
-  if (days === 1) {
-    return "Yesterday";
-  }
-
-  if (days === -1) {
-    return "Tomorrow";
-  }
-
-  const options: Intl.DateTimeFormatOptions = {
-    day: "numeric",
-    month: "short",
-    weekday: "short",
-  };
-
-  if (date.getFullYear() !== now.getFullYear()) {
-    options.year = "numeric";
-  }
-
-  return date.toLocaleDateString([], options);
-};
+/** "Fri 7 Nov", beside a quick date choice. */
+export const formatPickHint = (date: Date, now: Date = new Date()): string =>
+  shortDate(date, now, { weekday: true });
 
 export const plural = (count: number, noun: string): string =>
   `${count} ${count === 1 ? noun : `${noun}s`}`;
-
-/** "Tomorrow, 9:00": a day and a time, for when a snooze ends. */
-export const formatWhen = (iso: string, now: Date = new Date()): string =>
-  `${formatDay(iso, now)}, ${formatClock(iso)}`;

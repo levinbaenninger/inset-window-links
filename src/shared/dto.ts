@@ -1,3 +1,4 @@
+import type { DueDate } from "./due";
 import type { CandidateId, CaptureId, DraftId, ViewId } from "./ids";
 import type { CaptureStatus } from "./status";
 import type { DraftText, Todo } from "./text";
@@ -41,6 +42,8 @@ export interface ViewSummary {
   width: number;
   height: number;
   imageUrl: string;
+  /** What matters in this window. A draft's live copy is in its text, by view id. */
+  description: string;
   source: ViewSource;
   /** 1-based position of an earlier view of the same live window, so repeats read as intentional. */
   sameWindowAs: number | null;
@@ -61,7 +64,9 @@ export type Notice =
   | { kind: "needsRelationship" };
 
 export type ActivitySummary =
-  | { kind: "idle" | "saving" | "confirmingQuit" }
+  | { kind: "idle" | "saving" }
+  /** The quit prompt; `late` once a save it waits for didn't land within SETTLE_MS. */
+  | { kind: "confirmingQuit"; late: boolean }
   | {
       kind: "capturing";
       /** The window being captured, once identified. Shown only where capture is slow (Windows). */
@@ -74,11 +79,19 @@ export type ActivitySummary =
       candidates: readonly CandidateSummary[] | "loading";
     };
 
+/** A window being captured: its title and app once known (Windows), else null. */
+export type PendingSummary = {
+  title: string | null;
+  appName: string | null;
+} | null;
+
 export interface DraftSnapshot {
   draftId: DraftId;
   views: readonly ViewSummary[];
   text: DraftText;
   activity: ActivitySummary;
+  /** Windows still landing from a capture that Add Windows overtook. Save waits for them. */
+  landing: readonly PendingSummary[];
   notice: Notice | null;
   shortcut: ShortcutStatus;
   platform: CapturePlatform;
@@ -88,6 +101,7 @@ export interface ListedView {
   id: ViewId;
   title: string | null;
   appName: string | null;
+  description: string;
   imageUrl: string;
   width: number;
   height: number;
@@ -100,6 +114,7 @@ export type CaptureListItem =
       createdAt: string;
       relationship: string;
       description: string;
+      due: DueDate | null;
       status: CaptureStatus;
       todos: readonly Todo[];
       views: readonly ListedView[];
@@ -115,6 +130,7 @@ export interface CaptureDetail {
   updatedAt: string;
   relationship: string;
   description: string;
+  due: DueDate | null;
   status: CaptureStatus;
   todos: readonly Todo[];
   views: readonly ViewSummary[];
@@ -125,3 +141,20 @@ export type MutationOutcome =
   | { kind: "missing" }
   | { kind: "readOnly"; version: number }
   | { kind: "failed"; message: string };
+
+/**
+ * A Discard main still owes for a page that closed, so a Recent Captures page that opens meanwhile
+ * shows it as not discarded, with Keep changes and Discard again, rather than the discarded words
+ * as saved.
+ */
+export interface OwedDiscard {
+  captureId: CaptureId;
+  /** The save main still holds, which Discard again names. */
+  rev: number;
+  /** What the capture holds now: the words the user discarded. */
+  words: DraftText;
+  /** What the Discard puts back. */
+  saved: DraftText;
+  /** Why main couldn't put it back; null while it is still trying. */
+  message: string | null;
+}

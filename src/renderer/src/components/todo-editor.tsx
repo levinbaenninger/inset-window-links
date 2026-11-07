@@ -1,8 +1,8 @@
 import { Add01Icon, Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "cn";
-import { useRef } from "react";
-import type { KeyboardEvent } from "react";
+import { useImperativeHandle, useRef } from "react";
+import type { KeyboardEvent, Ref } from "react";
 
 import { Checkbox } from "@/components/ui/checkbox";
 
@@ -15,6 +15,14 @@ const newTodo = (): Todo => ({
   text: "",
 });
 
+export interface TodoEditorHandle {
+  /**
+   * The next-steps key: adds the first step, focuses the last one from outside the list, and
+   * from inside it starts a new step after the current one.
+   */
+  focusOrAdd: () => void;
+}
+
 /**
  * Next steps as a short list, typed like a checklist in a notes app: Return starts the next
  * one, Backspace in an empty one removes it, the arrow keys move between them. The circle checks
@@ -25,6 +33,8 @@ export const TodoEditor = ({
   onChange,
   onToggle,
   onLeave,
+  onEmpty,
+  handle,
   label = "Next steps",
 }: {
   todos: readonly Todo[];
@@ -32,6 +42,9 @@ export const TodoEditor = ({
   onToggle?: (todo: Todo, done: boolean) => void;
   /** Called when a step's field loses focus; Escape then leaves the field too. */
   onLeave?: () => void;
+  /** The last step was removed from the keyboard; focus goes where this puts it. */
+  onEmpty?: () => void;
+  handle?: Ref<TodoEditorHandle>;
   label?: string;
 }) => {
   const fields = useRef(new Map<string, HTMLInputElement>());
@@ -59,8 +72,31 @@ export const TodoEditor = ({
     const neighbour = todos[index - 1] ?? todos[index + 1];
 
     onChange(todos.filter((_, position) => position !== index));
-    focus(neighbour?.id);
+
+    if (neighbour === undefined) {
+      onEmpty?.();
+    } else {
+      focus(neighbour.id);
+    }
   };
+
+  useImperativeHandle(handle, () => ({
+    focusOrAdd: () => {
+      const current = todos.findIndex(
+        (todo) => fields.current.get(todo.id) === document.activeElement
+      );
+
+      const last = todos.at(-1);
+
+      if (current !== -1) {
+        insertAfter(current);
+      } else if (last === undefined) {
+        insertAfter(-1);
+      } else {
+        focus(last.id);
+      }
+    },
+  }));
 
   const toggle = (todo: Todo) => {
     if (onToggle === undefined) {
@@ -83,7 +119,7 @@ export const TodoEditor = ({
     const todo = todos[index];
     const plain = !event.metaKey && !event.ctrlKey && !event.altKey;
 
-    if (event.key === "Escape" && onLeave !== undefined) {
+    if (event.key === "Escape") {
       event.preventDefault();
       event.currentTarget.blur();
     } else if (event.key === "Enter" && plain && !event.shiftKey) {
@@ -117,6 +153,7 @@ export const TodoEditor = ({
               />
               <input
                 aria-label={`Next step ${index + 1}`}
+                autoFocus={todos.length === 1 && todo.text === ""}
                 className={cn(
                   "placeholder:text-muted-foreground h-8 min-w-0 flex-1 bg-transparent text-sm outline-none",
                   todo.done && "text-muted-foreground line-through"

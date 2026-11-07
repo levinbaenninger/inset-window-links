@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   app,
   BrowserWindow,
+  dialog,
   session as electronSession,
   globalShortcut,
   Menu,
@@ -11,11 +12,14 @@ import {
   powerMonitor,
   shell,
   systemPreferences,
+  webContents,
 } from "electron";
+import type { WebContents } from "electron";
 
 import type { IconPlace, SettingsView } from "../shared/settings";
-import type { AppMenuActions } from "./app-menu";
-import { appMenuTemplate, keyAction } from "./app-menu";
+import type { PageCommand } from "../shared/shortcuts";
+import type { AppMenuActions, KeyAction } from "./app-menu";
+import { appMenuTemplate } from "./app-menu";
 import { loadAppState, saveAppState } from "./app-state";
 import {
   capturePlatform,
@@ -30,6 +34,9 @@ import {
   registerSettingsChannels,
   trustedSender,
 } from "./ipc/register";
+import { wireMenuKeys } from "./menu-keys";
+import { OpenMenus } from "./menu-open";
+import { settleWrites, writesDialog } from "./quit-writes";
 import { SessionController } from "./session/controller";
 import { openSettingsStore } from "./settings-store";
 import { startSnoozeClock } from "./snooze-clock";
@@ -156,18 +163,22 @@ const start = async () => {
   await app.whenReady();
   denyEverything();
 
-  /** Set once the app's actions exist; until then a key press does nothing. */
-  let answerMenuKeys:
-    | ((event: Electron.Event, input: Electron.Input) => void)
-    | null = null;
+  /** Set once the app's actions exist; until then a key press reaches the page as usual. */
+  let answerMenuKeys: ((action: KeyAction) => void) | null = null;
 
-  // Windows has no menu bar, so every Inset window answers the Mac menu's keys itself.
+  const menus = new OpenMenus<WebContents>((contents) =>
+    BrowserWindow.fromWebContents(contents)
+  );
+
+  // Windows has no menu bar, so every Inset page answers the Mac menu's keys itself: each
+  // page's contents, including any made before this line, so no window can miss them.
   if (!mac) {
-    app.on("browser-window-created", (_event, win) => {
-      win.webContents.on("before-input-event", (event, input) =>
-        answerMenuKeys?.(event, input)
-      );
-    });
+    wireMenuKeys(
+      app,
+      webContents.getAllWebContents(),
+      () => answerMenuKeys,
+      (contents) => menus.isOpen(contents)
+    );
   }
 
   const settings = await openSettingsStore(
@@ -210,7 +221,7 @@ const start = async () => {
     () => settings.current().rememberPages
   );
 
-  const session = new SessionController(capturer, store, popover);
+  const session = new SessionController(capturer, store, popover, library);
 
   store.onChange(() => library.notifyChanged());
 
@@ -246,6 +257,15 @@ const start = async () => {
     store,
     {
       addWindows,
+      answerLeave: (answer) => library.answerLeave(answer),
+      menuOpen: (open) => {
+        const contents = library.contents();
+
+        if (contents !== null) {
+          menus.set(contents, open);
+        }
+      },
+      reportUnsaved: (count) => library.reportUnsaved(count),
       newCapture: showDraft,
       openSettings,
       startDrag: (file, icon) =>
@@ -266,6 +286,36 @@ const start = async () => {
     app.quit();
   };
 
+  /**
+   * A menu key for a page goes to the Inset window in front. With none in front, the field keys
+   * open the panel, and the sheet opens in Recent Captures; the keys for an open capture or the
+   * sidebar need Recent Captures to be open already.
+   */
+  const toPage = (command: PageCommand) => {
+    if (popover.isFocused()) {
+      popover.command(command);
+
+      return;
+    }
+
+    if (library.isFocused() || command === "showShortcuts") {
+      library.command(command);
+
+      return;
+    }
+
+    if (
+      command === "focusDescription" ||
+      command === "setDue" ||
+      command === "focusSteps"
+    ) {
+      showDraft();
+      popover.command(command);
+    } else if (library.window() !== null) {
+      library.command(command);
+    }
+  };
+
   const actions = {
     addFromWindowList: addWindows,
     checkForUpdates: () => updater.check(),
@@ -278,6 +328,7 @@ const start = async () => {
     },
     openRecent,
     openSettings,
+    openShortcuts: () => toPage("showShortcuts"),
     openWelcome: () => library.open("/welcome"),
     openScreenSettings:
       capturePlatform === "macos"
@@ -337,6 +388,14 @@ const start = async () => {
   const menuActions: AppMenuActions = {
     addWindows,
     checkForUpdates: actions.checkForUpdates,
+    copyNote: () => toPage("copyNote"),
+    focusDescription: () => toPage("focusDescription"),
+    focusSteps: () => toPage("focusSteps"),
+    reopen: () => toPage("reopen"),
+    setDue: () => toPage("setDue"),
+    showShortcuts: actions.openShortcuts,
+    toggleDone: () => toPage("toggleDone"),
+    toggleSidebar: () => toPage("toggleSidebar"),
     closeWindow: () => {
       if (popover.isFocused()) {
         popover.hide();
@@ -353,20 +412,20 @@ const start = async () => {
     },
     openSettings,
     restartToUpdate,
-    saveCapture: () => session.saveDraft(),
+    // The panel saves what it shows and locks its fields at once, so no key typed after ⌘S is lost.
+    saveCapture: () => {
+      if (popover.isFocused()) {
+        popover.command("saveCapture");
+      } else {
+        session.saveDraft();
+      }
+    },
     setFloatOnTop: (on) => {
       void settings.update({ floatOnTop: on });
     },
   };
 
-  answerMenuKeys = (event, input) => {
-    const action = keyAction(input);
-
-    if (action !== null) {
-      event.preventDefault();
-      menuActions[action]();
-    }
-  };
+  answerMenuKeys = (action) => menuActions[action]();
 
   const refreshAppMenu = () => {
     if (!mac) {
@@ -377,6 +436,7 @@ const start = async () => {
       Menu.buildFromTemplate(
         appMenuTemplate(
           {
+            captureOpen: library.showsCapture() && !popover.isFocused(),
             floatOnTop: settings.current().floatOnTop,
             shortcut: shortcut.kind === "registered" ? shortcut.label : null,
             update: updater.state(),
@@ -428,6 +488,13 @@ const start = async () => {
       },
       fitHeight: (height) => settingsWindow.fitHeight(height),
       getView: () => Promise.resolve(settingsView()),
+      menuOpen: (open) => {
+        const contents = settingsWindow.window()?.webContents;
+
+        if (contents !== undefined) {
+          menus.set(contents, open);
+        }
+      },
       setOpenAtLogin: (on) => {
         app.setLoginItemSettings({ openAtLogin: on });
         pushSettings();
@@ -479,15 +546,47 @@ const start = async () => {
   });
   // Accessibility can be turned on in System Settings while the window is open.
   app.on("browser-window-focus", pushSettings);
+  // The Capture menu's items for an open capture follow Recent Captures' page and the panel's focus.
+  library.onRouteChange(refreshAppMenu);
+  app.on("browser-window-focus", refreshAppMenu);
+  app.on("browser-window-blur", refreshAppMenu);
 
   // Opening the app again, from the Start menu or a shortcut, is how a lost tray icon gets found.
   app.on("second-instance", actions.openHome);
   app.on("before-quit", (event) => session.interceptQuit(event));
+  /** Set once the last writes are written, or the user chose to quit without them. */
+  let writesSettled = false;
+  let settlingWrites = false;
+
+  const quitOnceWritten = async () => {
+    await settleWrites({
+      ask: async () => {
+        const { choices, ...shown } = writesDialog(app.getName());
+
+        const { response } = await dialog.showMessageBox({
+          ...shown,
+          noLink: true,
+          type: "warning",
+        });
+
+        return choices[response] ?? "wait";
+      },
+      writes: store,
+    });
+    writesSettled = true;
+    app.quit();
+  };
+
   app.on("will-quit", (event) => {
-    // The library's last save arrives as its window closes; quitting waits for it to be written.
-    if (store.busy) {
+    // The library's last save arrives as its window closes; quitting waits for it to be written,
+    // and after a few seconds asks rather than wait for good.
+    if (store.busy && !writesSettled) {
       event.preventDefault();
-      void store.idle().then(() => app.quit());
+
+      if (!settlingWrites) {
+        settlingWrites = true;
+        void quitOnceWritten();
+      }
 
       return;
     }
