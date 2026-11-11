@@ -1,3 +1,4 @@
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { describe, expect, it } from "vitest";
@@ -8,11 +9,12 @@ import { record } from "./permissions/flow";
 import { freshRecord } from "./tutorial/store";
 
 const memoryFs = (initial?: string) => {
+  const stateFile = path.join("/data", "app-state.json");
   const files = new Map<string, string>();
   const log: string[] = [];
 
   if (initial !== undefined) {
-    files.set("/data/app-state.json", initial);
+    files.set(stateFile, initial);
   }
 
   const fs: AppStateFs = {
@@ -41,7 +43,7 @@ const memoryFs = (initial?: string) => {
     },
   };
 
-  return { file: () => files.get("/data/app-state.json"), fs, log };
+  return { file: () => files.get(stateFile), fs, log };
 };
 
 describe(readAppState, () => {
