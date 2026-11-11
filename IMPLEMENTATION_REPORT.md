@@ -401,6 +401,113 @@ By hand, on the development build:
 - Open at Login in a development run registers `electron.exe` without the app's path, so it would start a bare Electron. Packaged builds register their own exe. Unchanged.
 - macOS was not run. The changes that reach it are the panel's close-to-hide with its exit path, the hidden root scrollbar in the panel, which should change nothing there because macOS scrollbars overlay the page, the origin label read with `path.parse`, and Copy note's wait.
 
+## Sixth round: permission setup and the in-app tutorial
+
+Ports Inset Shelf's onboarding and tutorial kits (levinbaenninger/inset-shelf#11, commit f62373b). They replace the reactive permission handling: a notice on the first refused capture, "Screen Recording Settings…", and Settings' Turn on, which asked for Accessibility once and then opened the pane. They also replace the first-run guide (the library's `/welcome` route, "How It Works"). The app now teaches itself inside Recent Captures and the capture panel.
+
+### What it does
+
+- **Setup window (macOS).** Welcome → Allow access → Done, with Back, one dot per page, Not now, and a height that fits its page.
+  - Allow access lists Screen Recording (required) and Accessibility (optional, and it says so). It is left out when both are granted.
+  - Allow shows macOS's prompt: a 1 × 1 `desktopCapturer` grab, or `isTrustedAccessibilityClient(true)`. It opens the exact pane twice, in case System Settings starts cold. The window then moves to the right edge of the work area and shows without the keyboard. While Allow access shows, it floats one level above the capture panel, on every Space and over full-screen apps.
+  - The drag tile ("↑ Drag Inset Window Links into the … list") drags the `.app` bundle found from `app.getPath("exe")`. It isn't shown in development, outside a bundle, for Electron.app or for a translocated copy.
+  - Accessibility is polled every 3 s while the window is open, and every 500 ms while Allow access waits on it. Turning it on also turns on `rememberPages`.
+  - Screen Recording keeps its launch value, so its row offers **Reopen to finish**. That goes through Window Links' own `SessionController.requestRelaunch()`, so an unsaved draft is asked about first. If that quit is cancelled or its save fails, the row goes back to Reopen to finish. The step is saved first, so the app comes back on Allow access.
+  - Done hands over with **Start Capturing** or **Show Me Around**. A first run then opens Recent Captures.
+  - Set Up Permissions… (Help and tray), the panel's Screen Recording notice and Settings' Turn on open it at the matching permission. The panel steps aside and Settings closes, because both float.
+  - On Windows the kit only writes its first-run flag.
+- **Prompts.** Until Screen Recording is granted, the capture probe runs get-windows without its own Screen Recording check, and Add Windows lists nothing and shows the notice. Neither raises macOS's prompt, so the setup owns it.
+- **Tutorial (macOS and Windows), on Shelf's kit.**
+  - A Getting started checklist at the top of Recent Captures' list, with five tasks. Each ticks off only where the app really does it:
+    - a window landing from the capture shortcut;
+    - windows landing from the list;
+    - a save;
+    - Reopen opening at least one window;
+    - a next step checked off and saved.
+  - One-time tips, one at a time across the panel and Recent Captures: the Add windows tile, the title field, the list, search and Reopen all.
+  - Show Me Around: a six-stop spotlight walkthrough of Recent Captures.
+  - Getting Started and Show Me Around are in the Help menu and the tray. Show tips and Reset Tutorial are in Settings.
+  - The panel and Recent Captures call `pageClosed` when they hide or close.
+- **Example capture.** On a fresh install only (`welcomed` unset and no captures), one example is saved.
+  - It is saved through the capture panel's own path: a draft → `toNewCapture` → `CaptureStore.publish`, one rename into place. So it has the records' format and Discard and save safety apply as to any capture.
+  - Its two pictures are drawn at runtime from bundled SVGs (`src/main/examples/`) in a hidden, script-less offscreen window. Its reopenable page is this repository on GitHub.
+  - It is tagged Example in the list and on its page, and Remove Examples deletes it. It is never added again: after removal, after an earlier install, or after a damaged state file.
+- **State.** One store, `app-state.json`: `welcomed`, the setup's record and the tutorial's record. Each falls back on its own, so a damaged record never brings the first run back.
+
+### Code layout and differences from Shelf's kit
+
+- **Copied byte for byte:**
+  - `src/main/permissions/*` and `src/main/tutorial/*`, tests included.
+  - `src/shared/{onboarding,tutorial}.ts`.
+  - `src/renderer/src/tutorial/*`, including the geometry test.
+  - `src/renderer/src/onboarding/{onboarding-flow,permission-row}.tsx`.
+- **What makes that possible here:**
+  - an `@shared/*` alias (tsconfigs, electron-vite, Vitest);
+  - two shims, `@/shared/platform` (from the preload's platform) and `@/shared/window-header` (Window Links' 44-point strip);
+  - Shelf's `quiet` button variant and its `CSSProperties` custom-property typing;
+  - `--color-pin`, Shelf's accent, which the Waiting… dot uses, mapped to Window Links' brand blue;
+  - the `.coach-*` and `.spotlight-*` rules.
+- **Window Links' own adapter:**
+  - `src/main/links-onboarding.ts` and `src/main/links-tutorial.ts`, its words, tasks, tips, stops and example;
+  - `src/main/examples/`;
+  - `src/main/windows/onboarding-window.ts`;
+  - `src/renderer/src/onboarding/main.tsx` and `src/renderer/src/library/tutorial.tsx`;
+  - the `data-coach` anchors;
+  - its channel tables, preload and Zod registration;
+  - a block in `src/main/index.ts`.
+- **Deliberate differences from Shelf:**
+  - Records live in `app-state.json`, not `onboarding.json`/`tutorial.json`. Shelf's file-backed `createOnboardingStore`/`createTutorialStore` are copied but unused.
+  - Reopen to finish passes the kit `quit` = "remember `atExit`, call `session.requestRelaunch()`" and a no-op `relaunch`. The session's own exit already calls `app.relaunch()`, and a second call would start a second copy. The kit's `createSafeRelaunch` still guards the token, and the session's reducer already drops a relaunch on Cancel. One difference remains: Window Links keeps a relaunch when a plain Quit joins a pending one.
+  - The setup window doesn't block the app's quit: it closes freely once the session exits. Shelf's always prevents close.
+  - Done's start button reads "Start Capturing"; the longer app name doesn't fit "Start Using …" in 460 points.
+  - Accessibility's purpose starts with "Optional.", because the kit has no optional flag.
+  - The tutorial hides tips and the checklist in harness runs without `INSET_E2E_WELCOME`. Shelf instead writes a record into the harness's data folder.
+
+### Checked
+
+- `pnpm check` (format, lint, typecheck, tests) passes. 481 tests in 39 files, including:
+  - Shelf's kit tests, unchanged: onboarding state (granted steps skipped, persistence across relaunch, Windows only writing the flag), the safe relaunch, the poller, the tutorial (tasks, one bubble, tips never repeating, examples once, reset), and spotlight step resolution and bubble geometry;
+  - Window Links' own: only real keys on macOS and Windows, no ⌘ on Windows and no Ctrl on a Mac, only anchors the pages mark, hints tied to tasks, six stops, and an https example page;
+  - `app-state.json` with all three records.
+- `pnpm build` passes. The 28 copied kit files were diffed against Shelf's commit `f62373b`: no difference.
+- `pnpm screens` passed all 308 shots. The setup and tutorial scenes were rerun after the last change to the title tip (16 and 34 shots).
+- `pnpm screens` renders, in light and dark:
+  - the setup (macOS): Welcome, Allow access, Waiting… with the drag tile, Reopen to finish, Allowed, Done, Done with permissions skipped, and Done with nothing missing;
+  - the tutorial (macOS and Windows looks): first run with the example, Remove Examples, checklist progress, a task's how-to, the search tip, the checklist done, walkthrough stops 1–3, and the panel's Add windows and title tips.
+
+  The scenes also check:
+  - Allow and Back send the right actions, and Show Me Around sends `finish("showAround")`;
+  - the dots read "Step n of 3", or "Step 2 of 2" with nothing missing;
+  - Welcome and Done are at most 320 px tall;
+  - the Waiting… pulse stops under reduced motion;
+  - clicking a task only asks for its how-to.
+  - the panel's title tip (placed above the field, so it doesn't cover the description) leaves the keyboard in the title: typing reaches it, Return still moves on to the description, and the first Escape only puts the tip away.
+
+- **The built app, driven by Playwright on macOS 27.2 with an empty data folder:**
+  - The setup window opened alone at Welcome. The host's grants were inherited, so it went Welcome → Done.
+  - Show Me Around opened Recent Captures and started the walkthrough at "1 of 6".
+  - The checklist showed 0 of 5, and the example capture was on disk with two PNGs and the GitHub page.
+  - After the walkthrough, tips came one at a time ("Recent Captures", then "Search, and what’s due").
+  - Remove Examples deleted the capture. A relaunch opened no window and added nothing.
+
+### Not verified
+
+- **Real grants.**
+  - The prompts.
+  - A row turning green.
+  - The window beside System Settings without focus.
+  - Reopen to finish relaunching onto Allow access.
+  - macOS's own Quit & Reopen.
+
+  Every run inherited the terminal's grants.
+
+- Dropping the drag tile into a Privacy & Security list.
+- Tasks ticking off from a real ⌥⌘W, list pick, save, Reopen or step check in a driven run. The hooks are covered in code and unit tests only.
+- Windows, including `verify-windows.ts`'s updated first-run and Getting Started checks. `verify-desktop.ts`'s tray expectation was updated but not run.
+- The panel's tips in the real app (only in the screens harness).
+- The drag tile in a packaged app: it now reads its icon with `app.getFileIcon`, and `pnpm package:dir` wasn't run again for this round.
+- In the real run, the search tip sat over the checklist's ⋯ and × until it was dismissed. That placement is the kit's, and it was left as it is.
+
 ## Design notes
 
 - Main owns the draft. The renderer is the only writer of the text and mirrors every edit to main. Save carries the text too, so quit protection never needs a round trip to the renderer.

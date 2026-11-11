@@ -27,8 +27,12 @@ export interface AppMenuActions {
   find: () => void;
   openRecent: () => void;
   openSettings: () => void;
-  openHelp: () => void;
-  openScreenSettings: () => void;
+  /** The Getting started checklist, in Recent Captures. */
+  gettingStarted: () => void;
+  /** The spotlight walkthrough of Recent Captures. */
+  showMeAround: () => void;
+  /** The permission onboarding, at the first permission still missing. */
+  openPermissions: () => void;
   setFloatOnTop: (on: boolean) => void;
   checkForUpdates: () => void;
   restartToUpdate: () => void;
@@ -254,7 +258,8 @@ export const appMenuTemplate = (
   {
     role: "help",
     submenu: [
-      { click: actions.openHelp, label: `${APP_NAME} Help` },
+      { click: actions.gettingStarted, label: "Getting Started" },
+      { click: actions.showMeAround, label: "Show Me Around" },
       item("showShortcuts", "Keyboard Shortcuts", actions.showShortcuts),
       SEPARATOR,
       {
@@ -264,10 +269,7 @@ export const appMenuTemplate = (
             ? "Capture Shortcut Is Taken by Another App"
             : `Add a Window: ${state.shortcut}`,
       },
-      {
-        click: actions.openScreenSettings,
-        label: "Screen Recording Settings…",
-      },
+      { click: actions.openPermissions, label: "Set Up Permissions…" },
     ],
   },
 ];

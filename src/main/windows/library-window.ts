@@ -3,6 +3,7 @@ import { app, BrowserWindow, dialog, nativeTheme } from "electron";
 import { pushChannels } from "../../shared/channels";
 import type { LeaveAnswer, LeaveReason } from "../../shared/leave";
 import type { PageCommand } from "../../shared/shortcuts";
+import type { TutorialView } from "../../shared/tutorial";
 import type { LateChoice, LateWhy } from "../leave-gate";
 import { LeaveGate, lateDialog } from "../leave-gate";
 import { cursorWorkArea } from "./cursor-display";
@@ -73,6 +74,7 @@ export class LibraryWindow {
   /** An open request that arrived while the previous window was still being torn down. */
   #reopen: { route: string | undefined } | null = null;
   #closing = false;
+  readonly #hiddenListeners = new Set<() => void>();
   /**
    * Set once the app exits. Words reported after Recent Captures let the quit go are sent from
    * pagehide, and will-quit waits for them to be written.
@@ -115,6 +117,26 @@ export class LibraryWindow {
         win.setTitleBarOverlay(titleBarOverlay());
       }
     });
+  }
+
+  /** Runs when the window hides or closes: the tutorial lets go of a tip it showed there. */
+  onHidden(listener: () => void): void {
+    this.#hiddenListeners.add(listener);
+  }
+
+  #hidden(): void {
+    for (const listener of this.#hiddenListeners) {
+      listener();
+    }
+  }
+
+  isVisible(): boolean {
+    return this.window()?.isVisible() ?? false;
+  }
+
+  /** The tutorial's part for Recent Captures: the checklist, tips and the walkthrough. */
+  pushTutorial(view: TutorialView): void {
+    this.contents()?.send(pushChannels.tutorial, view);
   }
 
   get page(): RendererPage {
@@ -168,6 +190,7 @@ export class LibraryWindow {
     }
 
     win.once("ready-to-show", () => win.show());
+    win.on("hide", () => this.#hidden());
     win.webContents.on("did-navigate-in-page", () => this.#routeChanged());
     win.webContents.on("did-finish-load", () => this.#routeChanged());
     // A held close leaves the window open and usable, so its prompt shows and the menus still reach it.
@@ -191,6 +214,7 @@ export class LibraryWindow {
         this.#win = null;
         this.#closing = false;
         this.#routeChanged();
+        this.#hidden();
       }
 
       const pending = this.#reopen;

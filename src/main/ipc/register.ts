@@ -2,10 +2,11 @@ import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
 import { app, ipcMain, nativeImage } from "electron";
 import { z } from "zod";
 
-import type { SettingsApi } from "../../shared/api";
+import type { OnboardingApi, SettingsApi } from "../../shared/api";
 import type {
   WindowRole,
   libraryChannels,
+  onboardingChannels,
   popoverChannels,
   settingsChannels,
 } from "../../shared/channels";
@@ -19,6 +20,10 @@ import {
 } from "../../shared/ids";
 import type { LeaveAnswer } from "../../shared/leave";
 import { LeaveAnswerSchema, UnsavedCountSchema } from "../../shared/leave";
+import {
+  HandOffChoiceSchema,
+  PermissionIdSchema,
+} from "../../shared/onboarding";
 import { SettingsChangeSchema } from "../../shared/settings";
 import { StatusRequestSchema, statusFor } from "../../shared/status";
 import {
@@ -26,7 +31,8 @@ import {
   EditedTextSchema,
   TodoIdSchema,
 } from "../../shared/text";
-import { openScreenSettings } from "../capture/capturer";
+import { TutorialActionSchema } from "../../shared/tutorial";
+import type { TutorialAction, TutorialView } from "../../shared/tutorial";
 import { writeClip } from "../clipboard";
 import { reopenOrigin } from "../reopen";
 import type { SessionController } from "../session/controller";
@@ -118,9 +124,16 @@ const attachAll = <C>(
   }
 };
 
-export interface PopoverActions {
+/** A page's part of the in-app tutorial: its view, and what it asks or reports. */
+export interface TutorialActions {
+  getTutorial: () => TutorialView;
+  tutorial: (action: TutorialAction) => void;
+}
+
+export interface PopoverActions extends TutorialActions {
   onHeight: (height: number) => void;
   onDismiss: () => void;
+  openSetup: () => void;
 }
 
 export const registerPopoverChannels = (
@@ -149,7 +162,8 @@ export const registerPopoverChannels = (
     ),
     dismiss: send(z.tuple([]), actions.onDismiss),
     getDraft: invoke(z.tuple([]), () => session.snapshot()),
-    openScreenSettings: invoke(z.tuple([]), () => openScreenSettings()),
+    getTutorial: invoke(z.tuple([]), actions.getTutorial),
+    openSetup: invoke(z.tuple([]), actions.openSetup),
     recheckPermission: invoke(z.tuple([]), () => session.recheckPermission()),
     relaunch: invoke(z.tuple([]), () => session.requestRelaunch()),
     removeView: invoke(z.tuple([ViewIdSchema]), (viewId) =>
@@ -165,6 +179,7 @@ export const registerPopoverChannels = (
     setText: send(z.tuple([DraftTextSchema]), (text) =>
       session.dispatch({ text, type: "textChanged" })
     ),
+    tutorial: send(z.tuple([TutorialActionSchema]), actions.tutorial),
   };
 
   attachAll("popover", table, trusted);
@@ -227,7 +242,7 @@ const detail = (entry: StoreEntry | undefined): CaptureDetail | null => {
   };
 };
 
-export interface LibraryActions {
+export interface LibraryActions extends TutorialActions {
   startDrag: (file: string, icon: Electron.NativeImage) => void;
   menuOpen: (open: boolean) => void;
   reportUnsaved: (count: number) => void;
@@ -235,6 +250,10 @@ export interface LibraryActions {
   newCapture: () => void;
   addWindows: () => void;
   openSettings: () => void;
+  /** Reopen opened at least one window: the tutorial's task. */
+  reopened: () => void;
+  /** A next step was checked off and saved: the tutorial's task. */
+  stepChecked: () => void;
 }
 
 export const registerLibraryChannels = (
@@ -292,6 +311,7 @@ export const registerLibraryChannels = (
     get: invoke(z.tuple([z.string().max(64)]), (captureId) =>
       detail(store.get(captureId))
     ),
+    getTutorial: invoke(z.tuple([]), actions.getTutorial),
     list: invoke(z.tuple([]), () => store.list().map(listItem)),
     menuOpen: send(z.tuple([z.boolean()]), actions.menuOpen),
     newCapture: send(z.tuple([]), actions.newCapture),
@@ -327,15 +347,27 @@ export const registerLibraryChannels = (
           Promise.resolve(0)
         );
 
+        if (opened > 0) {
+          actions.reopened();
+        }
+
         return { failed: viewIds.length - opened };
       }
     ),
     setTodoDone: invoke(
       z.tuple([DraftIdSchema, TodoIdSchema, z.boolean(), RevSchema]),
-      (captureId, todoId, done, rev) =>
-        store.setTodoDone(captureId, todoId, done, rev)
+      async (captureId, todoId, done, rev) => {
+        const outcome = await store.setTodoDone(captureId, todoId, done, rev);
+
+        if (done && outcome.kind === "ok") {
+          actions.stepChecked();
+        }
+
+        return outcome;
+      }
     ),
     shortcut: invoke(z.tuple([]), () => shortcutStatus()),
+    tutorial: send(z.tuple([TutorialActionSchema]), actions.tutorial),
     updateText: invoke(
       z.tuple([DraftIdSchema, EditedTextSchema, RevSchema]),
       (captureId, text, rev) =>
@@ -366,11 +398,35 @@ export const registerSettingsChannels = (
     ),
     getView: invoke(z.tuple([]), actions.getView),
     menuOpen: send(z.tuple([z.boolean()]), actions.menuOpen),
+    resetTutorial: send(z.tuple([]), actions.resetTutorial),
     setOpenAtLogin: invoke(z.tuple([z.boolean()]), actions.setOpenAtLogin),
+    setTips: invoke(z.tuple([z.boolean()]), actions.setTips),
     update: invoke(z.tuple([SettingsChangeSchema]), (change) =>
       actions.update(change)
     ),
   };
 
   attachAll("settings", table, trusted);
+};
+
+export const registerOnboardingChannels = (
+  actions: OnboardingApi,
+  trusted: TrustCheck
+): void => {
+  const table: Table<typeof onboardingChannels> = {
+    allow: send(z.tuple([PermissionIdSchema]), actions.allow),
+    back: send(z.tuple([]), actions.back),
+    finish: send(z.tuple([HandOffChoiceSchema]), actions.finish),
+    fitHeight: send(
+      z.tuple([z.number().int().min(120).max(1200)]),
+      actions.fitHeight
+    ),
+    getView: invoke(z.tuple([]), actions.getView),
+    next: send(z.tuple([]), actions.next),
+    reopen: send(z.tuple([]), actions.reopen),
+    skip: send(z.tuple([]), actions.skip),
+    startDrag: send(z.tuple([]), actions.startDrag),
+  };
+
+  attachAll("onboarding", table, trusted);
 };

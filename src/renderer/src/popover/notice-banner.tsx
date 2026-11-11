@@ -4,8 +4,9 @@ import { popoverApi } from "@/lib/bridge";
 
 import type { Notice } from "../../../shared/dto";
 
-const openSettings = async () => {
-  await popoverApi().openScreenSettings();
+/** The permission onboarding, at Screen Recording; the panel steps aside, keeping the draft. */
+const setUp = async () => {
+  await popoverApi().openSetup();
 };
 
 const recheck = async () => {
@@ -22,12 +23,12 @@ const PermissionNotice = ({ stillDenied }: { stillDenied: boolean }) => (
     <AlertTitle>Allow Screen Recording</AlertTitle>
     <AlertDescription>
       {stillDenied
-        ? "macOS still blocks capture. Remove Inset Window Links from the list, add it again, then reopen."
-        : "Turn on Inset Window Links in System Settings, then reopen the app."}
+        ? "macOS still blocks capture. If Inset Window Links is on in the list, reopen the app. If it isn’t listed, Set Up… adds it."
+        : "Inset Window Links needs it to take the picture of a window."}
     </AlertDescription>
     <div className="col-span-full mt-2 flex flex-wrap gap-1.5">
-      <Button onClick={openSettings} size="sm" variant="outline">
-        Open System Settings
+      <Button onClick={setUp} size="sm" variant="outline">
+        Set Up…
       </Button>
       {stillDenied ? (
         <Button onClick={relaunch} size="sm" variant="ghost">

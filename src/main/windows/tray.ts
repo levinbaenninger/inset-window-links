@@ -67,12 +67,16 @@ export interface TrayActions {
   showDraft: () => void;
   addFromWindowList: () => void;
   openRecent: () => void;
-  openWelcome: () => void;
+  /** The Getting started checklist, in Recent Captures. */
+  gettingStarted: () => void;
+  /** The spotlight walkthrough of Recent Captures. */
+  showMeAround: () => void;
   openShortcuts: () => void;
   openSettings: () => void;
   /** A left click on Windows: the draft when it holds something, else Recent Captures. */
   openHome: () => void;
-  openScreenSettings: (() => void) | null;
+  /** The permission onboarding (macOS); null where there is nothing to allow. */
+  openPermissions: (() => void) | null;
   checkForUpdates: () => void;
   restartToUpdate: () => void;
   quit: () => void;
@@ -94,16 +98,12 @@ const menuFor = (
         ? `Add a Window: ${shortcut.label}`
         : `${shortcut.label} Is Taken by Another App`,
   },
-  ...(actions.openScreenSettings === null
+  ...(actions.openPermissions === null
     ? []
-    : [
-        {
-          click: actions.openScreenSettings,
-          label: "Screen Recording Settings…",
-        },
-      ]),
+    : [{ click: actions.openPermissions, label: "Set Up Permissions…" }]),
   { type: "separator" },
-  { click: actions.openWelcome, label: "How It Works" },
+  { click: actions.gettingStarted, label: "Getting Started" },
+  { click: actions.showMeAround, label: "Show Me Around" },
   { click: actions.openShortcuts, label: "Keyboard Shortcuts" },
   { click: actions.openSettings, label: "Settings…" },
   { type: "separator" },

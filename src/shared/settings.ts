@@ -70,4 +70,6 @@ export interface SettingsView {
   shortcut: ShortcutStatus;
   platform: CapturePlatform;
   version: string;
+  /** Settings › Show tips: the tutorial's one-time tips show at all. Kept with the tutorial's progress. */
+  tips: boolean;
 }

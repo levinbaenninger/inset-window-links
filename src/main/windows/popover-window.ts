@@ -6,6 +6,7 @@ import { pushChannels } from "../../shared/channels";
 import type { DraftSnapshot } from "../../shared/dto";
 import type { Settings } from "../../shared/settings";
 import type { PageCommand } from "../../shared/shortcuts";
+import type { TutorialView } from "../../shared/tutorial";
 import type { PopoverAnchor } from "../session/state";
 import { cursorWorkArea } from "./cursor-display";
 import type { Point } from "./placement";
@@ -337,6 +338,16 @@ export class PopoverWindow {
     }
   }
 
+  /**
+   * Hides the panel for another Inset window that takes over, such as the permission onboarding:
+   * the draft and its notice stay, and the app stays in front for that window.
+   */
+  stepAside(): void {
+    if (this.#win.isVisible()) {
+      this.#win.hide();
+    }
+  }
+
   fitHeight(height: number): void {
     this.#height = Math.ceil(height);
 
@@ -359,6 +370,11 @@ export class PopoverWindow {
 
   push(snapshot: DraftSnapshot): void {
     this.#win.webContents.send(pushChannels.draft, snapshot);
+  }
+
+  /** The tutorial's part for the panel: its tips. */
+  pushTutorial(view: TutorialView): void {
+    this.#win.webContents.send(pushChannels.tutorial, view);
   }
 
   /** A menu key for the panel's page, such as the description or the due date. */

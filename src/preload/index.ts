@@ -4,13 +4,19 @@ import type { WindowRole } from "../shared/channels";
 import {
   channelName,
   libraryChannels,
+  onboardingChannels,
   popoverChannels,
   pushChannels,
   roleArgument,
   settingsChannels,
 } from "../shared/channels";
 
-const roles: readonly WindowRole[] = ["popover", "library", "settings"];
+const roles: readonly WindowRole[] = [
+  "popover",
+  "library",
+  "settings",
+  "onboarding",
+];
 
 const platform = process.platform === "win32" ? "windows" : "macos";
 const role = roles.find((name) => process.argv.includes(roleArgument(name)));
@@ -59,6 +65,8 @@ if (role === "popover") {
       subscribe(pushChannels.command, listener),
     onShown: (listener: () => void) =>
       subscribe(pushChannels.focusInput, () => listener()),
+    onTutorial: (listener: (...args: readonly unknown[]) => void) =>
+      subscribe(pushChannels.tutorial, listener),
     platform,
   });
 }
@@ -74,6 +82,17 @@ if (role === "library") {
       subscribe(pushChannels.leave, listener),
     onNavigate: (listener: (...args: readonly unknown[]) => void) =>
       subscribe(pushChannels.navigate, listener),
+    onTutorial: (listener: (...args: readonly unknown[]) => void) =>
+      subscribe(pushChannels.tutorial, listener),
+    platform,
+  });
+}
+
+if (role === "onboarding") {
+  contextBridge.exposeInMainWorld("inset", {
+    ...bridge("onboarding", onboardingChannels),
+    onView: (listener: (...args: readonly unknown[]) => void) =>
+      subscribe(pushChannels.onboardingView, listener),
     platform,
   });
 }

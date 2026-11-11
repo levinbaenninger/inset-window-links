@@ -6,9 +6,15 @@ import { defineConfig } from "electron-vite";
 
 const renderer = path.resolve(import.meta.dirname, "src/renderer");
 
+// The onboarding and tutorial kits, shared with the other Inset apps, import their types as @shared/….
+const shared = path.resolve(import.meta.dirname, "src/shared");
+
 export default defineConfig({
-  main: {},
+  main: {
+    resolve: { alias: { "@shared": shared } },
+  },
   preload: {
+    resolve: { alias: { "@shared": shared } },
     build: {
       rolldownOptions: {
         output: { format: "cjs" },
@@ -20,6 +26,7 @@ export default defineConfig({
       rolldownOptions: {
         input: {
           library: path.join(renderer, "library.html"),
+          onboarding: path.join(renderer, "onboarding.html"),
           popover: path.join(renderer, "popover.html"),
           settings: path.join(renderer, "settings.html"),
         },
@@ -29,6 +36,7 @@ export default defineConfig({
     resolve: {
       alias: {
         "@": path.join(renderer, "src"),
+        "@shared": shared,
       },
     },
   },

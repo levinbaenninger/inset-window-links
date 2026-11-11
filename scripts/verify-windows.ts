@@ -114,7 +114,8 @@ const trayMenu = (version: string) => [
   "---",
   "Add a Window: Ctrl+Alt+W",
   "---",
-  "How It Works",
+  "Getting Started",
+  "Show Me Around",
   "Settings…",
   "---",
   `Version ${version}`,
@@ -906,17 +907,21 @@ const libraryFlow = async (app: ElectronApplication) => {
   );
 
   await page.keyboard.press("Escape");
-  // The library has no How it works link any more; the tray's How It Works opens it in place.
-  await app.evaluate(() => globalThis.__insetE2E.openWelcome());
+  // The tray's Getting Started brings the checklist back in Recent Captures (the harness closes it at launch).
+  await app.evaluate(() => globalThis.__insetE2E.gettingStarted());
 
-  const welcome = await testIdShown(page, "welcome");
+  const checklist = await settles(
+    page
+      .getByRole("region", { name: "Getting started" })
+      .waitFor({ timeout: 5000 })
+  );
 
   record(
-    "How It Works opens in the open Recent Captures window",
-    welcome && page.url().endsWith("#/welcome"),
-    json({ url: page.url(), welcome })
+    "Getting Started brings the checklist back in Recent Captures",
+    checklist,
+    json({ checklist, url: page.url() })
   );
-  await page.screenshot({ path: path.join(OUT, "welcome.png") });
+  await page.screenshot({ path: path.join(OUT, "getting-started.png") });
 
   const pageClosed = page.waitForEvent("close");
 
@@ -1307,15 +1312,34 @@ const firstRunFlow = async () => {
     6000
   );
 
+  const setup = await windowFor(app, "onboarding.html");
+
   record(
-    "the first launch opens How it works",
-    shown?.visible === true && shown.url.endsWith("#/welcome"),
+    "the first launch opens Recent Captures, with no setup window",
+    shown?.visible === true && setup?.visible !== true,
     shown?.url ?? "no window"
   );
 
   const page = await pageFor(app, "library.html");
 
-  await testIdShown(page, "welcome", 5000);
+  const started = await settles(
+    page
+      .getByRole("region", { name: "Getting started" })
+      .waitFor({ timeout: 5000 })
+  );
+
+  const example = await settles(
+    page
+      .getByText("Example", { exact: true })
+      .first()
+      .waitFor({ timeout: 8000 })
+  );
+
+  record(
+    "the first launch shows Getting started and the example capture",
+    started && example,
+    json({ example, started })
+  );
   await page.screenshot({ path: path.join(OUT, "first-run.png") });
   await closeInset(app);
 

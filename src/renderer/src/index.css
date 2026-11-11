@@ -20,6 +20,10 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
+  /* A granted permission in the setup (src/renderer/src/onboarding/) and a done task in Getting started. */
+  --color-granted: var(--granted);
+  /* Inset Shelf's accent, which the shared setup page's Waiting… dot uses: Window Links' brand blue. */
+  --color-pin: var(--brand);
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
   --color-ring: var(--ring);
@@ -50,6 +54,7 @@
 }
 
 :root {
+  --granted: oklch(0.508 0.118 165.612);
   color-scheme: light;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -85,6 +90,7 @@
 }
 
 .dark {
+  --granted: oklch(0.845 0.143 164.978);
   color-scheme: dark;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
@@ -199,4 +205,49 @@
 
 @utility app-no-drag {
   -webkit-app-region: no-drag;
+}
+
+/* The tutorial's bubble and its arrow (src/renderer/src/tutorial/bubble.tsx), placed from measured values. As in Inset Shelf. */
+@layer components {
+  .coach-bubble {
+    left: var(--coach-x);
+    top: var(--coach-y);
+    right: auto;
+  }
+
+  .coach-arrow {
+    left: var(--coach-arrow-x);
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: var(--popover);
+    transform: rotate(45deg);
+  }
+
+  .coach-arrow[data-side="below"] {
+    top: -5px;
+    box-shadow: -1px -1px 0
+      color-mix(in oklab, var(--foreground) 10%, transparent);
+  }
+
+  .coach-arrow[data-side="above"] {
+    bottom: -5px;
+    box-shadow: 1px 1px 0
+      color-mix(in oklab, var(--foreground) 10%, transparent);
+  }
+}
+
+/* The walkthrough's dimmer (src/renderer/src/tutorial/spotlight.tsx): a mask shows everything but the hole. As in Inset Shelf. */
+@layer components {
+  .spotlight-show {
+    fill: white;
+  }
+
+  .spotlight-hole {
+    fill: black;
+  }
+
+  .spotlight-dim {
+    fill: rgb(0 0 0 / 0.45);
+  }
 }

@@ -1,11 +1,5 @@
 import type { DesktopCapturerSource, Rectangle } from "electron";
-import {
-  app,
-  desktopCapturer,
-  screen,
-  shell,
-  systemPreferences,
-} from "electron";
+import { app, desktopCapturer, screen, systemPreferences } from "electron";
 import { activeWindow, openWindows } from "get-windows";
 
 import type { CapturePlatform, FallbackReason } from "../../shared/dto";
@@ -33,9 +27,6 @@ export const capturePlatform: CapturePlatform =
 const MAX_EDGE = 8192;
 const CANDIDATE_THUMB = { height: 200, width: 320 };
 
-const SCREEN_SETTINGS_URL =
-  "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
-
 /** What the last probe saw. Read only by the INSET_E2E harness. */
 export interface ProbeDiagnostics {
   screenAccess: string;
@@ -53,14 +44,11 @@ export const screenAccess = (): string =>
     ? systemPreferences.getMediaAccessStatus("screen")
     : "granted";
 
-const screenBlocked = () => {
-  const status = screenAccess();
-
-  return status === "denied" || status === "restricted";
-};
-
-export const openScreenSettings = (): Promise<void> =>
-  shell.openExternal(SCREEN_SETTINGS_URL);
+/**
+ * Anything short of a grant counts as blocked: listing windows or screens without one is what
+ * shows macOS's prompt, and that prompt belongs to the permission onboarding.
+ */
+const screenBlocked = () => screenAccess() !== "granted";
 
 const clampEdge = (value: number) =>
   Math.max(1, Math.min(MAX_EDGE, Math.round(value)));
@@ -292,9 +280,11 @@ export class WindowCapturer {
     let probed: Awaited<ReturnType<typeof activeWindow>>;
 
     try {
+      // get-windows' own Screen Recording check shows macOS's prompt. Without the grant the probe
+      // skips it and only finds the window, so the permission onboarding is what asks.
       probed = await activeWindow({
         accessibilityPermission: false,
-        screenRecordingPermission: true,
+        screenRecordingPermission: access === "granted",
       });
     } catch (error) {
       this.#diagnostics = {
@@ -484,8 +474,17 @@ export class WindowCapturer {
     );
   }
 
-  /** Low-resolution previews for the window list, with each window's app. Never persisted. */
-  async listCandidates(): Promise<readonly FallbackCandidate[]> {
+  /**
+   * Low-resolution previews for the window list, with each window's app. Never persisted. Without
+   * Screen Recording on macOS nothing is listed, since listing would show macOS's prompt.
+   */
+  async listCandidates(): Promise<
+    readonly FallbackCandidate[] | "permissionDenied"
+  > {
+    if (screenBlocked()) {
+      return "permissionDenied";
+    }
+
     const [sources, windows] = await Promise.all([
       this.#windowSources(CANDIDATE_THUMB),
       listedWindows(),

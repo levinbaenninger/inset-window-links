@@ -25,7 +25,7 @@ interface InsetE2E {
   pressShortcut: () => void;
   showDraft: () => void;
   openRecent: () => void;
-  openWelcome: () => void;
+  gettingStarted: () => void;
   quit: () => void;
   addFromWindowList: () => void;
   /** Empty, and the bounds null, while the icon is in the Dock only. */
@@ -87,9 +87,10 @@ const trayMenu = (version: string) => [
   "Recent Captures…",
   "---",
   "Add a Window: ⌥⌘W",
-  "Screen Recording Settings…",
+  "Set Up Permissions…",
   "---",
-  "How It Works",
+  "Getting Started",
+  "Show Me Around",
   "Settings…",
   "---",
   `Version ${version}`,

@@ -45,6 +45,7 @@ import { libraryApi } from "@/lib/bridge";
 import { useCommands } from "@/lib/commands";
 import { formatWhen, viewTitle } from "@/lib/format";
 import type { MenuKey } from "@/lib/menu-keys";
+import { coach } from "@/tutorial/anchors";
 
 import type {
   CaptureDetail,
@@ -77,6 +78,7 @@ import { ImageViewer } from "./image-viewer";
 import { drafts } from "./page-drafts";
 import { PaneHeader } from "./pane-header";
 import { ROW_SELECTOR } from "./row-keys";
+import { ExampleTag, useIsExample } from "./tutorial";
 
 const route = getRouteApi("/captures/$captureId");
 
@@ -457,6 +459,7 @@ const Record = ({
   const now = useToday();
   const { platform } = libraryApi();
   const reopenable = detail.views.filter((view) => view.origin !== null);
+  const example = useIsExample(detail.id);
 
   const { due } = text;
 
@@ -628,6 +631,7 @@ const Record = ({
   return (
     <>
       <PaneHeader>
+        {example && <ExampleTag />}
         <span className="flex-1" />
         {shown !== null && (
           <HeaderFeedback
@@ -669,6 +673,7 @@ const Record = ({
         {reopenable.length > 0 && (
           <Button
             className="ml-1.5"
+            {...coach("reopen-all")}
             onClick={() => reopen(reopenable)}
             size="sm"
             title={`Opens the page, file or app each window showed (${menuKeyLabel("reopen", platform)})`}
@@ -774,7 +779,7 @@ const Record = ({
               )}
             </div>
             {showSteps && (
-              <div className="-mx-1.5">
+              <div className="-mx-1.5" {...coach("capture-steps")}>
                 <TodoEditor
                   handle={steps}
                   onChange={(todos) => onText({ ...text, todos })}
@@ -840,7 +845,11 @@ const Record = ({
               </PopoverContent>
             </Popover>
           </div>
-          <section aria-label="Windows" className="flex flex-col gap-2">
+          <section
+            aria-label="Windows"
+            className="flex flex-col gap-2"
+            {...coach("capture-windows")}
+          >
             <h2 className="text-muted-foreground text-xs font-medium">
               Windows
             </h2>

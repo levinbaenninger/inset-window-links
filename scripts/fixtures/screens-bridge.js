@@ -32,6 +32,23 @@ globalThis.__calls = [];
 
 const record = (method, ...args) => globalThis.__calls.push({ method, args });
 
+/** The tutorial as main shows it to this page, written for this system's keys; none without one. */
+const tutorialView = data.tutorial?.[platform] ?? {
+  active: null,
+  busy: false,
+  checklist: null,
+  examples: [],
+  hints: [],
+  spotlight: null,
+};
+
+/** The tutorial's part of a page's API: its view, and what the page tells main. */
+const tutorialApi = {
+  getTutorial: () => Promise.resolve(tutorialView),
+  onTutorial: () => unsubscribe,
+  tutorial: (action) => record("tutorial", action),
+};
+
 /** What ⌘C copies of a stored capture, as main writes it: title, then description. */
 const entryText = (capture) =>
   [capture.relationship.trim(), capture.description.trim()]
@@ -75,6 +92,7 @@ if (page === "popover") {
 
   globalThis.inset = withFallback(
     {
+      ...tutorialApi,
       getDraft: resolved(snapshot),
       onCommand: (listener) => subscribe("command", listener),
       onDraft: (listener) => {
@@ -308,6 +326,7 @@ if (page === "library") {
         Promise.resolve(
           structuredClone(captures.find((capture) => capture.id === id) ?? null)
         ),
+      ...tutorialApi,
       list: () => Promise.resolve(items),
       menuOpen: (open) => record("menuOpen", open),
       onChanged: (listener) => subscribe("changed", listener),
@@ -428,6 +447,30 @@ if (page === "settings") {
       menuOpen: (open) => record("menuOpen", open),
       onView: none,
       platform,
+    },
+    nothing
+  );
+}
+
+if (page === "onboarding") {
+  const sent =
+    (method) =>
+    (...args) =>
+      record(method, ...args);
+
+  globalThis.inset = withFallback(
+    {
+      allow: sent("allow"),
+      back: sent("back"),
+      finish: sent("finish"),
+      fitHeight: fitted,
+      getView: resolved(data.onboarding),
+      next: sent("next"),
+      onView: none,
+      platform,
+      reopen: sent("reopen"),
+      skip: sent("skip"),
+      startDrag: sent("startDrag"),
     },
     nothing
   );

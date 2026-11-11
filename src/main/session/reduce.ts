@@ -557,12 +557,21 @@ const onCandidatesReady = (
 ): Transition => {
   const { activity } = state;
 
-  return activity.kind === "choosing" && activity.token === event.token
-    ? [
-        { ...state, activity: { ...activity, candidates: event.candidates } },
-        [],
-      ]
-    : unchanged(state);
+  if (activity.kind !== "choosing" || activity.token !== event.token) {
+    return unchanged(state);
+  }
+
+  return [
+    {
+      ...state,
+      activity: { ...activity, candidates: event.candidates },
+      notice:
+        event.denied === true
+          ? { kind: "permissionDenied", stillDenied: false }
+          : state.notice,
+    },
+    [],
+  ];
 };
 
 const onShowDraft = (state: SessionState): Transition =>
@@ -738,6 +747,30 @@ const onPermissionRechecked = (
         { ...state, notice: { kind: "permissionDenied", stillDenied: true } },
         [],
       ];
+
+/**
+ * The exit a quit or restart is heading for while its prompt or its save is under way; null when
+ * none is. A Cancel, or a save that fails or is blocked, ends it without exiting.
+ */
+export const pendingExit = (state: SessionState): Exit | null => {
+  const { activity } = state;
+
+  switch (activity.kind) {
+    case "confirmingQuit":
+    case "saveLate":
+    case "savingWhenLanded": {
+      return activity.exit;
+    }
+
+    case "saving": {
+      return activity.after === "stay" ? null : activity.after;
+    }
+
+    default: {
+      return null;
+    }
+  }
+};
 
 /** Pure lifecycle policy. The controller runs the effects; popover visibility lives in PopoverWindow. */
 export const reduce = (

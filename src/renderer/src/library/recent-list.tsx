@@ -64,6 +64,7 @@ import { useEntryCopy } from "./copy-keys";
 import { drafts } from "./page-drafts";
 import type { RowAction } from "./row-keys";
 import { neighborRow, rowKey } from "./row-keys";
+import { ExampleBadge } from "./tutorial";
 
 export type CurrentItem = Extract<CaptureListItem, { kind: "current" }>;
 
@@ -463,6 +464,7 @@ const CurrentRow = ({
                   data-testid="row-meta"
                 >
                   {!chipOwnLine && badge}
+                  <ExampleBadge captureId={item.id} />
                   {feedback === null || refused !== null ? (
                     <>
                       {unsaved && (
