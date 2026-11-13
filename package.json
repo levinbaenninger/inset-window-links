@@ -28,6 +28,7 @@
     "verify:windows": "pnpm build && node scripts/verify-windows.ts",
     "verify:windows:packaged": "pnpm package:dir && node scripts/verify-windows.ts --packaged",
     "icon": "electron scripts/render-icon.mjs",
+    "postinstall": "install-electron",
     "screens": "pnpm build && node scripts/screens.ts"
   },
   "dependencies": {
