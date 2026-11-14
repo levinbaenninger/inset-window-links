@@ -114,6 +114,51 @@ const Shown = ({
     };
   }, [act, hint.id, missing]);
   const visible = anchor !== null && !held;
+  const latestAnchor = useRef(anchor);
+
+  useEffect(() => {
+    latestAnchor.current = anchor;
+  });
+
+  // A bubble takes focus only when its button is used. When it goes, focus goes back where it was, or to its
+  // control if that is gone and the control takes focus; focus that moved elsewhere meanwhile stays there.
+  useEffect(() => {
+    let inside = false;
+    let returnTo: HTMLElement | null = null;
+
+    const onFocusIn = (event: FocusEvent): void => {
+      const root = bubble.current;
+
+      const now =
+        root !== null &&
+        event.target instanceof Node &&
+        root.contains(event.target);
+
+      if (now && !inside) {
+        returnTo =
+          event.relatedTarget instanceof HTMLElement
+            ? event.relatedTarget
+            : null;
+      }
+
+      inside = now;
+    };
+
+    document.addEventListener("focusin", onFocusIn, true);
+
+    return () => {
+      document.removeEventListener("focusin", onFocusIn, true);
+
+      // Nothing had focus before, or it moved elsewhere: leave it.
+      if (!inside || returnTo === null) {
+        return;
+      }
+
+      const target = returnTo.isConnected ? returnTo : latestAnchor.current;
+
+      target?.focus({ preventScroll: true });
+    };
+  }, []);
 
   const dismiss = (): void => {
     act({ id: hint.id, kind: "dismissHint" });

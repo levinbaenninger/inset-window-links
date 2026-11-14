@@ -16,7 +16,11 @@ import type { TutorialRecord, TutorialStore } from "./store";
  */
 export interface TutorialExamples {
   readonly seed: () => readonly string[];
-  readonly remove: (ids: readonly string[]) => void;
+  /**
+   * Removes the example items; resolves with the ids it did remove. One it
+   * couldn't stays an example: still tagged, and offered for removal again.
+   */
+  readonly remove: (ids: readonly string[]) => Promise<readonly string[]>;
   /** Whether the item is still there; one deleted by hand is no longer an example to show or remove. */
   readonly exists: (id: string) => boolean;
 }
@@ -63,7 +67,7 @@ export interface Tutorial {
   readonly setTips: (on: boolean) => void;
   /** Settings › Reset Tutorial: the checklist and hints start over; examples are never added again. */
   readonly reset: () => void;
-  /** Resolves once every change so far is saved (or failed to save): saves run one at a time. */
+  /** Resolves once every change so far is made and saved (or failed to save): example removals and saves. */
   readonly settled: () => Promise<void>;
 }
 
@@ -100,6 +104,7 @@ export const createTutorial = (deps: TutorialDeps): Tutorial => {
   // One save at a time: on Windows an atomic write that overlaps another fails (EPERM), and the newer state was lost.
   // A change made meanwhile is saved once the running save is done, as the state is then.
   let saving: Promise<void> | null = null;
+  let removing: Promise<void> | null = null;
   let saveAgain = false;
 
   const flush = async (): Promise<void> => {
@@ -275,13 +280,31 @@ export const createTutorial = (deps: TutorialDeps): Tutorial => {
     },
     removeExamples: () => {
       const ids = examplesShown();
+      const { examples } = deps;
 
-      if (ids.length > 0) {
-        deps.examples?.remove(ids);
+      if (ids.length === 0 || examples === null || removing !== null) {
+        return;
       }
 
-      change({ examples: [] });
-      deps.onChange();
+      // Each id stays an example until the app has removed it: one still being removed, or that failed, keeps its tag.
+      removing = (async () => {
+        let removed: readonly string[] = [];
+
+        try {
+          removed = await examples.remove(ids);
+        } catch (error) {
+          deps.warn?.(
+            `Examples not removed: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+
+        const gone = new Set(removed);
+
+        change({ examples: saved.examples.filter((id) => !gone.has(id)) });
+        deps.onChange();
+      })().finally(() => {
+        removing = null;
+      });
     },
     requestHint: (page: string, action: Of<"requestHint">) => {
       if (hints.get(action.id)?.page === page) {
@@ -429,6 +452,7 @@ export const createTutorial = (deps: TutorialDeps): Tutorial => {
       deps.onChange();
     },
     settled: async () => {
+      await removing;
       await saving;
     },
     setTips: (on) => {

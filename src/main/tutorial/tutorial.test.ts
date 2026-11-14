@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type {
@@ -88,10 +89,16 @@ const setUp = async (
     readonly store?: ReturnType<typeof memoryStore>;
     readonly firstRun?: boolean;
     readonly hidden?: readonly string[];
+    /** The app's items, kept across a restart. */
+    readonly items?: Set<string>;
+    /** Items the app fails to remove. */
+    readonly stuck?: ReadonlySet<string>;
+    /** A removal waits for this, as a queued delete does. */
+    readonly removing?: Promise<unknown>;
   } = {}
 ) => {
   const store = options.store ?? memoryStore();
-  const items = new Set<string>();
+  const items = options.items ?? new Set<string>();
   const log: string[] = [];
   const hidden = new Set(options.hidden);
   let seeded = 0;
@@ -99,12 +106,17 @@ const setUp = async (
   const deps: TutorialDeps = {
     examples: {
       exists: (id) => items.has(id),
-      remove: (ids) => {
-        for (const id of ids) {
+      remove: async (ids) => {
+        log.push(`removed ${ids.join(",")}`);
+        await options.removing;
+
+        const removed = ids.filter((id) => options.stuck?.has(id) !== true);
+
+        for (const id of removed) {
           items.delete(id);
         }
 
-        log.push(`removed ${ids.join(",")}`);
+        return removed;
       },
       seed: () => {
         seeded += 1;
@@ -414,6 +426,8 @@ describe(createTutorial, () => {
     });
 
     act("shelf", { kind: "removeExamples" });
+    // A restart reads what is saved: every change so far.
+    await tutorial.settled();
 
     expect({
       examples: tutorial.view("shelf").examples,
@@ -425,12 +439,66 @@ describe(createTutorial, () => {
       log: ["removed example-1a,example-1b"],
     });
 
-    // A restart reads what is saved: every change so far.
-    await tutorial.settled();
-
     const again = await setUp({ store });
 
     expect(again.items.size).toBe(0);
+  });
+
+  it("keeps an example the app couldn't remove tagged, and offers to remove it again, after a restart too", async () => {
+    const store = memoryStore();
+    const items = new Set<string>();
+    const first = await setUp({ items, store, stuck: new Set(["example-1b"]) });
+
+    first.act("shelf", { kind: "removeExamples" });
+    await first.tutorial.settled();
+
+    const kept = {
+      examples: first.tutorial.view("shelf").examples,
+      offered: first.tutorial.view("shelf").checklist?.examples,
+    };
+
+    const again = await setUp({ items, store });
+
+    again.act("shelf", { kind: "removeExamples" });
+    await again.tutorial.settled();
+
+    expect({
+      after: again.tutorial.view("shelf").examples,
+      items: [...items],
+      kept,
+      tried: again.log.filter((line) => line.startsWith("removed")),
+    }).toStrictEqual({
+      after: [],
+      items: [],
+      kept: { examples: ["example-1b"], offered: true },
+      tried: ["removed example-1b"],
+    });
+  });
+
+  it("keeps examples tagged while their removal is under way, and starts it once", async () => {
+    const queue = new EventTarget();
+
+    const { act, log, tutorial } = await setUp({
+      removing: once(queue, "done"),
+    });
+
+    act("shelf", { kind: "removeExamples" });
+    act("shelf", { kind: "removeExamples" });
+
+    const during = tutorial.view("shelf").examples;
+
+    queue.dispatchEvent(new Event("done"));
+    await tutorial.settled();
+
+    expect({
+      after: tutorial.view("shelf").examples,
+      during,
+      tried: log.filter((line) => line.startsWith("removed")).length,
+    }).toStrictEqual({
+      after: [],
+      during: ["example-1a", "example-1b"],
+      tried: 1,
+    });
   });
 
   it("adds no examples to an install that ran before, nor after a damaged file", async () => {
