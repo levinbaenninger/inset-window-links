@@ -962,19 +962,13 @@ const copiedShown = (page: Page) =>
   );
 
 /** Waits until the walkthrough's Next has the keyboard, at step `step`. */
-const nextHasFocus = async (page: Page, step: number) => {
-  await page
-    .waitForFunction(
-      () =>
-        document.activeElement?.closest("[data-coach-bubble]") !== null &&
-        document.activeElement?.textContent?.trim() === "Next",
-      undefined,
-      { timeout: 2000 }
-    )
-    .catch(() => {
-      throw new Error(`focus on the walkthrough's Next at step ${step}`);
-    });
-};
+const nextHasFocus = (page: Page, step: number) =>
+  until(
+    page,
+    `document.activeElement?.closest("[data-coach-bubble]") !== null && document.activeElement?.textContent?.trim() === "Next"`,
+    `focus on the walkthrough's Next at step ${step}`,
+    Date.now() + 2000
+  );
 
 /** Waits until the sidebar row of capture `id` has focus. */
 const waitForRowFocus = (page: Page, id: string) =>
