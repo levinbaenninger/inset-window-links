@@ -961,6 +961,26 @@ const copiedShown = (page: Page) =>
     `document.querySelectorAll('[aria-label="Copied"]').length + [...document.querySelectorAll("output, [role=status]")].filter((node) => node.textContent?.trim() === "Copied").length`
   );
 
+/** The Reopen how-to, as main shows it when the task is clicked. */
+const reopenHowTo = (platform: KeyPlatform) => {
+  const task = linksTasks(platform).find((each) => each.id === "reopen");
+
+  return {
+    anchor: task?.anchor ?? "",
+    id: "reopen",
+    kind: "task" as const,
+    placement: "below" as const,
+    text: task?.how ?? "",
+    title: task?.title ?? null,
+  };
+};
+
+/** How far below the control marked `anchor` the bubble starts, in pixels; negative when above. */
+const bubbleBelow = (page: Page, anchor: string) =>
+  page.evaluate<number>(
+    `document.querySelector("[data-coach-bubble]").getBoundingClientRect().top - document.querySelector('[data-coach="${anchor}"]').getBoundingClientRect().bottom`
+  );
+
 /** Waits until the walkthrough's Next has the keyboard, at step `step`. */
 const nextHasFocus = (page: Page, step: number) =>
   until(
@@ -2149,39 +2169,45 @@ const SCENES: readonly Scene[] = [
         `the how-to shows (${JSON.stringify(bubble)})`
       );
 
-      // At its own row, which is always there: Reopen all shows only with a capture open.
-      const gap = await page.evaluate<number>(
-        "(() => document.querySelector('[data-coach-bubble]').getBoundingClientRect().top - document.querySelector('[data-coach=\"task-reopen\"]').getBoundingClientRect().bottom)()"
-      );
+      const gap = await bubbleBelow(page, "reopen-all");
 
       assert.ok(
         gap >= 0 && gap <= 24,
-        `the how-to sits just below its checklist row (${gap} px)`
+        `the how-to points at Reopen all (${gap} px)`
       );
     },
     data: {
       captures: CAPTURES,
-      tutorial: tutorial({
-        active: (platform) => {
-          const task = linksTasks(platform).find(
-            (each) => each.id === "reopen"
-          );
-
-          return {
-            anchor: task?.anchor ?? "task-reopen",
-            id: "reopen",
-            kind: "task",
-            placement: "below",
-            text: task?.how ?? "",
-            title: task?.title ?? null,
-          };
-        },
-        done: 3,
-      }),
+      tutorial: tutorial({ active: reopenHowTo, done: 3 }),
     },
     hash: "/",
     name: "tutorial-task-hint",
     page: "library",
+  },
+  {
+    // No capture, so no Reopen all: the how-to points at its own row instead.
+    act: async (page) => {
+      const bubble = await bubbleText(page);
+
+      assert.ok(
+        bubble.visible && bubble.text.includes("Reopen all"),
+        `the how-to shows (${JSON.stringify(bubble)})`
+      );
+      const gap = await bubbleBelow(page, "task-reopen");
+
+      assert.ok(
+        gap >= 0 && gap <= 24,
+        `the how-to points at its checklist row (${gap} px)`
+      );
+    },
+    data: {
+      captures: [],
+      tutorial: tutorial({ active: reopenHowTo, done: 3 }),
+    },
+    hash: "/",
+    name: "tutorial-task-hint-no-capture",
+    page: "library",
+    platforms: ["macos"],
   },
   {
     act: async (page) => {
@@ -2204,14 +2230,14 @@ const SCENES: readonly Scene[] = [
     page: "library",
   },
   {
-    // Getting Started brought the checklist back while the search tip showed: the tip keeps its
-    // place until it is put away, instead of losing its anchor and holding back every tip.
+    // Getting Started brought the checklist back while the search tip showed: the tip has lost its
+    // anchor, so the page lets it go instead of holding back every other tip.
     act: async (page) => {
-      const bubble = await bubbleText(page);
-
-      assert.ok(
-        bubble.visible && bubble.text.includes("due:today"),
-        `the search tip stays over the checklist (${JSON.stringify(bubble)})`
+      await until(
+        page,
+        `globalThis.__calls.some((call) => call.method === "tutorial" && call.args[0].kind === "dismissHint" && call.args[0].id === "search")`,
+        "the search tip let go",
+        Date.now() + 3000
       );
     },
     data: {

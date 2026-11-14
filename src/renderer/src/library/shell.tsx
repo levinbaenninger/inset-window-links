@@ -268,12 +268,9 @@ export const Shell = () => {
               />
             </header>
             <div className="px-2.5 pb-2" {...coach("search")}>
-              {/* The search tip waits for Getting started to close: below the field, it would cover the checklist. One already showing keeps its place, so Getting Started can't strand it. */}
+              {/* The search tip waits for Getting started to close: below the field, it would cover the checklist. */}
               <div
-                {...(tutorial.checklist === null ||
-                tutorial.active?.id === "search"
-                  ? coach("search-tip")
-                  : {})}
+                {...(tutorial.checklist === null ? coach("search-tip") : {})}
               >
                 <SearchField
                   field={search}
