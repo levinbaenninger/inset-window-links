@@ -144,16 +144,31 @@ export const Shell = () => {
 
   const { show, toggle } = sidebar;
 
-  // The walkthrough starts on the list as it is: the sidebar shows, and a search or the sheet goes.
+  const sideNav = useRef<HTMLElement>(null);
+
+  // The tutorial starts on the list as it is: the sidebar shows, and a search, another list, the
+  // sheet or the picture view goes.
+  const toList = () => {
+    show();
+    setQuery("");
+    setList("active");
+    setSheet(false);
+
+    if (view !== undefined && captureId !== undefined) {
+      void navigate({
+        params: { captureId },
+        search: {},
+        to: "/captures/$captureId",
+      });
+    }
+  };
+
   const walked = useRef<number | null>(null);
 
   const onWalk = useEffectEvent((seq: number | null) => {
     if (seq !== null && seq !== walked.current) {
       walked.current = seq;
-      show();
-      setQuery("");
-      setList("active");
-      setSheet(false);
+      toList();
     }
   });
 
@@ -162,7 +177,6 @@ export const Shell = () => {
   }, [tutorial.spotlight?.seq]);
 
   // The checklist coming up, at launch or from Getting Started, brings the list back to it.
-  const sideNav = useRef<HTMLElement>(null);
   const hasChecklist = tutorial.checklist !== null;
 
   useEffect(() => {
@@ -192,7 +206,14 @@ export const Shell = () => {
   // The window's own menu keys. Those for the open capture are taken by it first; any it leaves,
   // such as a field key while the image view is open, end here and do nothing.
   useCommands((command) => {
-    if (command === "showShortcuts") {
+    if (command === "showTutorial") {
+      toList();
+      requestAnimationFrame(() => {
+        sideNav.current?.scrollTo({ top: 0 });
+      });
+
+      return true;
+    } else if (command === "showShortcuts") {
       setSheet((open) => !open);
 
       return true;
@@ -247,9 +268,12 @@ export const Shell = () => {
               />
             </header>
             <div className="px-2.5 pb-2" {...coach("search")}>
-              {/* The search tip waits for Getting started to close: below the field, it would cover the checklist. */}
+              {/* The search tip waits for Getting started to close: below the field, it would cover the checklist. One already showing keeps its place, so Getting Started can't strand it. */}
               <div
-                {...(tutorial.checklist === null ? coach("search-tip") : {})}
+                {...(tutorial.checklist === null ||
+                tutorial.active?.id === "search"
+                  ? coach("search-tip")
+                  : {})}
               >
                 <SearchField
                   field={search}

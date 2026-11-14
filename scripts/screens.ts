@@ -2204,6 +2204,65 @@ const SCENES: readonly Scene[] = [
     page: "library",
   },
   {
+    // Getting Started brought the checklist back while the search tip showed: the tip keeps its
+    // place until it is put away, instead of losing its anchor and holding back every tip.
+    act: async (page) => {
+      const bubble = await bubbleText(page);
+
+      assert.ok(
+        bubble.visible && bubble.text.includes("due:today"),
+        `the search tip stays over the checklist (${JSON.stringify(bubble)})`
+      );
+    },
+    data: {
+      captures: CAPTURES,
+      tutorial: tutorial({
+        active: (platform) => grantedHint(hintOf(platform, "search")),
+      }),
+    },
+    hash: "/",
+    name: "tutorial-search-tip-checklist",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    // Getting Started from the picture view: the page goes back to the list, where the checklist is.
+    act: async (page) => {
+      await sendCommand(page, "showTutorial");
+      await page.getByRole("region", { name: "Getting started" }).waitFor();
+
+      const hash = await page.evaluate<string>("location.hash");
+
+      assert.ok(!hash.includes("view="), `the picture view closes (${hash})`);
+    },
+    data: { captures: CAPTURES, tutorial: tutorial({ done: 1 }) },
+    hash: `/captures/${uuid(1)}?view=${uuid(101)}`,
+    name: "tutorial-getting-started-from-picture",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    // Getting Started during a search: the search goes, so the checklist shows.
+    act: async (page) => {
+      const field = page.getByPlaceholder("Search or due:today");
+
+      await field.fill("rieder");
+      assert.equal(
+        await page.getByRole("region", { name: "Getting started" }).count(),
+        0,
+        "a search hides the checklist"
+      );
+      await sendCommand(page, "showTutorial");
+      await page.getByRole("region", { name: "Getting started" }).waitFor();
+      assert.equal(await field.inputValue(), "", "the search is cleared");
+    },
+    data: { captures: CAPTURES, tutorial: tutorial({ done: 1 }) },
+    hash: "/",
+    name: "tutorial-getting-started-from-search",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
     data: {
       captures: CAPTURES,
       tutorial: tutorial({ complete: true, done: 5 }),

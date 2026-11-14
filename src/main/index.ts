@@ -646,7 +646,8 @@ const start = async () => {
     // Getting Started and Show Me Around live in Recent Captures.
     gettingStarted: () => {
       tutorial.showChecklist();
-      library.open();
+      // The page may show a search, another list, a folded sidebar or a picture: back to the list.
+      library.command("showTutorial");
     },
     showMeAround: () => {
       library.open();

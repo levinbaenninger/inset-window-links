@@ -229,6 +229,8 @@ export const PageCommandSchema = z.enum([
   "saveCapture",
   "setDue",
   "showShortcuts",
+  /** Getting Started: the list as it is, so the checklist shows. Not a key; the menus send it. */
+  "showTutorial",
   "toggleDone",
   "toggleSidebar",
 ]);
