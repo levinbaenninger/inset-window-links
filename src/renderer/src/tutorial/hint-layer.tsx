@@ -118,14 +118,28 @@ const Shown = ({
       }
     };
 
+    // A bubble inside its control covers it: pointing at the control, to use it, puts the bubble away.
+    const inside = hint.placement === "inside" ? anchor : null;
+
+    const onMove = (event: PointerEvent): void => {
+      if (
+        event.target instanceof Node &&
+        bubble.current?.contains(event.target) !== true
+      ) {
+        act({ id: hint.id, kind: "dismissHint" });
+      }
+    };
+
     window.addEventListener("keydown", onKey, true);
     document.addEventListener("pointerdown", onPointer, true);
+    inside?.addEventListener("pointermove", onMove);
 
     return () => {
       window.removeEventListener("keydown", onKey, true);
       document.removeEventListener("pointerdown", onPointer, true);
+      inside?.removeEventListener("pointermove", onMove);
     };
-  }, [act, hint.id, visible]);
+  }, [act, anchor, hint.id, hint.placement, visible]);
 
   return visible ? (
     <CoachBubble

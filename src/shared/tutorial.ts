@@ -22,7 +22,11 @@ export interface TutorialTask {
   readonly anchor: string | null;
 }
 
-/** Where a bubble goes beside its anchor; `inside` overlaps it, for an anchor that fills its window. */
+/**
+ * Where a bubble goes beside its anchor. `inside` overlaps it, for an anchor
+ * that fills its window, and goes away once the pointer moves onto the
+ * anchor, so it never hides the controls it describes.
+ */
 export type BubblePlacement = "below" | "above" | "inside";
 
 /** A one-time hint: shown the first time its anchor is on screen, then never again. */

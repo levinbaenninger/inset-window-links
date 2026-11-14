@@ -29,9 +29,9 @@ const Dimmer = ({ anchor }: { readonly anchor: HTMLElement }) => {
     >
       <defs>
         <mask id={mask}>
-          <rect className="spotlight-show" height="100%" width="100%" />
+          <rect className="fill-white" height="100%" width="100%" />
           <rect
-            className="spotlight-hole motion-safe:transition-all motion-safe:duration-200"
+            className="fill-black motion-safe:transition-all motion-safe:duration-200"
             height={hole.height}
             rx="8"
             width={hole.width}
@@ -40,8 +40,9 @@ const Dimmer = ({ anchor }: { readonly anchor: HTMLElement }) => {
           />
         </mask>
       </defs>
+      {/* A dark page needs a deeper shade to look dimmed at all. */}
       <rect
-        className="spotlight-dim"
+        className="fill-black/45 dark:fill-black/70"
         height="100%"
         mask={`url(#${mask})`}
         width="100%"
@@ -111,16 +112,40 @@ const Walk = ({
 
   useEffect(() => {
     anchor?.scrollIntoView({ block: "nearest" });
+  }, [anchor]);
 
-    // Focus stays in the bubble, on its way forward.
-    const frame = requestAnimationFrame(() => {
-      buttonsIn(bubble.current).at(-1)?.focus();
-    });
+  // Focus stays in the bubble: whatever takes it while the walk runs (a field's autofocus, the window coming forward)
+  // gives it back a frame later, once that code is done. When the walk ends, focus goes back where it was, so a picked item keeps its keys.
+  useEffect(() => {
+    const before = document.activeElement;
+    let frame = 0;
+
+    const keep = (): void => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const root = bubble.current;
+
+        if (root !== null && !root.contains(document.activeElement)) {
+          buttonsIn(root).at(-1)?.focus();
+        }
+      });
+    };
+
+    document.addEventListener("focusin", keep, true);
 
     return () => {
       cancelAnimationFrame(frame);
+      document.removeEventListener("focusin", keep, true);
+
+      if (
+        before instanceof HTMLElement &&
+        before !== document.body &&
+        before.isConnected
+      ) {
+        before.focus({ preventScroll: true });
+      }
     };
-  }, [anchor]);
+  }, []);
 
   const latest = useRef({ back, next, onDone });
 
@@ -194,6 +219,8 @@ const Walk = ({
             </Button>
           </>
         }
+        // Focus stays in the bubble, on its way forward.
+        focusLast
         key={step.id}
         placement="below"
         refBubble={bubble}
