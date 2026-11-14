@@ -116,6 +116,7 @@ const trayMenu = (version: string) => [
   "---",
   "Getting Started",
   "Show Me Around",
+  "Keyboard Shortcuts",
   "Settings…",
   "---",
   `Version ${version}`,
@@ -861,11 +862,17 @@ const libraryFlow = async (app: ElectronApplication) => {
     json(win)
   );
 
-  // Every pane header is a drag region now; the one under the caption buttons is what counts.
-  const strip = String(
-    await page.evaluate(
-      "(() => { const header = document.elementFromPoint(innerWidth - 60, 18)?.closest('.drag-region'); return header ? header.tagName : 'none'; })()"
-    )
+  // Every pane header is a drag region now; the one under the caption buttons is what counts. Read
+  // once the page has laid out: right after opening, the point can still be empty.
+  const strip = await waitFor(
+    async () =>
+      String(
+        await page.evaluate(
+          "(() => { const header = document.elementFromPoint(innerWidth - 60, 18)?.closest('.drag-region'); return header ? header.tagName : 'none'; })()"
+        )
+      ),
+    (found) => found === "HEADER",
+    3000
   );
 
   record(
