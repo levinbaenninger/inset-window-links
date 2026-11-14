@@ -161,6 +161,18 @@ export const Shell = () => {
     onWalk(tutorial.spotlight?.seq ?? null);
   }, [tutorial.spotlight?.seq]);
 
+  // The checklist coming up, at launch or from Getting Started, brings the list back to it.
+  const sideNav = useRef<HTMLElement>(null);
+  const hasChecklist = tutorial.checklist !== null;
+
+  useEffect(() => {
+    if (hasChecklist) {
+      requestAnimationFrame(() => {
+        sideNav.current?.scrollTo({ top: 0 });
+      });
+    }
+  }, [hasChecklist]);
+
   const find = async () => {
     if (view !== undefined && captureId !== undefined) {
       await navigate({
@@ -249,6 +261,7 @@ export const Shell = () => {
             </div>
             <nav
               className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-3"
+              ref={sideNav}
               {...coach("recent-list")}
             >
               {/* Getting started, at the top of the list and out of a search's way. */}

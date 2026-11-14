@@ -236,18 +236,3 @@
       color-mix(in oklab, var(--foreground) 10%, transparent);
   }
 }
-
-/* The walkthrough's dimmer (src/renderer/src/tutorial/spotlight.tsx): a mask shows everything but the hole. As in Inset Shelf. */
-@layer components {
-  .spotlight-show {
-    fill: white;
-  }
-
-  .spotlight-hole {
-    fill: black;
-  }
-
-  .spotlight-dim {
-    fill: rgb(0 0 0 / 0.45);
-  }
-}

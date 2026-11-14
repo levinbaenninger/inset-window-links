@@ -961,6 +961,21 @@ const copiedShown = (page: Page) =>
     `document.querySelectorAll('[aria-label="Copied"]').length + [...document.querySelectorAll("output, [role=status]")].filter((node) => node.textContent?.trim() === "Copied").length`
   );
 
+/** Waits until the walkthrough's Next has the keyboard, at step `step`. */
+const nextHasFocus = async (page: Page, step: number) => {
+  await page
+    .waitForFunction(
+      () =>
+        document.activeElement?.closest("[data-coach-bubble]") !== null &&
+        document.activeElement?.textContent?.trim() === "Next",
+      undefined,
+      { timeout: 2000 }
+    )
+    .catch(() => {
+      throw new Error(`focus on the walkthrough's Next at step ${step}`);
+    });
+};
+
 /** Waits until the sidebar row of capture `id` has focus. */
 const waitForRowFocus = (page: Page, id: string) =>
   until(
@@ -2189,6 +2204,7 @@ const SCENES: readonly Scene[] = [
         first.text.includes("Your captures"),
         `step 1 is the list (${first.text})`
       );
+      await nextHasFocus(page, 1);
       await page
         .locator("[data-coach-bubble]")
         .getByRole("button", { exact: true, name: "Next" })
@@ -2200,6 +2216,7 @@ const SCENES: readonly Scene[] = [
         second.text.includes("Search and Due"),
         `step 2 is search (${second.text})`
       );
+      await nextHasFocus(page, 2);
     },
     data: {
       captures: CAPTURES,
