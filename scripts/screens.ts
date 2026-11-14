@@ -2147,6 +2147,36 @@ const SCENES: readonly Scene[] = [
     platforms: ["macos"],
   },
   {
+    // Remove Examples with the example open: once main has deleted it, the page moves on to what's
+    // left instead of saying the capture was deleted.
+    act: async (page) => {
+      await page.getByRole("button", { name: "Getting started menu" }).click();
+      await page.getByRole("menuitem", { name: "Remove Examples" }).click();
+      // What main does next: it deletes the example, and the list changes.
+      await page.evaluate(
+        `globalThis.inset.remove(${JSON.stringify(EXAMPLE_ID)})`
+      );
+      await page.waitForTimeout(400);
+      assert.equal(
+        await page.getByTestId("record-missing").count(),
+        0,
+        "the page doesn't say the removed example was deleted"
+      );
+
+      const hash = await page.evaluate<string>("location.hash");
+
+      assert.ok(!hash.includes(EXAMPLE_ID), `the example is left (${hash})`);
+    },
+    data: {
+      captures: [exampleCapture("macos"), ...CAPTURES],
+      tutorial: tutorial({ examples: true }),
+    },
+    hash: `/captures/${EXAMPLE_ID}`,
+    name: "tutorial-remove-examples-open",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
     act: async (page) => {
       await page.getByRole("button", { name: /^Reopen a capture/u }).click();
       assert.deepEqual(

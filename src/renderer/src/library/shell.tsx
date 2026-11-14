@@ -176,6 +176,29 @@ export const Shell = () => {
     onWalk(tutorial.spotlight?.seq ?? null);
   }, [tutorial.spotlight?.seq]);
 
+  // Remove Examples deletes the example in main. Once it has left the list, an open example moves on
+  // to what's left, instead of saying the capture was deleted.
+  const examplesShown = useRef(new Set<string>());
+
+  useEffect(() => {
+    for (const id of tutorial.examples) {
+      examplesShown.current.add(id);
+    }
+  }, [tutorial.examples]);
+
+  const openGone =
+    captureId !== undefined && !items.some((item) => item.id === captureId);
+
+  useEffect(() => {
+    if (
+      openGone &&
+      captureId !== undefined &&
+      examplesShown.current.has(captureId)
+    ) {
+      void navigate({ to: "/" });
+    }
+  }, [captureId, navigate, openGone]);
+
   // The checklist coming up, at launch or from Getting Started, brings the list back to it.
   const hasChecklist = tutorial.checklist !== null;
 
