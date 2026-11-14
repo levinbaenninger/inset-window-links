@@ -58,6 +58,30 @@ const buttonsIn = (root: HTMLElement | null): HTMLButtonElement[] =>
     ? []
     : [...root.querySelectorAll<HTMLButtonElement>("button:not([disabled])")];
 
+/**
+ * Where focus goes back when the walk ends: the control focused as it
+ * starts. An item in a menu closes with its menu, so for one of those it is
+ * the button that opened the menu, which the menu names as its label.
+ */
+const returnPoint = (): HTMLElement | null => {
+  const active = document.activeElement;
+
+  if (!(active instanceof HTMLElement) || active === document.body) {
+    return null;
+  }
+
+  const opener = active
+    .closest("[role='menu']")
+    ?.getAttribute("aria-labelledby");
+
+  const trigger =
+    opener === null || opener === undefined
+      ? null
+      : document.querySelector(`#${CSS.escape(opener)}`);
+
+  return trigger instanceof HTMLElement ? trigger : active;
+};
+
 /** Moves focus to the next or previous button in the bubble, round and round. */
 const cycleFocus = (root: HTMLElement | null, back: boolean): void => {
   const buttons = buttonsIn(root);
@@ -117,7 +141,7 @@ const Walk = ({
   // Focus stays in the bubble: whatever takes it while the walk runs (a field's autofocus, the window coming forward)
   // gives it back a frame later, once that code is done. When the walk ends, focus goes back where it was, so a picked item keeps its keys.
   useEffect(() => {
-    const before = document.activeElement;
+    const before = returnPoint();
     let frame = 0;
 
     const keep = (): void => {
@@ -137,11 +161,7 @@ const Walk = ({
       cancelAnimationFrame(frame);
       document.removeEventListener("focusin", keep, true);
 
-      if (
-        before instanceof HTMLElement &&
-        before !== document.body &&
-        before.isConnected
-      ) {
+      if (before?.isConnected === true) {
         before.focus({ preventScroll: true });
       }
     };
