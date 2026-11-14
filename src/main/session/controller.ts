@@ -11,7 +11,7 @@ import type { CaptureStore } from "../store/store";
 import type { PopoverWindow } from "../windows/popover-window";
 import { shortcutStatus } from "../windows/shortcut";
 import type { IdSource } from "./reduce";
-import { initialSession, isMeaningful, reduce } from "./reduce";
+import { initialSession, isMeaningful, pendingExit, reduce } from "./reduce";
 import { toNewCapture, toSnapshot } from "./snapshot";
 import type {
   CaptureOutcome,
@@ -39,9 +39,12 @@ export class SessionController {
   readonly #store: CaptureStore;
   readonly #popover: PopoverWindow;
   readonly #savedListeners = new Set<(captureId: CaptureId) => void>();
+  readonly #changeListeners = new Set<(snapshot: DraftSnapshot) => void>();
+  readonly #exitListeners = new Set<() => void>();
+  readonly #capturedListeners = new Set<(via: "shortcut" | "list") => void>();
   readonly #library: QuitGate;
   #state: SessionState = initialSession(newDraftId());
-  #exiting = false;
+  #exiting: Exit | null = null;
   /** An exit waiting for Recent Captures to let go: a second one joins it rather than run twice. */
   #waiting: Exit | null = null;
   /** Set while the quit is asked for again once Recent Captures let go, so it then exits at once. */
@@ -87,6 +90,43 @@ export class SessionController {
     for (const effect of effects) {
       this.#run(effect);
     }
+
+    this.#changed();
+  }
+
+  #changed(): void {
+    if (this.#changeListeners.size === 0) {
+      return;
+    }
+
+    const snapshot = this.snapshot();
+
+    for (const listener of this.#changeListeners) {
+      listener(snapshot);
+    }
+  }
+
+  /** Runs after every change to the draft or the quit under way. */
+  onChange(listener: (snapshot: DraftSnapshot) => void): void {
+    this.#changeListeners.add(listener);
+  }
+
+  /** Runs when windows land in the draft: one from the capture shortcut, or some picked from the list. */
+  onCaptured(listener: (via: "shortcut" | "list") => void): void {
+    this.#capturedListeners.add(listener);
+  }
+
+  /** Runs once the app is exiting for good, before its windows close. */
+  onExit(listener: () => void): void {
+    this.#exitListeners.add(listener);
+  }
+
+  /**
+   * The exit a quit or restart is heading for: while its prompt or save is under way, while
+   * Recent Captures holds it, and once the app exits. Null when none is.
+   */
+  exitUnderWay(): Exit | null {
+    return this.#exiting ?? this.#waiting ?? pendingExit(this.#state);
   }
 
   snapshot(): DraftSnapshot {
@@ -95,7 +135,7 @@ export class SessionController {
 
   /** before-quit: lets the reducer decide, and only an exitApp effect lets the quit through. */
   interceptQuit(event: Electron.Event): void {
-    if (this.#exiting) {
+    if (this.#exiting !== null) {
       return;
     }
 
@@ -175,15 +215,19 @@ export class SessionController {
               }
             : undefined;
 
-        void this.#capture(effect.token, () =>
-          this.#capturer.captureForeground(preview)
+        void this.#capture(
+          effect.token,
+          () => this.#capturer.captureForeground(preview),
+          "shortcut"
         );
         break;
       }
 
       case "captureChosen": {
-        void this.#capture(effect.token, () =>
-          this.#capturer.captureChosen(effect.candidates, effect.reason)
+        void this.#capture(
+          effect.token,
+          () => this.#capturer.captureChosen(effect.candidates, effect.reason),
+          "list"
         );
         break;
       }
@@ -276,6 +320,8 @@ export class SessionController {
     this.#waiting = null;
 
     if (answer === "stay") {
+      this.#changed();
+
       return;
     }
 
@@ -289,13 +335,17 @@ export class SessionController {
   }
 
   #exit(exit: Exit) {
-    if (this.#exiting) {
+    if (this.#exiting !== null) {
       return;
     }
 
-    this.#exiting = true;
+    this.#exiting = exit;
     this.#popover.allowClose();
     this.#library.quitting();
+
+    for (const listener of this.#exitListeners) {
+      listener();
+    }
 
     if (exit === "relaunch") {
       app.relaunch();
@@ -304,7 +354,11 @@ export class SessionController {
     setImmediate(() => app.quit());
   }
 
-  async #capture(token: string, run: () => Promise<CaptureOutcome>) {
+  async #capture(
+    token: string,
+    run: () => Promise<CaptureOutcome>,
+    via: "shortcut" | "list"
+  ) {
     let outcome: CaptureOutcome;
 
     try {
@@ -315,13 +369,27 @@ export class SessionController {
     }
 
     this.dispatch({ outcome, token, type: "captureFinished" });
+
+    const landed =
+      outcome.kind === "captured" ||
+      (outcome.kind === "capturedMany" && outcome.views.length > 0);
+
+    if (landed) {
+      for (const listener of this.#capturedListeners) {
+        listener(via);
+      }
+    }
   }
 
   async #loadCandidates(token: string) {
     try {
       const candidates = await this.#capturer.listCandidates();
 
-      this.dispatch({ candidates, token, type: "candidatesReady" });
+      this.dispatch(
+        candidates === "permissionDenied"
+          ? { candidates: [], denied: true, token, type: "candidatesReady" }
+          : { candidates, token, type: "candidatesReady" }
+      );
     } catch (error) {
       console.error("Listing windows failed", error);
       this.dispatch({ candidates: [], token, type: "candidatesReady" });

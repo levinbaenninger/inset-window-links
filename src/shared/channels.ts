@@ -1,6 +1,6 @@
-import type { LibraryApi, PopoverApi, SettingsApi } from "./api";
+import type { LibraryApi, OnboardingApi, PopoverApi, SettingsApi } from "./api";
 
-export type WindowRole = "popover" | "library" | "settings";
+export type WindowRole = "popover" | "library" | "settings" | "onboarding";
 
 type ChannelKind = "invoke" | "send";
 
@@ -12,13 +12,15 @@ export const popoverChannels = {
   discard: "invoke",
   dismiss: "send",
   getDraft: "invoke",
-  openScreenSettings: "invoke",
+  getTutorial: "invoke",
+  openSetup: "invoke",
   recheckPermission: "invoke",
   relaunch: "invoke",
   removeView: "invoke",
   reportHeight: "send",
   save: "invoke",
   setText: "send",
+  tutorial: "send",
 } as const satisfies { [K in keyof PopoverApi]: ChannelKind };
 
 export const libraryChannels = {
@@ -29,6 +31,7 @@ export const libraryChannels = {
   discard: "invoke",
   dragImage: "send",
   get: "invoke",
+  getTutorial: "invoke",
   list: "invoke",
   menuOpen: "send",
   newCapture: "send",
@@ -40,6 +43,7 @@ export const libraryChannels = {
   setStatus: "invoke",
   setTodoDone: "invoke",
   shortcut: "invoke",
+  tutorial: "send",
   updateText: "invoke",
 } as const satisfies { [K in keyof LibraryApi]: ChannelKind };
 
@@ -48,9 +52,23 @@ export const settingsChannels = {
   fitHeight: "send",
   getView: "invoke",
   menuOpen: "send",
+  resetTutorial: "send",
   setOpenAtLogin: "invoke",
+  setTips: "invoke",
   update: "invoke",
 } as const satisfies { [K in keyof SettingsApi]: ChannelKind };
+
+export const onboardingChannels = {
+  allow: "send",
+  back: "send",
+  finish: "send",
+  fitHeight: "send",
+  getView: "invoke",
+  next: "send",
+  reopen: "send",
+  skip: "send",
+  startDrag: "send",
+} as const satisfies { [K in keyof OnboardingApi]: ChannelKind };
 
 export const pushChannels = {
   command: "push:command",
@@ -59,7 +77,9 @@ export const pushChannels = {
   leave: "push:leave",
   libraryChanged: "push:library-changed",
   navigate: "push:navigate",
+  onboardingView: "push:onboarding-view",
   settingsView: "push:settings-view",
+  tutorial: "push:tutorial",
 } as const;
 
 export const channelName = (role: WindowRole, method: string): string =>

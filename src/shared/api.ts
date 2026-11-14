@@ -10,12 +10,14 @@ import type {
 } from "./dto";
 import type { CandidateId, CaptureId, ViewId } from "./ids";
 import type { LeaveAnswer, LeavePush } from "./leave";
+import type { HandOffChoice, OnboardingView, PermissionId } from "./onboarding";
 import type { SettingsChange, SettingsView } from "./settings";
 import type { PageCommand } from "./shortcuts";
 import type { StatusRequest } from "./status";
 import type { DraftText } from "./text";
+import type { TutorialAction, TutorialView } from "./tutorial";
 
-export interface PopoverApi {
+export interface PopoverApi extends TutorialApi {
   getDraft: () => Promise<DraftSnapshot>;
   setText: (text: DraftText) => void;
   /** Carries the text too, so a fast Cmd+Enter cannot race the setText mirror. */
@@ -30,13 +32,14 @@ export interface PopoverApi {
   /** Answers the quit prompt. Hiding the popover any other way counts as cancel. */
   chooseQuit: (choice: "save" | "discard" | "cancel") => Promise<void>;
   reportHeight: (height: number) => void;
-  openScreenSettings: () => Promise<void>;
+  /** Opens the permission onboarding at Screen Recording; the panel hides, keeping the draft. */
+  openSetup: () => Promise<void>;
   recheckPermission: () => Promise<void>;
   /** Quits through the usual unsaved-draft check, then starts again so macOS applies a new grant. */
   relaunch: () => Promise<void>;
 }
 
-export interface LibraryApi {
+export interface LibraryApi extends TutorialApi {
   list: () => Promise<readonly CaptureListItem[]>;
   get: (captureId: string) => Promise<CaptureDetail | null>;
   /** Saves a capture's words and due date as the draft's save `rev`. */
@@ -111,36 +114,86 @@ export interface SettingsApi {
   getView: () => Promise<SettingsView>;
   update: (change: SettingsChange) => Promise<void>;
   setOpenAtLogin: (on: boolean) => Promise<void>;
-  /** Asks macOS for Accessibility, which lets captures remember pages and files. */
+  /**
+   * Opens the permission onboarding at Accessibility, which lets captures remember pages and
+   * files. Settings closes, so it doesn't float over System Settings.
+   */
   allowOrigins: () => Promise<void>;
   fitHeight: (height: number) => void;
   /** As in Recent Captures: main leaves the keys to an open dropdown. */
   menuOpen: (open: boolean) => void;
+  /** Reset Tutorial: the checklist and tips start over; the example capture never comes back. */
+  resetTutorial: () => void;
+  /** Show tips: the tutorial's one-time tips. */
+  setTips: (on: boolean) => Promise<void>;
 }
 
-export type PopoverBridge = PopoverApi & {
-  onDraft: (listener: (snapshot: DraftSnapshot) => void) => () => void;
-  onShown: (listener: () => void) => () => void;
-  /** A menu key for the page: a field, the sheet. */
-  onCommand: (listener: (command: PageCommand) => void) => () => void;
+/**
+ * The permission setup's window (src/main/permissions/, src/renderer/src/onboarding/): the page
+ * shows the view main pushes and reports what was pressed. The same actions as Inset Shelf's
+ * onboarding contract.
+ */
+export interface OnboardingApi {
+  getView: () => Promise<OnboardingView>;
+  /** A row's Allow, or Waiting…, which asks again: macOS's prompt and the exact pane. */
+  allow: (id: PermissionId) => void;
+  /** Back, or ←. */
+  back: () => void;
+  /** Done's buttons: start using the app, or start with the walkthrough. */
+  finish: (how: HandOffChoice) => void;
+  /** The page's height, so the window fits it without empty space. */
+  fitHeight: (height: number) => void;
+  /** Get Started, Continue, →, or Not now on Allow access. */
+  next: () => void;
+  /** Reopen to finish, for Screen Recording: quits through the usual unsaved-draft check, then starts again. */
+  reopen: () => void;
+  /** Not now on Welcome: the whole setup. */
+  skip: () => void;
+  /** The app's tile, dragged into System Settings' list as the app bundle. */
+  startDrag: () => void;
+}
+
+/** The in-app tutorial (src/main/tutorial/), in every window that shows a tip: its view, and what the page asks or reports. */
+export interface TutorialApi {
+  getTutorial: () => Promise<TutorialView>;
+  tutorial: (action: TutorialAction) => void;
+}
+
+export type OnboardingBridge = OnboardingApi & {
+  onView: (listener: (view: OnboardingView) => void) => () => void;
   platform: CapturePlatform;
 };
+
+/** What a page with tips hears of the tutorial. */
+interface TutorialEvents {
+  onTutorial: (listener: (view: TutorialView) => void) => () => void;
+}
+
+export type PopoverBridge = PopoverApi &
+  TutorialEvents & {
+    onDraft: (listener: (snapshot: DraftSnapshot) => void) => () => void;
+    onShown: (listener: () => void) => () => void;
+    /** A menu key for the page: a field, the sheet. */
+    onCommand: (listener: (command: PageCommand) => void) => () => void;
+    platform: CapturePlatform;
+  };
 
 export type SettingsBridge = SettingsApi & {
   onView: (listener: (view: SettingsView) => void) => () => void;
   platform: CapturePlatform;
 };
 
-export type LibraryBridge = LibraryApi & {
-  onChanged: (listener: () => void) => () => void;
-  /** Main asks the window to show a route, such as a capture that was just saved. */
-  onNavigate: (listener: (route: string) => void) => () => void;
-  /** A menu key for the page: a field, the open capture, the sidebar, the sheet. */
-  onCommand: (listener: (command: PageCommand) => void) => () => void;
-  /**
-   * Main asks the page to let its window close, or the app quit, and the page answers with
-   * answerLeave; or main says it stopped waiting (`cancel`).
-   */
-  onLeave: (listener: (push: LeavePush) => void) => () => void;
-  platform: CapturePlatform;
-};
+export type LibraryBridge = LibraryApi &
+  TutorialEvents & {
+    onChanged: (listener: () => void) => () => void;
+    /** Main asks the window to show a route, such as a capture that was just saved. */
+    onNavigate: (listener: (route: string) => void) => () => void;
+    /** A menu key for the page: a field, the open capture, the sidebar, the sheet. */
+    onCommand: (listener: (command: PageCommand) => void) => () => void;
+    /**
+     * Main asks the page to let its window close, or the app quit, and the page answers with
+     * answerLeave; or main says it stopped waiting (`cancel`).
+     */
+    onLeave: (listener: (push: LeavePush) => void) => () => void;
+    platform: CapturePlatform;
+  };

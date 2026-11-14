@@ -13,7 +13,7 @@ import {
   useSearch,
 } from "@tanstack/react-router";
 import type { CSSProperties } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { IconButton } from "@/components/icon-button";
@@ -27,12 +27,23 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { libraryApi } from "@/lib/bridge";
 import { useCommands } from "@/lib/commands";
+import { coach } from "@/tutorial/anchors";
+import { Checklist } from "@/tutorial/checklist";
+import { HintLayer } from "@/tutorial/hint-layer";
+import { Spotlight } from "@/tutorial/spotlight";
+import { useTutorial } from "@/tutorial/use-tutorial";
 
 import type { CaptureListItem } from "../../../shared/dto";
 import { menuKeyLabel } from "../../../shared/shortcuts";
 import type { StatusKind } from "../../../shared/status";
 import { DueSuggestions, listOf, RecentList, SearchField } from "./recent-list";
 import { ResizeHandle, SidebarToggle, useSidebar } from "./sidebar";
+import {
+  actTutorial,
+  endWalk,
+  TutorialContext,
+  tutorialSource,
+} from "./tutorial";
 
 const root = getRouteApi("__root__");
 
@@ -129,8 +140,75 @@ export const Shell = () => {
   const sidebar = useSidebar();
   const search = useRef<HTMLInputElement>(null);
   const { platform } = libraryApi();
+  const tutorial = useTutorial(tutorialSource);
 
   const { show, toggle } = sidebar;
+
+  const sideNav = useRef<HTMLElement>(null);
+
+  // The tutorial starts on the list as it is: the sidebar shows, and a search, another list, the
+  // sheet or the picture view goes.
+  const toList = () => {
+    show();
+    setQuery("");
+    setList("active");
+    setSheet(false);
+
+    if (view !== undefined && captureId !== undefined) {
+      void navigate({
+        params: { captureId },
+        search: {},
+        to: "/captures/$captureId",
+      });
+    }
+  };
+
+  const walked = useRef<number | null>(null);
+
+  const onWalk = useEffectEvent((seq: number | null) => {
+    if (seq !== null && seq !== walked.current) {
+      walked.current = seq;
+      toList();
+    }
+  });
+
+  useEffect(() => {
+    onWalk(tutorial.spotlight?.seq ?? null);
+  }, [tutorial.spotlight?.seq]);
+
+  // Remove Examples deletes the example in main. Once it has left the list, an open example moves on
+  // to what's left, instead of saying the capture was deleted.
+  const examplesShown = useRef(new Set<string>());
+
+  useEffect(() => {
+    for (const id of tutorial.examples) {
+      examplesShown.current.add(id);
+    }
+  }, [tutorial.examples]);
+
+  const openGone =
+    captureId !== undefined && !items.some((item) => item.id === captureId);
+
+  useEffect(() => {
+    if (
+      openGone &&
+      captureId !== undefined &&
+      examplesShown.current.has(captureId)
+    ) {
+      void navigate({ to: "/" });
+    }
+  }, [captureId, navigate, openGone]);
+
+  // The checklist coming up, at launch or from Getting Started, brings the list back to it.
+  const hasChecklist = tutorial.checklist !== null;
+
+  useEffect(() => {
+    if (hasChecklist) {
+      requestAnimationFrame(() => {
+        sideNav.current?.scrollTo({ top: 0 });
+      });
+    }
+  }, [hasChecklist]);
 
   const find = async () => {
     if (view !== undefined && captureId !== undefined) {
@@ -151,7 +229,14 @@ export const Shell = () => {
   // The window's own menu keys. Those for the open capture are taken by it first; any it leaves,
   // such as a field key while the image view is open, end here and do nothing.
   useCommands((command) => {
-    if (command === "showShortcuts") {
+    if (command === "showTutorial") {
+      toList();
+      requestAnimationFrame(() => {
+        sideNav.current?.scrollTo({ top: 0 });
+      });
+
+      return true;
+    } else if (command === "showShortcuts") {
       setSheet((open) => !open);
 
       return true;
@@ -170,103 +255,127 @@ export const Shell = () => {
 
   if (view !== undefined) {
     return (
-      <TooltipProvider delayDuration={500}>
-        <div className="bg-background h-screen">
-          <Outlet />
-        </div>
-        <ShortcutSheet onOpenChange={setSheet} open={sheet} />
-      </TooltipProvider>
+      <TutorialContext value={tutorial}>
+        <TooltipProvider delayDuration={500}>
+          <div className="bg-background h-screen">
+            <Outlet />
+          </div>
+          <ShortcutSheet onOpenChange={setSheet} open={sheet} />
+        </TooltipProvider>
+      </TutorialContext>
     );
   }
 
   return (
-    <TooltipProvider delayDuration={500}>
-      <div className="text-foreground flex h-screen">
-        <aside
-          aria-label="Recent captures"
-          className="win:bg-muted/50 relative flex w-(--sidebar-width) shrink-0 flex-col data-[collapsed=true]:hidden"
-          data-collapsed={sidebar.state.collapsed}
-          // SAFETY: CSSProperties has no index for custom properties; --sidebar-width is the one variable the width class reads.
-          style={
-            { "--sidebar-width": `${sidebar.state.width}px` } as CSSProperties
-          }
-        >
-          <header className="drag-region mac:pl-20 flex h-11 shrink-0 items-center gap-0.5 px-2">
-            <h1 className="sr-only">Recent captures</h1>
-            <SidebarToggle />
-            <span className="flex-1" />
-            <IconButton
-              icon={Add01Icon}
-              keys={menuKeyLabel("newCapture", platform)}
-              label="New capture"
-              onClick={() => libraryApi().newCapture()}
-            />
-          </header>
-          <div className="px-2.5 pb-2">
-            <SearchField
-              field={search}
-              findKeys={menuKeyLabel("find", platform)}
-              onQuery={setQuery}
-              query={query}
-            />
-            <DueSuggestions
-              onPicked={() => search.current?.focus()}
-              onQuery={setQuery}
-              query={query}
-            />
-          </div>
-          <nav className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-3">
-            {sideList !== undefined && (
-              <button
-                className={ROW}
-                onClick={() => setList("active")}
-                type="button"
+    <TutorialContext value={tutorial}>
+      <TooltipProvider delayDuration={500}>
+        <div className="text-foreground flex h-screen">
+          <aside
+            aria-label="Recent captures"
+            className="win:bg-muted/50 relative flex w-(--sidebar-width) shrink-0 flex-col data-[collapsed=true]:hidden"
+            data-collapsed={sidebar.state.collapsed}
+            // SAFETY: CSSProperties has no index for custom properties; --sidebar-width is the one variable the width class reads.
+            style={
+              { "--sidebar-width": `${sidebar.state.width}px` } as CSSProperties
+            }
+          >
+            <header className="drag-region mac:pl-20 flex h-11 shrink-0 items-center gap-0.5 px-2">
+              <h1 className="sr-only">Recent captures</h1>
+              <SidebarToggle />
+              <span className="flex-1" />
+              <IconButton
+                icon={Add01Icon}
+                keys={menuKeyLabel("newCapture", platform)}
+                label="New capture"
+                onClick={() => libraryApi().newCapture()}
+              />
+            </header>
+            <div className="px-2.5 pb-2" {...coach("search")}>
+              {/* The search tip waits for Getting started to close: below the field, it would cover the checklist. */}
+              <div
+                {...(tutorial.checklist === null ? coach("search-tip") : {})}
               >
-                <HugeiconsIcon icon={ArrowLeft01Icon} size={14} />
-                <span className="font-medium">{sideList.label}</span>
-              </button>
-            )}
-            <RecentList
-              activeId={captureId}
-              items={items}
-              list={list}
-              onClear={() => {
-                setQuery("");
-                search.current?.focus();
-              }}
-              query={query}
-            />
-          </nav>
-          <footer className="flex shrink-0 flex-col gap-1 px-2 pb-2">
-            {list === "active" && <SideLists items={items} onOpen={setList} />}
-            <span className="flex items-center gap-0.5">
-              <IconButton
-                icon={Settings01Icon}
-                keys={menuKeyLabel("openSettings", platform)}
-                label="Settings"
-                onClick={() => libraryApi().openSettings()}
-                side="top"
+                <SearchField
+                  field={search}
+                  findKeys={menuKeyLabel("find", platform)}
+                  onQuery={setQuery}
+                  query={query}
+                />
+              </div>
+              <DueSuggestions
+                onPicked={() => search.current?.focus()}
+                onQuery={setQuery}
+                query={query}
               />
-              <IconButton
-                data-testid="open-shortcuts"
-                icon={SHORTCUTS_ICON}
-                keys={menuKeyLabel("showShortcuts", platform)}
-                label="Keyboard Shortcuts"
-                onClick={() => setSheet(true)}
-                side="top"
+            </div>
+            <nav
+              className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-3"
+              ref={sideNav}
+              {...coach("recent-list")}
+            >
+              {/* Getting started, at the top of the list and out of a search's way. */}
+              {tutorial.checklist !== null &&
+                query === "" &&
+                list === "active" && (
+                  <Checklist act={actTutorial} view={tutorial.checklist} />
+                )}
+              {sideList !== undefined && (
+                <button
+                  className={ROW}
+                  onClick={() => setList("active")}
+                  type="button"
+                >
+                  <HugeiconsIcon icon={ArrowLeft01Icon} size={14} />
+                  <span className="font-medium">{sideList.label}</span>
+                </button>
+              )}
+              <RecentList
+                activeId={captureId}
+                items={items}
+                list={list}
+                onClear={() => {
+                  setQuery("");
+                  search.current?.focus();
+                }}
+                query={query}
               />
-            </span>
-          </footer>
-          <ResizeHandle />
-        </aside>
-        <div
-          className="bg-background mac:dark:bg-card border-foreground/10 flex min-w-0 flex-1 flex-col border-l data-[collapsed=true]:border-l-0"
-          data-collapsed={sidebar.state.collapsed}
-        >
-          <Outlet />
+            </nav>
+            <footer className="flex shrink-0 flex-col gap-1 px-2 pb-2">
+              {list === "active" && (
+                <SideLists items={items} onOpen={setList} />
+              )}
+              <span className="flex items-center gap-0.5">
+                <IconButton
+                  icon={Settings01Icon}
+                  keys={menuKeyLabel("openSettings", platform)}
+                  label="Settings"
+                  onClick={() => libraryApi().openSettings()}
+                  side="top"
+                  {...coach("settings")}
+                />
+                <IconButton
+                  data-testid="open-shortcuts"
+                  icon={SHORTCUTS_ICON}
+                  keys={menuKeyLabel("showShortcuts", platform)}
+                  label="Keyboard Shortcuts"
+                  onClick={() => setSheet(true)}
+                  side="top"
+                />
+              </span>
+            </footer>
+            <ResizeHandle />
+          </aside>
+          <div
+            className="bg-background mac:dark:bg-card border-foreground/10 flex min-w-0 flex-1 flex-col border-l data-[collapsed=true]:border-l-0"
+            data-collapsed={sidebar.state.collapsed}
+          >
+            <Outlet />
+          </div>
         </div>
-      </div>
-      <ShortcutSheet onOpenChange={setSheet} open={sheet} />
-    </TooltipProvider>
+        <ShortcutSheet onOpenChange={setSheet} open={sheet} />
+        <HintLayer act={actTutorial} view={tutorial} />
+        <Spotlight onDone={endWalk} run={tutorial.spotlight} />
+      </TooltipProvider>
+    </TutorialContext>
   );
 };

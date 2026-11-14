@@ -1,11 +1,13 @@
 import { globalShortcut } from "electron";
 
 import type { ShortcutStatus } from "../../shared/dto";
+import { CAPTURE_ACCELERATOR, keyLabel } from "../../shared/shortcuts";
 import { capturePlatform } from "../capture/capturer";
 
-export const CAPTURE_ACCELERATOR = "CommandOrControl+Alt+W";
+export { CAPTURE_ACCELERATOR } from "../../shared/shortcuts";
 
-const label = capturePlatform === "macos" ? "⌥⌘W" : "Ctrl+Alt+W";
+/** ⌥⌘W on a Mac, Ctrl+Alt+W on Windows. */
+const label = keyLabel(CAPTURE_ACCELERATOR, capturePlatform);
 
 /** Read live, so the tray and the popover always agree with the OS registration. */
 export const shortcutStatus = (): ShortcutStatus => ({

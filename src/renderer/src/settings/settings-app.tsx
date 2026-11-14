@@ -70,6 +70,7 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
   const floatId = useId();
   const clickAwayId = useId();
   const pagesId = useId();
+  const tipsId = useId();
   const page = useRef<HTMLElement>(null);
   const { settings } = view;
   const mac = view.platform === "macos";
@@ -212,6 +213,31 @@ const SettingsForm = ({ view }: { view: SettingsView }) => {
           </Row>
         </Group>
       )}
+      <Group title="Tips">
+        <Row label="Show tips" labelFor={tipsId}>
+          <Switch
+            checked={view.tips}
+            id={tipsId}
+            onCheckedChange={(checked) => {
+              void settingsApi().setTips(checked);
+            }}
+          />
+        </Row>
+        <Row
+          label="Getting started and tips"
+          note="Starts the checklist and the one-time tips over."
+        >
+          <Button
+            onClick={() => {
+              settingsApi().resetTutorial();
+            }}
+            size="sm"
+            variant="outline"
+          >
+            Reset Tutorial
+          </Button>
+        </Row>
+      </Group>
       {/* macOS has the app menu's About panel; elsewhere it is here. */}
       {!mac && (
         <p className="text-muted-foreground px-1 text-xs">

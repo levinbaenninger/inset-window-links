@@ -10,13 +10,32 @@ import { once } from "node:events";
  *
  * The default output folder is release/screens.
  */
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 
 import { chromium } from "playwright";
 import type { Browser, Page } from "playwright";
+
+import {
+  HOME_PAGE,
+  linksExample,
+  linksHints,
+  linksSpotlight,
+  linksTasks,
+  PANEL_PAGE,
+} from "../src/main/links-tutorial.ts";
+import type {
+  OnboardingView,
+  PermissionRowState,
+} from "../src/shared/onboarding.ts";
+import type { KeyPlatform } from "../src/shared/shortcuts.ts";
+import type {
+  ShownHint,
+  TutorialHint,
+  TutorialView,
+} from "../src/shared/tutorial.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const RENDERER = path.join(ROOT, "out", "renderer");
@@ -102,8 +121,40 @@ const WINDOW_CSS = `
   .plan span { border: 3px solid #333; border-radius: 4px; }
 `;
 
+/** The setup's drag tile shows the app's icon, as main reads it from the bundle. */
+const APP_ICON = "app-icon.png";
+
+/** The example capture's pictures, drawn from the same bundled SVGs the app draws them from. */
+const EXAMPLE_PICTURES = {
+  notes: "example-notes.png",
+  page: "example-page.png",
+} as const;
+
 const renderSampleWindows = async (browser: Browser) => {
   await mkdir(FIXTURES, { recursive: true });
+  await copyFile(
+    path.join(ROOT, "build", "icon.png"),
+    path.join(FIXTURES, APP_ICON)
+  );
+
+  await Promise.all(
+    Object.entries(EXAMPLE_PICTURES).map(async ([name, file]) => {
+      const svg = await readFile(
+        path.join(ROOT, "src", "main", "examples", `example-${name}.svg`),
+        "utf-8"
+      );
+
+      const picture = await browser.newPage({
+        viewport: { height: 750, width: 1200 },
+      });
+
+      await picture.setContent(
+        `<body style="margin:0">${svg.replace("<svg ", '<svg width="1200" height="750" ')}</body>`
+      );
+      await picture.screenshot({ path: path.join(FIXTURES, file) });
+      await picture.close();
+    })
+  );
 
   await Promise.all(
     SAMPLE_WINDOWS.map(async (win) => {
@@ -394,10 +445,23 @@ const SETTINGS_VIEW = {
     rememberPages: false,
   },
   shortcut: { kind: "registered", label: "⌥⌘W" },
+  tips: true,
   version: "0.1.0",
 };
 
-type Capture = Omit<(typeof CAPTURES)[number], "due"> & { due: string | null };
+type SampleView = (typeof CAPTURES)[number]["views"][number];
+
+/** A window of a capture; the example capture's have no app, and one has nothing to reopen. */
+type CaptureView = Omit<SampleView, "appName" | "origin" | "title"> & {
+  appName: string | null;
+  origin: SampleView["origin"] | null;
+  title: string;
+};
+
+type Capture = Omit<(typeof CAPTURES)[number], "due" | "views"> & {
+  due: string | null;
+  views: readonly CaptureView[];
+};
 
 /** A capture's fields as main lists them for a Discard it still owes. */
 const textOf = (capture: Capture) => ({
@@ -449,17 +513,220 @@ interface SceneData {
   owedUnread?: boolean;
   draft?: DraftState;
   view?: typeof SETTINGS_VIEW;
+  /** The permission setup (macOS). */
+  onboarding?: OnboardingView;
+  /** The in-app tutorial as main shows it to the page, written for each system's keys. */
+  tutorial?: Readonly<Record<KeyPlatform, TutorialView>>;
 }
 
 interface Scene {
   name: string;
-  page: "popover" | "library" | "settings";
+  page: "popover" | "library" | "settings" | "onboarding";
   hash?: string;
   data: SceneData;
   platforms?: readonly Platform[];
   size?: { width: number; height: number };
   act?: (page: Page) => Promise<void>;
 }
+
+// The permission setup's sample states (src/shared/onboarding.ts), in Inset Window Links' words.
+
+type SetupKind = "welcome" | "access" | "done";
+
+const setupView = (
+  current: SetupKind,
+  rows: {
+    readonly screen: PermissionRowState;
+    readonly accessibility: PermissionRowState;
+  },
+  steps: readonly SetupKind[] = ["welcome", "access", "done"]
+): OnboardingView => ({
+  appName: "Inset Window Links",
+  focus: rows.screen === "allowed" ? "accessibility" : "screen",
+  handOff: {
+    later:
+      "Inset Window Links works without the permissions you skipped. Set Up Permissions… in the Help menu or the menu bar icon’s menu asks again.",
+    ready:
+      "Inset Window Links is ready. Getting started in Recent Captures shows the rest.",
+    showAround: "Show Me Around",
+    start: "Start Capturing",
+  },
+  permissions: [
+    {
+      features: ["adding windows"],
+      id: "screen",
+      listName: "Screen & System Audio Recording",
+      purpose: "Takes the picture of each window you add.",
+      state: rows.screen,
+      title: "Screen Recording",
+    },
+    {
+      features: ["Reopen for pages and files"],
+      id: "accessibility",
+      listName: "Device Control and Data Access",
+      purpose:
+        "Optional. Remembers which page or file a window showed, so Reopen can bring it back.",
+      state: rows.accessibility,
+      title: "Accessibility",
+    },
+  ],
+  step: { kind: current },
+  steps: steps.map((kind) => ({ kind })),
+  tagline:
+    "Inset Window Links keeps one thought together with the windows it’s about.",
+  tile: { icon: `/.fixtures/${APP_ICON}`, name: "Inset Window Links" },
+});
+
+const NOTHING_ALLOWED = { accessibility: "allow", screen: "allow" } as const;
+const ALL_ALLOWED = { accessibility: "allowed", screen: "allowed" } as const;
+
+/** The page's height, as main sizes the setup window to it: the shot shows what the user sees. */
+const fitToPage = async (page: Page): Promise<number> => {
+  const height = await page.evaluate<number>(
+    "Math.ceil(document.querySelector('main')?.getBoundingClientRect().height ?? 0)"
+  );
+
+  if (height > 0) {
+    await page.setViewportSize({
+      height,
+      width: page.viewportSize()?.width ?? 460,
+    });
+  }
+
+  return height;
+};
+
+/** One dot per page of the run, the current one named. */
+const setupDots = (page: Page) =>
+  page.evaluate<{ count: number; label: string }>(
+    "(() => { const list = document.querySelector('footer ol'); return { count: list?.children.length ?? 0, label: list?.getAttribute('aria-label') ?? '' }; })()"
+  );
+
+/** What the page sent main, in order: each call and its first argument. */
+const sentCalls = (page: Page) =>
+  page.evaluate<{ method: string; arg: unknown }[]>(
+    "globalThis.__calls.map((call) => ({ arg: call.args[0] ?? null, method: call.method }))"
+  );
+
+// The in-app tutorial's sample states (src/shared/tutorial.ts), from src/main/links-tutorial.ts.
+
+const EXAMPLE_ID = uuid(901);
+
+/** The first run's example capture, as Recent Captures lists it. */
+const exampleCapture = (platform: KeyPlatform) => {
+  const example = linksExample(platform);
+
+  return {
+    createdAt: ago(0, 9, 0),
+    description: example.description,
+    due: null,
+    id: EXAMPLE_ID,
+    relationship: example.title,
+    status: { kind: "active" },
+    todos: example.steps.map((text, index) => todo(90 + index, text)),
+    updatedAt: ago(0, 9, 0),
+    views: [
+      {
+        ...view(90, 2, ago(0, 9, 0), example.windows[0]?.description ?? ""),
+        appName: null,
+        imageUrl: `/.fixtures/${EXAMPLE_PICTURES.page}`,
+        origin: {
+          detail: example.windows[0]?.url ?? "",
+          kind: "page",
+          label: "github.com",
+        },
+        title: example.windows[0]?.title ?? "",
+      },
+      {
+        ...view(91, 4, ago(0, 9, 0), example.windows[1]?.description ?? ""),
+        appName: null,
+        imageUrl: `/.fixtures/${EXAMPLE_PICTURES.notes}`,
+        origin: null,
+        title: example.windows[1]?.title ?? "",
+      },
+    ],
+  };
+};
+
+/** A tip as main grants it: showing now, on its page. */
+const grantedHint = (hint: TutorialHint): ShownHint => ({
+  anchor: hint.anchor,
+  id: hint.id,
+  kind: "hint",
+  placement: hint.placement,
+  text: hint.text,
+  title: hint.title,
+});
+
+const hintOf = (platform: KeyPlatform, id: string): TutorialHint => {
+  const found = linksHints(platform).find((hint) => hint.id === id);
+
+  assert.ok(found !== undefined, `no tip ${id}`);
+
+  return found;
+};
+
+interface TutorialOptions {
+  page?: string;
+  done?: number;
+  complete?: boolean;
+  examples?: boolean;
+  checklist?: boolean;
+  /** The tip or task how-to showing on the page. */
+  active?: (platform: KeyPlatform) => ShownHint;
+  spotlight?: number;
+}
+
+const tutorialFor = (
+  platform: KeyPlatform,
+  options: TutorialOptions
+): TutorialView => {
+  const page = options.page ?? HOME_PAGE;
+  const done = options.done ?? 0;
+  const tasks = linksTasks(platform);
+
+  return {
+    active: options.active?.(platform) ?? null,
+    busy: false,
+    checklist:
+      page !== HOME_PAGE || options.checklist === false
+        ? null
+        : {
+            collapsed: false,
+            complete: options.complete ?? false,
+            done,
+            doneText:
+              platform === "macos"
+                ? "That’s the whole loop. Help › Getting Started, or the menu bar icon’s menu, brings this back."
+                : "That’s the whole loop. Getting Started in the notification area icon’s menu brings this back.",
+            examples: options.examples ?? false,
+            tasks: tasks.map((task, index) => ({
+              ...task,
+              done: index < done,
+            })),
+            title: "Getting started",
+            total: tasks.length,
+          },
+    examples: options.examples === true ? [EXAMPLE_ID] : [],
+    hints: [],
+    spotlight:
+      options.spotlight === undefined
+        ? null
+        : { seq: options.spotlight, steps: linksSpotlight(platform) },
+  };
+};
+
+/** The tutorial for both systems, each with its own keys. */
+const tutorial = (options: TutorialOptions) => ({
+  macos: tutorialFor("macos", options),
+  windows: tutorialFor("windows", options),
+});
+
+/** The tutorial's bubble, drawn and saying this. */
+const bubbleText = (page: Page) =>
+  page.evaluate<{ text: string; visible: boolean }>(
+    "(() => { const element = document.querySelector('[data-coach-bubble]'); const box = element?.getBoundingClientRect(); return { text: element?.textContent ?? '', visible: element !== null && box !== undefined && box.width > 0 && getComputedStyle(element).visibility !== 'hidden' }; })()"
+  );
 
 const sendCommand = (page: Page, command: string) =>
   page.evaluate(
@@ -692,6 +959,35 @@ const leaveAnswers = (page: Page) =>
 const copiedShown = (page: Page) =>
   page.evaluate<number>(
     `document.querySelectorAll('[aria-label="Copied"]').length + [...document.querySelectorAll("output, [role=status]")].filter((node) => node.textContent?.trim() === "Copied").length`
+  );
+
+/** The Reopen how-to, as main shows it when the task is clicked. */
+const reopenHowTo = (platform: KeyPlatform) => {
+  const task = linksTasks(platform).find((each) => each.id === "reopen");
+
+  return {
+    anchor: task?.anchor ?? "",
+    id: "reopen",
+    kind: "task" as const,
+    placement: "below" as const,
+    text: task?.how ?? "",
+    title: task?.title ?? null,
+  };
+};
+
+/** How far below the control marked `anchor` the bubble starts, in pixels; negative when above. */
+const bubbleBelow = (page: Page, anchor: string) =>
+  page.evaluate<number>(
+    `document.querySelector("[data-coach-bubble]").getBoundingClientRect().top - document.querySelector('[data-coach="${anchor}"]').getBoundingClientRect().bottom`
+  );
+
+/** Waits until the walkthrough's Next has the keyboard, at step `step`. */
+const nextHasFocus = (page: Page, step: number) =>
+  until(
+    page,
+    `document.activeElement?.closest("[data-coach-bubble]") !== null && document.activeElement?.textContent?.trim() === "Next"`,
+    `focus on the walkthrough's Next at step ${step}`,
+    Date.now() + 2000
   );
 
 /** Waits until the sidebar row of capture `id` has focus. */
@@ -1629,15 +1925,581 @@ const SCENES: readonly Scene[] = [
   },
   {
     data: { captures: [] },
-    hash: "/welcome",
+    hash: "/",
     name: "library-first-run",
     page: "library",
   },
   {
-    data: { captures: CAPTURES },
-    hash: "/welcome",
-    name: "library-home",
+    act: async (page) => {
+      await page.keyboard.press("Enter");
+      assert.deepEqual(
+        await sentCalls(page),
+        [{ arg: null, method: "next" }],
+        "Return takes Get Started"
+      );
+      assert.deepEqual(
+        await setupDots(page),
+        { count: 3, label: "Step 1 of 3" },
+        "three pages, the first named"
+      );
+      assert.ok((await fitToPage(page)) <= 320, "Welcome is compact");
+    },
+    data: { onboarding: setupView("welcome", NOTHING_ALLOWED) },
+    name: "setup-welcome",
+    page: "onboarding",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      await page
+        .getByRole("button", { name: "Allow Screen Recording" })
+        .click();
+      await page.getByRole("button", { name: "Back" }).click();
+      assert.deepEqual(
+        await sentCalls(page),
+        [
+          { arg: "screen", method: "allow" },
+          { arg: null, method: "back" },
+        ],
+        "Allow asks main for that permission, and Back goes back"
+      );
+      assert.deepEqual(await setupDots(page), {
+        count: 3,
+        label: "Step 2 of 3",
+      });
+      assert.ok(
+        await page.getByText("Optional.", { exact: false }).isVisible(),
+        "Accessibility says it is optional"
+      );
+      await fitToPage(page);
+    },
+    data: { onboarding: setupView("access", NOTHING_ALLOWED) },
+    name: "setup-access",
+    page: "onboarding",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      assert.ok(
+        await page
+          .getByText(
+            "↑ Drag Inset Window Links into the Device Control and Data Access list",
+            { exact: true }
+          )
+          .isVisible(),
+        "the drag tile shows while Accessibility waits"
+      );
+
+      const pulse =
+        "getComputedStyle(document.querySelector('button span[aria-hidden=true].rounded-full')).animationName";
+
+      const moving = await page.evaluate<string>(pulse);
+
+      await page.emulateMedia({ reducedMotion: "reduce" });
+
+      const still = await page.evaluate<string>(pulse);
+
+      assert.ok(
+        moving !== "none" && still === "none",
+        `the Waiting… pulse stops with reduced motion (${moving} → ${still})`
+      );
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+      await fitToPage(page);
+    },
+    data: {
+      onboarding: setupView("access", {
+        accessibility: "waiting",
+        screen: "allowed",
+      }),
+    },
+    name: "setup-waiting",
+    page: "onboarding",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      assert.ok(
+        await page
+          .getByRole("button", { name: "Reopen to finish" })
+          .isVisible(),
+        "Screen Recording offers Reopen to finish"
+      );
+      await page.getByRole("button", { name: "Reopen to finish" }).click();
+      assert.deepEqual(await sentCalls(page), [
+        { arg: null, method: "reopen" },
+      ]);
+      await fitToPage(page);
+    },
+    data: {
+      onboarding: setupView("access", {
+        accessibility: "allow",
+        screen: "reopen",
+      }),
+    },
+    name: "setup-reopen",
+    page: "onboarding",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      assert.ok(
+        await page
+          .getByRole("status", { name: "Screen Recording allowed" })
+          .isVisible()
+      );
+      await fitToPage(page);
+    },
+    data: {
+      onboarding: setupView("access", ALL_ALLOWED),
+    },
+    name: "setup-allowed",
+    page: "onboarding",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      await page.getByRole("button", { name: "Show Me Around" }).click();
+      assert.deepEqual(
+        await sentCalls(page),
+        [{ arg: "showAround", method: "finish" }],
+        "Show Me Around hands over to the walkthrough"
+      );
+      assert.ok(
+        await page.getByRole("button", { name: "Start Capturing" }).isVisible()
+      );
+      assert.deepEqual(await setupDots(page), {
+        count: 3,
+        label: "Step 3 of 3",
+      });
+      assert.ok((await fitToPage(page)) <= 320, "Done is compact");
+    },
+    data: { onboarding: setupView("done", ALL_ALLOWED) },
+    name: "setup-done",
+    page: "onboarding",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      await fitToPage(page);
+    },
+    data: { onboarding: setupView("done", NOTHING_ALLOWED) },
+    name: "setup-done-skipped",
+    page: "onboarding",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      assert.deepEqual(await setupDots(page), {
+        count: 2,
+        label: "Step 2 of 2",
+      });
+      await fitToPage(page);
+    },
+    data: { onboarding: setupView("done", ALL_ALLOWED, ["welcome", "done"]) },
+    name: "setup-done-nothing-missing",
+    page: "onboarding",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      assert.ok(
+        await page.getByRole("region", { name: "Getting started" }).isVisible(),
+        "Getting started sits at the top of the list"
+      );
+      assert.equal(
+        await page.locator("[data-coach=search-tip]").count(),
+        0,
+        "the search tip waits while Getting started shows, so it never covers it"
+      );
+      await page.waitForTimeout(150);
+      assert.equal(
+        await page
+          .locator("nav[data-coach=recent-list]")
+          .evaluate((nav) => nav.scrollTop),
+        0,
+        "the list opens on the checklist, its header in view"
+      );
+      assert.ok(
+        (await page.getByText("Example", { exact: true }).count()) >= 2,
+        "the example capture is tagged in the list and on its page"
+      );
+    },
+    data: {
+      captures: [exampleCapture("macos")],
+      tutorial: tutorial({ examples: true }),
+    },
+    hash: "/",
+    name: "tutorial-first-run",
     page: "library",
+  },
+  {
+    act: async (page) => {
+      await page.getByRole("button", { name: "Getting started menu" }).click();
+      await page.getByRole("menuitem", { name: "Remove Examples" }).waitFor();
+    },
+    data: {
+      captures: [exampleCapture("macos")],
+      tutorial: tutorial({ examples: true }),
+    },
+    hash: "/",
+    name: "tutorial-remove-examples",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    // Remove Examples with the example open: once main has deleted it, the page moves on to what's
+    // left instead of saying the capture was deleted.
+    act: async (page) => {
+      await page.getByRole("button", { name: "Getting started menu" }).click();
+      await page.getByRole("menuitem", { name: "Remove Examples" }).click();
+      // What main does next: it deletes the example, and the list changes.
+      await page.evaluate(
+        `globalThis.inset.remove(${JSON.stringify(EXAMPLE_ID)})`
+      );
+      await page.waitForTimeout(400);
+      assert.equal(
+        await page.getByTestId("record-missing").count(),
+        0,
+        "the page doesn't say the removed example was deleted"
+      );
+
+      const hash = await page.evaluate<string>("location.hash");
+
+      assert.ok(!hash.includes(EXAMPLE_ID), `the example is left (${hash})`);
+    },
+    data: {
+      captures: [exampleCapture("macos"), ...CAPTURES],
+      tutorial: tutorial({ examples: true }),
+    },
+    hash: `/captures/${EXAMPLE_ID}`,
+    name: "tutorial-remove-examples-open",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      await page.getByRole("button", { name: /^Reopen a capture/u }).click();
+      assert.deepEqual(
+        await callsTo(page, "tutorial"),
+        [{ id: "reopen", kind: "taskHint" }],
+        "clicking a task asks for its how-to, and never ticks it off"
+      );
+    },
+    data: { captures: CAPTURES, tutorial: tutorial({ done: 3 }) },
+    hash: "/",
+    name: "tutorial-checklist-progress",
+    page: "library",
+  },
+  {
+    act: async (page) => {
+      const bubble = await bubbleText(page);
+
+      assert.ok(
+        bubble.visible && bubble.text.includes("Reopen button"),
+        `the how-to shows (${JSON.stringify(bubble)})`
+      );
+
+      const gap = await bubbleBelow(page, "reopen-all");
+
+      assert.ok(
+        gap >= 0 && gap <= 24,
+        `the how-to points at Reopen all (${gap} px)`
+      );
+    },
+    data: {
+      captures: CAPTURES,
+      tutorial: tutorial({ active: reopenHowTo, done: 3 }),
+    },
+    hash: "/",
+    name: "tutorial-task-hint",
+    page: "library",
+  },
+  {
+    // No capture, so no Reopen all: the how-to points at its own row instead.
+    act: async (page) => {
+      const bubble = await bubbleText(page);
+
+      assert.ok(
+        bubble.visible && bubble.text.includes("Reopen button"),
+        `the how-to shows (${JSON.stringify(bubble)})`
+      );
+      const gap = await bubbleBelow(page, "task-reopen");
+
+      assert.ok(
+        gap >= 0 && gap <= 24,
+        `the how-to points at its checklist row (${gap} px)`
+      );
+    },
+    data: {
+      captures: [],
+      tutorial: tutorial({ active: reopenHowTo, done: 3 }),
+    },
+    hash: "/",
+    name: "tutorial-task-hint-no-capture",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      const bubble = await bubbleText(page);
+
+      assert.ok(
+        bubble.visible && bubble.text.includes("due:today"),
+        `the search tip shows (${JSON.stringify(bubble)})`
+      );
+    },
+    data: {
+      captures: CAPTURES,
+      tutorial: tutorial({
+        active: (platform) => grantedHint(hintOf(platform, "search")),
+        checklist: false,
+      }),
+    },
+    hash: "/",
+    name: "tutorial-search-tip",
+    page: "library",
+  },
+  {
+    // Getting Started brought the checklist back while the search tip showed: the tip has lost its
+    // anchor, so the page lets it go instead of holding back every other tip.
+    act: async (page) => {
+      await until(
+        page,
+        `globalThis.__calls.some((call) => call.method === "tutorial" && call.args[0].kind === "dismissHint" && call.args[0].id === "search")`,
+        "the search tip let go",
+        Date.now() + 3000
+      );
+    },
+    data: {
+      captures: CAPTURES,
+      tutorial: tutorial({
+        active: (platform) => grantedHint(hintOf(platform, "search")),
+      }),
+    },
+    hash: "/",
+    name: "tutorial-search-tip-checklist",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    // Getting Started from the picture view: the page goes back to the list, where the checklist is.
+    act: async (page) => {
+      await sendCommand(page, "showTutorial");
+      await page.getByRole("region", { name: "Getting started" }).waitFor();
+
+      const hash = await page.evaluate<string>("location.hash");
+
+      assert.ok(!hash.includes("view="), `the picture view closes (${hash})`);
+    },
+    data: { captures: CAPTURES, tutorial: tutorial({ done: 1 }) },
+    hash: `/captures/${uuid(1)}?view=${uuid(101)}`,
+    name: "tutorial-getting-started-from-picture",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    // Getting Started during a search: the search goes, so the checklist shows.
+    act: async (page) => {
+      const field = page.getByPlaceholder("Search or due:today");
+
+      await field.fill("rieder");
+      assert.equal(
+        await page.getByRole("region", { name: "Getting started" }).count(),
+        0,
+        "a search hides the checklist"
+      );
+      await sendCommand(page, "showTutorial");
+      await page.getByRole("region", { name: "Getting started" }).waitFor();
+      assert.equal(await field.inputValue(), "", "the search is cleared");
+    },
+    data: { captures: CAPTURES, tutorial: tutorial({ done: 1 }) },
+    hash: "/",
+    name: "tutorial-getting-started-from-search",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    data: {
+      captures: CAPTURES,
+      tutorial: tutorial({ complete: true, done: 5 }),
+    },
+    hash: "/",
+    name: "tutorial-checklist-done",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      const first = await bubbleText(page);
+
+      assert.ok(
+        first.text.includes("Your captures"),
+        `step 1 is the list (${first.text})`
+      );
+      await nextHasFocus(page, 1);
+      await page
+        .locator("[data-coach-bubble]")
+        .getByRole("button", { exact: true, name: "Next" })
+        .click();
+
+      const second = await bubbleText(page);
+
+      assert.ok(
+        second.text.includes("Search and Due"),
+        `step 2 is search (${second.text})`
+      );
+      await nextHasFocus(page, 2);
+    },
+    data: {
+      captures: CAPTURES,
+      tutorial: tutorial({ checklist: false, spotlight: 1 }),
+    },
+    hash: "/",
+    name: "tutorial-spotlight",
+    page: "library",
+  },
+  {
+    act: async (page) => {
+      for (let step = 0; step < 2; step += 1) {
+        // oxlint-disable-next-line no-await-in-loop -- one step after another.
+        await page
+          .locator("[data-coach-bubble]")
+          .getByRole("button", { exact: true, name: "Next" })
+          .click();
+      }
+
+      const third = await bubbleText(page);
+
+      assert.ok(
+        third.text.includes("The windows"),
+        `step 3 is the windows (${third.text})`
+      );
+    },
+    data: {
+      captures: CAPTURES,
+      tutorial: tutorial({ checklist: false, spotlight: 1 }),
+    },
+    hash: "/",
+    name: "tutorial-spotlight-windows",
+    page: "library",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      const bubble = await bubbleText(page);
+
+      assert.ok(
+        bubble.visible && bubble.text.includes("pick several windows"),
+        `the Add windows tip shows (${JSON.stringify(bubble)})`
+      );
+    },
+    data: {
+      draft: draft(FULL_DRAFT),
+      tutorial: tutorial({
+        active: (platform) => grantedHint(hintOf(platform, "add-windows")),
+        page: PANEL_PAGE,
+      }),
+    },
+    name: "tutorial-panel-add-tip",
+    page: "popover",
+  },
+  {
+    // The title field has the keyboard when the tip shows. Got it takes it to its button, and the title gets it back.
+    act: async (page) => {
+      const push = (shown: TutorialView) =>
+        page.evaluate(
+          `window.dispatchEvent(new CustomEvent("fixture:tutorial", { detail: ${JSON.stringify(shown)} }))`
+        );
+
+      await page.locator("#relationship").focus();
+      await push(
+        tutorial({
+          active: (platform) => grantedHint(hintOf(platform, "add-windows")),
+          page: PANEL_PAGE,
+        }).macos
+      );
+      await page.locator("[data-coach-bubble]").waitFor();
+      await page.waitForTimeout(400);
+      await page
+        .locator("[data-coach-bubble]")
+        .getByRole("button", { name: "Got it" })
+        .click();
+      // Main lets go of the bubble.
+      await push(tutorial({ page: PANEL_PAGE }).macos);
+      await page.waitForTimeout(300);
+
+      const focused = await page.evaluate<string>(
+        "document.activeElement?.id || document.activeElement?.tagName || 'nothing'"
+      );
+
+      assert.equal(focused, "relationship", "focus is back in the title field");
+    },
+    data: {
+      draft: draft(FULL_DRAFT),
+      tutorial: tutorial({ page: PANEL_PAGE }),
+    },
+    name: "tutorial-got-it-focus",
+    page: "popover",
+    platforms: ["macos"],
+  },
+  {
+    act: async (page) => {
+      const bubble = await bubbleText(page);
+
+      assert.ok(
+        bubble.visible && bubble.text.includes("Say what connects"),
+        `the title tip shows (${JSON.stringify(bubble)})`
+      );
+      assert.equal(
+        await page.evaluate<string | null>(
+          "document.activeElement?.id ?? null"
+        ),
+        "relationship",
+        "the tip leaves the keyboard in the title field"
+      );
+      await page.keyboard.type("Movers");
+      assert.equal(
+        await page.evaluate<string | null>(
+          "globalThis.__calls.filter((call) => call.method === 'setText').at(-1)?.args[0].relationship ?? null"
+        ),
+        "Movers",
+        "typing reaches the title while the tip shows"
+      );
+      await page.keyboard.press("Enter");
+      // The panel moves focus on the next frame, once the field is there.
+      await page.waitForTimeout(150);
+      assert.equal(
+        await page.evaluate<string | null>(
+          "document.activeElement?.getAttribute('aria-label') ?? null"
+        ),
+        "Description",
+        "Return still moves on to the description"
+      );
+      await page.keyboard.press("Escape");
+      assert.deepEqual(
+        [await callsTo(page, "dismiss"), await callsTo(page, "tutorial")],
+        [
+          [],
+          [
+            { id: "capture-title", kind: "hintShown" },
+            { id: "capture-title", kind: "dismissHint" },
+          ],
+        ],
+        "the first Escape puts the tip away and leaves the panel open"
+      );
+    },
+    data: {
+      draft: draft({
+        ...FULL_DRAFT,
+        text: { ...FULL_DRAFT.text, relationship: "" },
+      }),
+      tutorial: tutorial({
+        active: (platform) => grantedHint(hintOf(platform, "capture-title")),
+        page: PANEL_PAGE,
+      }),
+    },
+    name: "tutorial-panel-title-tip",
+    page: "popover",
   },
   {
     data: { captures: CAPTURES },
@@ -4987,6 +5849,7 @@ const SCENES: readonly Scene[] = [
 
 const SIZES = {
   library: { height: 680, width: 1040 },
+  onboarding: { height: 520, width: 460 },
   popover: { height: 360, width: 520 },
   settings: { height: 320, width: 440 },
 } as const;

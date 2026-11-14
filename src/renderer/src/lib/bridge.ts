@@ -1,5 +1,6 @@
 import type {
   LibraryBridge,
+  OnboardingBridge,
   PopoverBridge,
   SettingsBridge,
 } from "../../../shared/api";
@@ -7,7 +8,7 @@ import type { KeyPlatform } from "../../../shared/shortcuts";
 
 declare global {
   interface Window {
-    inset: PopoverBridge | LibraryBridge | SettingsBridge;
+    inset: PopoverBridge | LibraryBridge | SettingsBridge | OnboardingBridge;
   }
 }
 
@@ -27,3 +28,7 @@ export const libraryApi = (): LibraryBridge => window.inset as LibraryBridge;
 
 // SAFETY: the preload exposes `inset` with only this window's role API, and main loads settings.html only in the settings role.
 export const settingsApi = (): SettingsBridge => window.inset as SettingsBridge;
+
+// SAFETY: the preload exposes `inset` with only this window's role API, and main loads onboarding.html only in the onboarding role.
+export const onboardingApi = (): OnboardingBridge =>
+  window.inset as OnboardingBridge;

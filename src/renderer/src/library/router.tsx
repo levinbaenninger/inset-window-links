@@ -9,7 +9,7 @@ import { z } from "zod";
 import { libraryApi } from "@/lib/bridge";
 
 import { CaptureRecord } from "./capture-record";
-import { Home, Newest } from "./home";
+import { Newest } from "./home";
 import { Shell } from "./shell";
 
 /** The sidebar's list and the shortcut's label, reloaded whenever the store changes. */
@@ -25,18 +25,11 @@ const rootRoute = createRootRoute({
   },
 });
 
-/** Opens on the newest capture; only an empty library shows the guide here. */
+/** Opens on the newest capture; an empty library says how to add one. Getting started explains the rest. */
 const homeRoute = createRoute({
   component: Newest,
   getParentRoute: () => rootRoute,
   path: "/",
-});
-
-/** Help > How It Works: the guide, even with captures saved. */
-const welcomeRoute = createRoute({
-  component: Home,
-  getParentRoute: () => rootRoute,
-  path: "/welcome",
 });
 
 /** The search param holds only a view id, never text, image data, or paths. */
@@ -50,7 +43,7 @@ const captureRoute = createRoute({
 
 export const router = createRouter({
   history: createHashHistory(),
-  routeTree: rootRoute.addChildren([homeRoute, welcomeRoute, captureRoute]),
+  routeTree: rootRoute.addChildren([homeRoute, captureRoute]),
 });
 
 declare module "@tanstack/react-router" {

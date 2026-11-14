@@ -8,6 +8,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { WindowDescription } from "@/components/window-description";
 import type { WindowDescriptionHandle } from "@/components/window-description";
 import { viewTitle } from "@/lib/format";
+import { coach } from "@/tutorial/anchors";
 
 import type {
   PendingSummary,
@@ -140,6 +141,7 @@ const AddTile = ({
     <li className={cn("flex min-w-0 flex-col", bar && "col-span-3")}>
       <button
         aria-label="Add windows"
+        {...coach("add-windows")}
         className={cn(
           "border-foreground/15 text-muted-foreground hover:text-foreground hover:bg-foreground/5 focus-visible:ring-ring/50 flex w-full items-center justify-center rounded-md border border-dashed text-xs outline-none focus-visible:ring-3",
           {

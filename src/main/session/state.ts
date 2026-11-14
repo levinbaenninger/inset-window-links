@@ -115,6 +115,8 @@ export type SessionEvent =
       type: "candidatesReady";
       token: CaptureToken;
       candidates: readonly FallbackCandidate[];
+      /** macOS: Screen Recording is off, so nothing was listed and nothing asked. */
+      denied?: true;
     }
   | { type: "showDraftRequested" }
   | { type: "chooserRequested" }

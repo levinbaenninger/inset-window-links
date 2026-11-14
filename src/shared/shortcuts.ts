@@ -8,6 +8,9 @@ import { z } from "zod";
 
 export type KeyPlatform = "macos" | "windows";
 
+/** The capture shortcut, global: it adds the window in front from any app. */
+export const CAPTURE_ACCELERATOR = "CommandOrControl+Alt+W";
+
 /** What a menu key does. Main maps each to an action; the field and capture ones reach the page. */
 export const MENU_ACTIONS = [
   "addWindows",
@@ -226,6 +229,8 @@ export const PageCommandSchema = z.enum([
   "saveCapture",
   "setDue",
   "showShortcuts",
+  /** Getting Started: the list as it is, so the checklist shows. Not a key; the menus send it. */
+  "showTutorial",
   "toggleDone",
   "toggleSidebar",
 ]);

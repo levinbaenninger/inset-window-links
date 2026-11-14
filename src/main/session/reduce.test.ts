@@ -10,7 +10,7 @@ import type { DraftText } from "../../shared/text";
 import { hasTyped, saveability } from "../../shared/text";
 import type { PublishResult } from "../store/store";
 import type { IdSource } from "./reduce";
-import { initialSession, isMeaningful, reduce } from "./reduce";
+import { initialSession, isMeaningful, pendingExit, reduce } from "./reduce";
 import type {
   CapturedView,
   QuitChoice,
@@ -1206,5 +1206,86 @@ describe("session lifecycle", () => {
       isMeaningful({ ...draft, text: text("", "Call Dana") }),
       isMeaningful({ ...draft, text: text("", "   ") }),
     ]).toStrictEqual([true, false]);
+  });
+});
+
+describe(pendingExit, () => {
+  it("follows Reopen to finish through the quit prompt and its save until the app exits", () => {
+    const source = ids();
+
+    const asked = run(source, [
+      foreignPress,
+      captured("t1", view(1, "macos:1176")),
+      { text: text("A limits B"), type: "textChanged" },
+      { relaunch: true, type: "quitRequested" },
+    ]);
+
+    const saving = run(
+      source,
+      [{ choice: "save", type: "quitChosen" }],
+      asked.state
+    );
+
+    const late = run(source, [{ type: "saveWaitEnded" }], saving.state);
+
+    expect([
+      pendingExit(initialSession(D1)),
+      pendingExit(asked.state),
+      pendingExit(saving.state),
+      pendingExit(late.state),
+    ]).toStrictEqual([null, "relaunch", "relaunch", "relaunch"]);
+  });
+
+  it("ends when the quit prompt is cancelled, or the save it waits for fails", () => {
+    const source = ids();
+
+    const asked = run(source, [
+      foreignPress,
+      captured("t1", view(1, "macos:1176")),
+      { text: text("A limits B"), type: "textChanged" },
+      { relaunch: true, type: "quitRequested" },
+    ]);
+
+    const failed = run(
+      source,
+      [
+        { choice: "save", type: "quitChosen" },
+        {
+          draftId: D1,
+          result: { kind: "failed", message: "disk full" },
+          type: "saveFinished",
+        },
+      ],
+      asked.state
+    );
+
+    expect([
+      pendingExit(
+        run(source, [{ choice: "cancel", type: "quitChosen" }], asked.state)
+          .state
+      ),
+      pendingExit(failed.state),
+    ]).toStrictEqual([null, null]);
+  });
+});
+
+describe("Add Windows without Screen Recording", () => {
+  it("shows the permission notice over an empty list", () => {
+    const source = ids();
+
+    const denied = run(source, [
+      { type: "chooserRequested" },
+      { candidates: [], denied: true, token: "t1", type: "candidatesReady" },
+    ]);
+
+    expect([
+      denied.state.activity,
+      denied.state.notice,
+      denied.effects,
+    ]).toStrictEqual([
+      { candidates: [], kind: "choosing", reason: "menu", token: "t1" },
+      { kind: "permissionDenied", stillDenied: false },
+      [],
+    ]);
   });
 });

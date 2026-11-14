@@ -31,6 +31,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { popoverApi } from "@/lib/bridge";
 import { useCommands } from "@/lib/commands";
 import { useWindowFocus } from "@/lib/use-window-focus";
+import { coach } from "@/tutorial/anchors";
+import { PageHints } from "@/tutorial/hint-layer";
 
 import type { DraftSnapshot, PendingSummary } from "../../../shared/dto";
 import { SAVE_LATE } from "../../../shared/leave";
@@ -45,6 +47,7 @@ import {
   removeViewDescription,
   saveability,
 } from "../../../shared/text";
+import type { TutorialAction, TutorialView } from "../../../shared/tutorial";
 import { blockedReasons, NoticeBanner } from "./notice-banner";
 import { SourceChips } from "./source-chips";
 import { SourceChooser } from "./source-chooser";
@@ -521,6 +524,7 @@ const TextBlock = ({
     <div className="bg-background mac:dark:bg-card border-foreground/10 flex flex-col rounded-lg border">
       <textarea
         aria-label={TITLE_PLACEHOLDER}
+        {...coach("capture-title")}
         autoFocus
         className={cn(
           "placeholder:text-muted-foreground field-sizing-content max-h-[calc(6lh+0.75rem)] min-h-[calc(1lh+0.75rem)] resize-none bg-transparent px-3 pt-3 text-base leading-6 font-semibold outline-none",
@@ -1060,6 +1064,17 @@ const DraftForm = ({
   );
 };
 
+/** The in-app tutorial's tips (src/renderer/src/tutorial/) over the panel's channels. */
+const tutorialSource = {
+  load: async (): Promise<TutorialView> => await popoverApi().getTutorial(),
+  subscribe: (listener: (view: TutorialView) => void) =>
+    popoverApi().onTutorial(listener),
+};
+
+const actTutorial = (action: TutorialAction): void => {
+  popoverApi().tutorial(action);
+};
+
 export const PopoverApp = () => {
   const { snapshot, text, setText } = useDraft();
   const root = useRef<HTMLElement>(null);
@@ -1095,6 +1110,7 @@ export const PopoverApp = () => {
           />
         )}
       </main>
+      <PageHints act={actTutorial} source={tutorialSource} />
     </TooltipProvider>
   );
 };
