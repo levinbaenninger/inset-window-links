@@ -372,9 +372,11 @@ export class PopoverWindow {
     this.#win.webContents.send(pushChannels.draft, snapshot);
   }
 
-  /** The tutorial's part for the panel: its tips. */
+  /** The tutorial's part for the panel: its tips. Nothing once the panel is gone at quit. */
   pushTutorial(view: TutorialView): void {
-    this.#win.webContents.send(pushChannels.tutorial, view);
+    if (!this.#win.isDestroyed()) {
+      this.#win.webContents.send(pushChannels.tutorial, view);
+    }
   }
 
   /** A menu key for the panel's page, such as the description or the due date. */
@@ -383,7 +385,7 @@ export class PopoverWindow {
   }
 
   isVisible(): boolean {
-    return this.#win.isVisible();
+    return !this.#win.isDestroyed() && this.#win.isVisible();
   }
 
   isFocused(): boolean {

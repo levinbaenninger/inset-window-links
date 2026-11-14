@@ -136,7 +136,11 @@ export class LibraryWindow {
 
   /** The tutorial's part for Recent Captures: the checklist, tips and the walkthrough. */
   pushTutorial(view: TutorialView): void {
-    this.contents()?.send(pushChannels.tutorial, view);
+    const contents = this.contents();
+
+    if (contents !== null && !contents.isDestroyed()) {
+      contents.send(pushChannels.tutorial, view);
+    }
   }
 
   get page(): RendererPage {
