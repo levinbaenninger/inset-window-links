@@ -2086,6 +2086,14 @@ const SCENES: readonly Scene[] = [
         await page.getByRole("region", { name: "Getting started" }).isVisible(),
         "Getting started sits at the top of the list"
       );
+      await page.waitForTimeout(150);
+      assert.equal(
+        await page
+          .locator("nav[data-coach=recent-list]")
+          .evaluate((nav) => nav.scrollTop),
+        0,
+        "the list opens on the checklist, its header in view"
+      );
       assert.ok(
         (await page.getByText("Example", { exact: true }).count()) >= 2,
         "the example capture is tagged in the list and on its page"
