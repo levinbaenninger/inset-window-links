@@ -222,7 +222,7 @@ const startTutorial = async (deps: {
       now: new Date(),
       platform: capturePlatform,
       store,
-    });
+    }).catch(() => false);
 
     if (!saved) {
       console.warn("The example capture could not be saved");

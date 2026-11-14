@@ -17,7 +17,7 @@ This is a research prototype. See `IMPLEMENTATION_REPORT.md` for what has been v
   - A **Getting started** checklist at the top of the list: add a window with `⌥⌘W`, add several from the list (`⇧⌘N`), save a capture with a title (`⌘↵`), reopen a capture (`⌘O`) and check off a next step. Each ticks itself off only when you really do it; clicking one shows how. The ⋯ menu has Remove Examples, and × closes it. **Getting Started** in the Help menu and the tray brings it back.
   - **One-time tips** show beside real controls the first time they appear, one at a time, and never again: the capture panel's Add windows tile and title field, Recent Captures' list, search (with `due:` filters) and Reopen all.
   - **Show Me Around** (Help menu, tray, or the setup's Done) is a spotlight walkthrough of Recent Captures: the list, search, a capture's windows, Reopen, next steps, and Settings. A stop whose control isn't on screen is skipped.
-  - A fresh install gets one **example capture**, tagged Example, whose title, description and steps say what to try. Its pictures are drawn from bundled SVGs, and its one reopenable page is this repository on GitHub. It is saved like any capture, never added again, and Remove Examples deletes it.
+  - A fresh install gets one **example capture**, tagged Example, whose title, description and steps say what to try. Its pictures are bundled PNGs, drawn ahead of time from SVGs, and its one reopenable page is this repository on GitHub. It is saved like any capture, never added again, and Remove Examples deletes it.
   - **Settings › Tips** has **Show tips** and **Reset Tutorial**, which starts the checklist and tips over (the example stays gone).
 - **Capture panel.** `⌥⌘W` (`Ctrl+Alt+W` on Windows) in any window adds a picture of that window and opens the capture panel. The Add tile shows the shortcut. File > New Capture (`⌘N`) or the Dock icon opens the panel without adding anything.
   - The panel opens centred on the screen you are working on, a little above the middle. Drag it by its header to move it; it reopens where you left it until the app quits.
@@ -70,7 +70,7 @@ pnpm install
 pnpm dev          # run with the Vite dev server
 pnpm check        # format check, lint, typecheck, unit tests
 pnpm build        # production build into out/
-pnpm icon         # re-render build/icon.png from build/icon.svg
+pnpm images       # re-render build/icon.png and the example pictures from their SVGs
 pnpm screens      # build, then screenshot every window into release/screens
 ```
 

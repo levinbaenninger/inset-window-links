@@ -180,7 +180,7 @@ Observed on the machine above, with the build from the previous commit:
 - Quit with an unsaved draft asks inside the popover: Save and quit, Discard and quit, Cancel. Escape, clicking away, or any other hide counts as Cancel, so the app cannot get stuck in the question.
 - Popover: the window list replaces the form while it is open, and the list of views scrolls inside itself past about four chips.
 - Image view: fits the capture to the window, never enlarged past actual size. Actual size, a click on the image, or Z switches.
-- App icon (`build/icon.svg`, rendered by `pnpm icon`) for the installer, the Windows window, and the Windows tray. The app sets its AppUserModelID, and clicking the save notification opens that capture.
+- App icon (`build/icon.svg`, rendered by `pnpm images`) for the installer, the Windows window, and the Windows tray. The app sets its AppUserModelID, and clicking the save notification opens that capture.
 - `.gitattributes` keeps LF line endings.
 
 ### Windows harness
@@ -430,7 +430,7 @@ Ports Inset Shelf's onboarding and tutorial kits (levinbaenninger/inset-shelf#11
   - The panel and Recent Captures call `pageClosed` when they hide or close.
 - **Example capture.** On a fresh install only (`welcomed` unset and no captures), one example is saved.
   - It is saved through the capture panel's own path: a draft → `toNewCapture` → `CaptureStore.publish`, one rename into place. So it has the records' format and Discard and save safety apply as to any capture.
-  - Its two pictures are drawn at runtime from bundled SVGs (`src/main/examples/`) in a hidden, script-less offscreen window. Its reopenable page is this repository on GitHub.
+  - Its two pictures are bundled PNGs (`src/main/examples/`), drawn ahead of time from the SVGs beside them by `pnpm images`. Drawing them at launch failed on a locked Windows screen, which left the first run with no example. Its reopenable page is this repository on GitHub.
   - It is tagged Example in the list and on its page, and Remove Examples deletes it. It is never added again: after removal, after an earlier install, or after a damaged state file.
 - **State.** One store, `app-state.json`: `welcomed`, the setup's record and the tutorial's record. Each falls back on its own, so a damaged record never brings the first run back.
 
