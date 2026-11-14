@@ -45,7 +45,7 @@ const tutorialView = data.tutorial?.[platform] ?? {
 /** The tutorial's part of a page's API: its view, and what the page tells main. */
 const tutorialApi = {
   getTutorial: () => Promise.resolve(tutorialView),
-  onTutorial: () => unsubscribe,
+  onTutorial: (listener) => subscribe("tutorial", listener),
   tutorial: (action) => record("tutorial", action),
 };
 

@@ -2404,6 +2404,45 @@ const SCENES: readonly Scene[] = [
     page: "popover",
   },
   {
+    // The title field has the keyboard when the tip shows. Got it takes it to its button, and the title gets it back.
+    act: async (page) => {
+      const push = (shown: TutorialView) =>
+        page.evaluate(
+          `window.dispatchEvent(new CustomEvent("fixture:tutorial", { detail: ${JSON.stringify(shown)} }))`
+        );
+
+      await page.locator("#relationship").focus();
+      await push(
+        tutorial({
+          active: (platform) => grantedHint(hintOf(platform, "add-windows")),
+          page: PANEL_PAGE,
+        }).macos
+      );
+      await page.locator("[data-coach-bubble]").waitFor();
+      await page.waitForTimeout(400);
+      await page
+        .locator("[data-coach-bubble]")
+        .getByRole("button", { name: "Got it" })
+        .click();
+      // Main lets go of the bubble.
+      await push(tutorial({ page: PANEL_PAGE }).macos);
+      await page.waitForTimeout(300);
+
+      const focused = await page.evaluate<string>(
+        "document.activeElement?.id || document.activeElement?.tagName || 'nothing'"
+      );
+
+      assert.equal(focused, "relationship", "focus is back in the title field");
+    },
+    data: {
+      draft: draft(FULL_DRAFT),
+      tutorial: tutorial({ page: PANEL_PAGE }),
+    },
+    name: "tutorial-got-it-focus",
+    page: "popover",
+    platforms: ["macos"],
+  },
+  {
     act: async (page) => {
       const bubble = await bubbleText(page);
 
