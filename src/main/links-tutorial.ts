@@ -80,14 +80,16 @@ export const linksTasks = (platform: KeyPlatform): readonly TutorialTask[] => {
       title: "Save a capture with a title",
     },
     {
-      anchor: "reopen-all",
+      // Its row, not Reopen all: that button shows only with a capture open, and a how-to whose
+      // control isn't there would show nothing and hold back every tip.
+      anchor: null,
       how: `Open a capture here and click Reopen all, or press ${keys.reopen}. Each window’s page, file or app opens again.`,
       id: LINKS_TASK_IDS.reopen,
       keys: keys.reopen,
       title: "Reopen a capture",
     },
     {
-      anchor: "capture-steps",
+      anchor: null,
       how: "Next steps have a box: click it when the step is done. The capture stays until you mark it done.",
       id: LINKS_TASK_IDS.checkStep,
       keys: null,

@@ -2141,7 +2141,17 @@ const SCENES: readonly Scene[] = [
 
       assert.ok(
         bubble.visible && bubble.text.includes("Reopen all"),
-        `the how-to shows at Reopen all (${JSON.stringify(bubble)})`
+        `the how-to shows (${JSON.stringify(bubble)})`
+      );
+
+      // At its own row, which is always there: Reopen all shows only with a capture open.
+      const gap = await page.evaluate<number>(
+        "(() => document.querySelector('[data-coach-bubble]').getBoundingClientRect().top - document.querySelector('[data-coach=\"task-reopen\"]').getBoundingClientRect().bottom)()"
+      );
+
+      assert.ok(
+        gap >= 0 && gap <= 24,
+        `the how-to sits just below its checklist row (${gap} px)`
       );
     },
     data: {
@@ -2153,7 +2163,7 @@ const SCENES: readonly Scene[] = [
           );
 
           return {
-            anchor: task?.anchor ?? "",
+            anchor: task?.anchor ?? "task-reopen",
             id: "reopen",
             kind: "task",
             placement: "below",
