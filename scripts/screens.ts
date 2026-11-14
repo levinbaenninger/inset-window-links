@@ -2165,7 +2165,7 @@ const SCENES: readonly Scene[] = [
       const bubble = await bubbleText(page);
 
       assert.ok(
-        bubble.visible && bubble.text.includes("Reopen all"),
+        bubble.visible && bubble.text.includes("Reopen button"),
         `the how-to shows (${JSON.stringify(bubble)})`
       );
 
@@ -2190,7 +2190,7 @@ const SCENES: readonly Scene[] = [
       const bubble = await bubbleText(page);
 
       assert.ok(
-        bubble.visible && bubble.text.includes("Reopen all"),
+        bubble.visible && bubble.text.includes("Reopen button"),
         `the how-to shows (${JSON.stringify(bubble)})`
       );
       const gap = await bubbleBelow(page, "task-reopen");

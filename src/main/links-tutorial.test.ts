@@ -133,6 +133,18 @@ describe("Inset Window Links' tutorial", () => {
     });
   });
 
+  it("names the Reopen button so both of its labels fit: Reopen window and Reopen all", () => {
+    const reopen = linksTasks("macos").find(
+      (task) => task.id === LINKS_TASK_IDS.reopen
+    );
+
+    expect(
+      ["Reopen window", "Reopen all"].filter((label) =>
+        reopen?.how.includes(label)
+      )
+    ).toStrictEqual([]);
+  });
+
   it("makes the example capture a thing to try, with one harmless page to reopen", () => {
     const example = linksExample("macos");
 

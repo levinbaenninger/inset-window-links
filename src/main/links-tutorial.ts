@@ -82,7 +82,7 @@ export const linksTasks = (platform: KeyPlatform): readonly TutorialTask[] => {
     {
       // With no capture open there's no Reopen all; the how-to then points at its own row.
       anchor: "reopen-all",
-      how: `Open a capture here and click Reopen all, or press ${keys.reopen}. Each window’s page, file or app opens again.`,
+      how: `Open a capture here and click its Reopen button, or press ${keys.reopen}. Each window’s page, file or app opens again.`,
       id: LINKS_TASK_IDS.reopen,
       keys: keys.reopen,
       title: "Reopen a capture",
