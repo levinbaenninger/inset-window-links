@@ -375,6 +375,18 @@ const start = async () => {
    */
   const freshInstall = isFreshInstall(appState, store);
 
+  /**
+   * Whether an earlier run left data behind, read before this launch adds the example capture:
+   * the example can be saved before the setup asks, and would count as an earlier run's.
+   */
+  const ranBefore = appState.current().welcomed || store.list().length > 0;
+
+  /**
+   * A setup that was under way when the app last quit: the first run's, after Reopen to finish.
+   * By then welcomed is set, so it isn't a fresh install, yet its Done still ends in Recent Captures.
+   */
+  const resumedSetup = appState.current().onboarding?.status === "active";
+
   const tutorial = await startTutorial({
     appState,
     freshInstall,
@@ -422,9 +434,10 @@ const start = async () => {
         tutorial.showMeAround();
       }
     },
-    // The first run ends in Recent Captures, where Getting started and the example are.
+    // The first run ends in Recent Captures, where Getting started and the example are, also
+    // when its setup came back after Reopen to finish.
     onEnded: () => {
-      if (freshInstall) {
+      if (freshInstall || resumedSetup) {
         library.open();
       }
     },
@@ -446,8 +459,7 @@ const start = async () => {
 
       session.requestRelaunch();
     },
-    ranBefore: () =>
-      Promise.resolve(appState.current().welcomed || store.list().length > 0),
+    ranBefore: () => Promise.resolve(ranBefore),
     relaunch: () => {
       // The session's exit already calls app.relaunch(); a second call would start two copies.
     },
@@ -460,18 +472,33 @@ const start = async () => {
   });
 
   /**
+   * Whether this opening of the setup still owes the opt-in: the first time it sees Accessibility
+   * on, it turns on Remember pages and files. Once only, so turning that off in Settings stands.
+   */
+  const rememberOptIn = { owed: true };
+
+  /**
    * One poll for Accessibility while the setup is open: every 3 s, every 500 ms while Allow access
-   * waits for it. Turning it on there also turns on Remember pages and files.
+   * waits for it. Turning it on there also turns on Remember pages and files, once.
    */
   const permissionPoll = createPoller({
     check: () => {
       onboarding.observe();
 
-      if (mac && canReadOrigins() && !settings.current().rememberPages) {
-        void settings.update({ rememberPages: true });
+      if (rememberOptIn.owed && mac && canReadOrigins()) {
+        rememberOptIn.owed = false;
+
+        if (!settings.current().rememberPages) {
+          void settings.update({ rememberPages: true });
+        }
       }
 
-      return onboarding.isOpen();
+      const open = onboarding.isOpen();
+
+      // The setup's next opening opts in again.
+      rememberOptIn.owed ||= !open;
+
+      return open;
     },
     setTimer,
   });
