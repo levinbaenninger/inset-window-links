@@ -17,7 +17,7 @@ import {
 } from "electron";
 import type { WebContents } from "electron";
 
-import { DraftIdSchema, newDraftId } from "../shared/ids";
+import { newDraftId } from "../shared/ids";
 import type { DraftId } from "../shared/ids";
 import type { IconPlace, SettingsView } from "../shared/settings";
 import type { PageCommand } from "../shared/shortcuts";
@@ -28,6 +28,7 @@ import type { AppStateStore } from "./app-state";
 import { capturePlatform, WindowCapturer } from "./capture/capturer";
 import { canReadOrigins } from "./capture/origin";
 import { saveExampleCapture } from "./examples/example-capture";
+import { removeExampleCaptures } from "./examples/remove-examples";
 import { handleImageProtocol, registerImageScheme } from "./ipc/protocol";
 import {
   registerLibraryChannels,
@@ -236,15 +237,7 @@ const startTutorial = async (deps: {
     doneText: checklistDoneText(capturePlatform),
     examples: {
       exists: (id) => store.get(id)?.kind === "current",
-      remove: (ids) => {
-        for (const id of ids) {
-          const parsed = DraftIdSchema.safeParse(id);
-
-          if (parsed.success) {
-            void store.remove(parsed.data);
-          }
-        }
-      },
+      remove: async (ids) => await removeExampleCaptures(store, ids),
       // The id is known at once; the capture follows.
       seed: () => {
         const id = newDraftId();
