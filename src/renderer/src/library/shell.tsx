@@ -247,12 +247,17 @@ export const Shell = () => {
               />
             </header>
             <div className="px-2.5 pb-2" {...coach("search")}>
-              <SearchField
-                field={search}
-                findKeys={menuKeyLabel("find", platform)}
-                onQuery={setQuery}
-                query={query}
-              />
+              {/* The search tip waits for Getting started to close: below the field, it would cover the checklist. */}
+              <div
+                {...(tutorial.checklist === null ? coach("search-tip") : {})}
+              >
+                <SearchField
+                  field={search}
+                  findKeys={menuKeyLabel("find", platform)}
+                  onQuery={setQuery}
+                  query={query}
+                />
+              </div>
               <DueSuggestions
                 onPicked={() => search.current?.focus()}
                 onQuery={setQuery}

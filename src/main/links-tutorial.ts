@@ -131,7 +131,8 @@ export const linksHints = (platform: KeyPlatform): readonly TutorialHint[] => {
       title: "Recent Captures",
     },
     {
-      anchor: "search",
+      // The field, marked only once Getting started is closed: the tip would cover the checklist.
+      anchor: "search-tip",
       id: "search",
       page: HOME_PAGE,
       placement: "below",

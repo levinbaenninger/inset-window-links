@@ -2086,6 +2086,11 @@ const SCENES: readonly Scene[] = [
         await page.getByRole("region", { name: "Getting started" }).isVisible(),
         "Getting started sits at the top of the list"
       );
+      assert.equal(
+        await page.locator("[data-coach=search-tip]").count(),
+        0,
+        "the search tip waits while Getting started shows, so it never covers it"
+      );
       await page.waitForTimeout(150);
       assert.equal(
         await page
