@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from "node:timers/promises";
+
 import type { PermissionId } from "@shared/onboarding";
 import { describe, expect, it } from "vitest";
 
@@ -204,7 +206,71 @@ describe(rowState, () => {
   });
 });
 
+/** A disk whose first write is slow, and may fail: an unordered second write would land first and be overwritten. */
+const slowFirstWrite = (failFirst = false) => {
+  let text = "";
+  let calls = 0;
+  let writing = 0;
+  let most = 0;
+
+  return {
+    fs: {
+      readFile: async () => await Promise.resolve(text),
+      writeAtomic: async (_file: string, data: string) => {
+        calls += 1;
+
+        const call = calls;
+
+        writing += 1;
+        most = Math.max(most, writing);
+        await sleep(call === 1 ? 30 : 1);
+        writing -= 1;
+
+        if (call === 1 && failFirst) {
+          throw new Error("EPERM: operation not permitted, rename");
+        }
+
+        text = data;
+      },
+    },
+    most: () => most,
+  };
+};
+
 describe(createOnboardingStore, () => {
+  it("writes one record at a time, in order, so the newest is the one kept", async () => {
+    const disk = slowFirstWrite();
+    const store = createOnboardingStore("/f", disk.fs);
+
+    await Promise.all([
+      store.write(record("active", WELCOME)),
+      store.write(record("active", ACCESS)),
+    ]);
+
+    expect({ most: disk.most(), saved: await store.read() }).toStrictEqual({
+      most: 1,
+      saved: record("active", ACCESS),
+    });
+  });
+
+  it("still writes the next record after one fails, and says so to the caller of the failed one", async () => {
+    const disk = slowFirstWrite(true);
+    const store = createOnboardingStore("/f", disk.fs);
+
+    const results = await Promise.allSettled([
+      store.write(record("active", WELCOME)),
+      store.write(record("active", ACCESS)),
+    ]);
+
+    expect({
+      saved: await store.read(),
+      statuses: results.map((result) => result.status),
+    }).toStrictEqual({
+      saved: record("active", ACCESS),
+      statuses: ["rejected", "fulfilled"],
+    });
+  });
+
   it("writes the record and reads it back", async () => {
     const fs = memory();
     const store = createOnboardingStore("/data/onboarding.json", fs);

@@ -40,6 +40,9 @@ export interface TutorialStore {
   readonly write: (saved: TutorialRecord) => Promise<void>;
 }
 
+/** An earlier write that failed doesn't stop the next: its caller heard about it. */
+const failedEarlier = (): null => null;
+
 /** Reads and writes text files; the app's own atomic write fits. */
 export interface TutorialFs {
   readonly readFile: (file: string) => Promise<string>;
@@ -49,19 +52,33 @@ export interface TutorialFs {
 export const createTutorialStore = (
   file: string,
   fs: TutorialFs
-): TutorialStore => ({
-  read: async () => {
-    try {
-      const parsed = TutorialRecordSchema.safeParse(
-        JSON.parse(await fs.readFile(file))
-      );
+): TutorialStore => {
+  // One write at a time, in the order asked: an atomic write ends in a rename, and the last rename wins, newest or not.
+  let last: Promise<void> = Promise.resolve();
 
-      return parsed.success ? parsed.data : null;
-    } catch {
-      return null;
-    }
-  },
-  write: async (saved) => {
-    await fs.writeAtomic(file, `${JSON.stringify(saved, null, 2)}\n`);
-  },
-});
+  return {
+    read: async () => {
+      try {
+        const parsed = TutorialRecordSchema.safeParse(
+          JSON.parse(await fs.readFile(file))
+        );
+
+        return parsed.success ? parsed.data : null;
+      } catch {
+        return null;
+      }
+    },
+    write: async (saved) => {
+      const previous = last;
+
+      const run = (async () => {
+        // A failed write is its caller's to hear about; the next one still goes ahead.
+        await previous.catch(failedEarlier);
+        await fs.writeAtomic(file, `${JSON.stringify(saved, null, 2)}\n`);
+      })();
+
+      last = run;
+      await run;
+    },
+  };
+};

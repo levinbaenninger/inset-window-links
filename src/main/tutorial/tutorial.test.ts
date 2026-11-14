@@ -491,6 +491,51 @@ describe(createTutorial, () => {
 });
 
 describe(createTutorialStore, () => {
+  it("writes one record at a time, in order, so the newest is the one kept, even after a failed write", async () => {
+    let text = "";
+    let calls = 0;
+    let writing = 0;
+    let most = 0;
+
+    // The first write is slow and fails: an unordered second write would land first, then be overwritten or lost.
+    const store = createTutorialStore("/data/tutorial.json", {
+      readFile: async () => await Promise.resolve(text),
+      writeAtomic: async (_file: string, data: string) => {
+        calls += 1;
+
+        const call = calls;
+
+        writing += 1;
+        most = Math.max(most, writing);
+        await sleep(call === 1 ? 30 : 1);
+        writing -= 1;
+
+        if (call === 1) {
+          throw new Error("EPERM: operation not permitted, rename");
+        }
+
+        text = data;
+      },
+    });
+
+    const newest = { ...freshRecord(), celebrated: true };
+
+    const results = await Promise.allSettled([
+      store.write(freshRecord()),
+      store.write(newest),
+    ]);
+
+    expect({
+      most,
+      saved: await store.read(),
+      statuses: results.map((result) => result.status),
+    }).toStrictEqual({
+      most: 1,
+      saved: newest,
+      statuses: ["rejected", "fulfilled"],
+    });
+  });
+
   it("reads a missing or damaged file as no record, and writes one back", async () => {
     let text: string | undefined;
 
