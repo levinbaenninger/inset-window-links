@@ -63,6 +63,8 @@ export interface Tutorial {
   readonly setTips: (on: boolean) => void;
   /** Settings › Reset Tutorial: the checklist and hints start over; examples are never added again. */
   readonly reset: () => void;
+  /** Resolves once every change so far is saved (or failed to save): saves run one at a time. */
+  readonly settled: () => Promise<void>;
 }
 
 type Of<K extends TutorialAction["kind"]> = Extract<
@@ -95,8 +97,30 @@ export const createTutorial = (deps: TutorialDeps): Tutorial => {
     }
   };
 
+  // One save at a time: on Windows an atomic write that overlaps another fails (EPERM), and the newer state was lost.
+  // A change made meanwhile is saved once the running save is done, as the state is then.
+  let saving: Promise<void> | null = null;
+  let saveAgain = false;
+
+  const flush = async (): Promise<void> => {
+    saveAgain = false;
+    await write();
+
+    if (saveAgain) {
+      await flush();
+    }
+  };
+
   const persist = (): void => {
-    void write();
+    if (saving !== null) {
+      saveAgain = true;
+
+      return;
+    }
+
+    saving = flush().finally(() => {
+      saving = null;
+    });
   };
 
   const change = (next: Partial<TutorialRecord>): void => {
@@ -226,7 +250,8 @@ export const createTutorial = (deps: TutorialDeps): Tutorial => {
     },
     dismissHint: (page: string, action: Of<"dismissHint">) => {
       if (active?.id === action.id && active.page === page) {
-        if (active.kind === "hint") {
+        // A hint is seen once drawn (hintShown); one let go before that, because its control went away, comes back later.
+        if (active.kind === "hint" && active.shown) {
           markSeen(active.id);
         }
 
@@ -402,6 +427,9 @@ export const createTutorial = (deps: TutorialDeps): Tutorial => {
       active = null;
       persist();
       deps.onChange();
+    },
+    settled: async () => {
+      await saving;
     },
     setTips: (on) => {
       change({ tips: on });

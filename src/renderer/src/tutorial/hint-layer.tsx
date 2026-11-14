@@ -42,16 +42,27 @@ const useDragging = () => {
   return dragging;
 };
 
-/** Finds the bubble's anchor as the page lays out, and notices a menu or dialog that holds it back. */
-const useAnchor = (id: string) => {
+/** A bubble whose control isn't on the page this long is let go: it can't show, so it mustn't hold back the others. */
+const RELEASE_MS = 1000;
+
+/**
+ * Finds the bubble's anchor as the page lays out, or else its fallback, and
+ * notices a menu or dialog that holds it back.
+ */
+const useAnchor = (id: string, fallback: string | null) => {
+  const find = (): HTMLElement | null =>
+    findAnchor(id) ?? (fallback === null ? null : findAnchor(fallback));
+
   const [state, setState] = useState<{
     readonly anchor: HTMLElement | null;
     readonly held: boolean;
-  }>(() => ({ anchor: findAnchor(id), held: somethingOpen() }));
+  }>(() => ({ anchor: find(), held: somethingOpen() }));
 
   useEffect(() => {
     const look = (): void => {
-      const anchor = findAnchor(id);
+      const anchor =
+        findAnchor(id) ?? (fallback === null ? null : findAnchor(fallback));
+
       const held = somethingOpen();
 
       setState((last) =>
@@ -66,7 +77,7 @@ const useAnchor = (id: string) => {
     return () => {
       clearInterval(timer);
     };
-  }, [id]);
+  }, [fallback, id]);
 
   return state;
 };
@@ -78,9 +89,30 @@ const Shown = ({
   readonly hint: ShownHint;
   readonly act: (action: TutorialAction) => void;
 }) => {
-  const { anchor, held } = useAnchor(hint.anchor);
+  // A task's how-to whose control isn't on the page points at the task's own row instead.
+  const { anchor, held } = useAnchor(
+    hint.anchor,
+    hint.kind === "task" ? `task-${hint.id}` : null
+  );
+
   const bubble = useRef<HTMLDialogElement>(null);
   const reported = useRef(false);
+  const missing = anchor === null;
+
+  // Nothing to point at: let go, so this bubble never holds back the others without showing.
+  useEffect(() => {
+    if (!missing) {
+      return nothing;
+    }
+
+    const timer = setTimeout(() => {
+      act({ id: hint.id, kind: "dismissHint" });
+    }, RELEASE_MS);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [act, hint.id, missing]);
   const visible = anchor !== null && !held;
 
   const dismiss = (): void => {

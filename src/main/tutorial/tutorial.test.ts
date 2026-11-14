@@ -1,9 +1,11 @@
+import { setTimeout as sleep } from "node:timers/promises";
+
 import type {
   TutorialAction,
   TutorialHint,
   TutorialTask,
 } from "@shared/tutorial";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createTutorialStore, freshRecord } from "./store";
 import type { TutorialRecord } from "./store";
@@ -60,6 +62,27 @@ const memoryStore = (initial: TutorialRecord | null = null) => {
   };
 };
 
+/** As Windows' atomic write: a save that starts while another is still writing fails (EPERM on the rename). */
+const exclusiveStore = () => {
+  let saved: TutorialRecord | null = null;
+  let writing = false;
+
+  return {
+    read: async () => await Promise.resolve(saved),
+    saved: () => saved,
+    write: async (next: TutorialRecord) => {
+      if (writing) {
+        throw new Error("EPERM: operation not permitted, rename");
+      }
+
+      writing = true;
+      await sleep(5);
+      saved = next;
+      writing = false;
+    },
+  };
+};
+
 const setUp = async (
   options: {
     readonly store?: ReturnType<typeof memoryStore>;
@@ -112,6 +135,9 @@ const setUp = async (
     tasks: TASKS,
     doneText: "All done.",
     title: "Getting started",
+    warn: (message) => {
+      log.push(`warn ${message}`);
+    },
   };
 
   const tutorial = createTutorial(deps);
@@ -153,6 +179,9 @@ describe(createTutorial, () => {
 
     tutorial.complete("double-shift");
 
+    // A restart reads what is saved: every change so far.
+    await tutorial.settled();
+
     const again = await setUp({ store });
 
     expect({
@@ -179,9 +208,45 @@ describe(createTutorial, () => {
 
     expect(tutorial.view("shelf").checklist).toBeNull();
 
+    // A restart reads what is saved: every change so far.
+    await tutorial.settled();
+
     const again = await setUp({ store });
 
     expect(again.tutorial.view("shelf").checklist).toBeNull();
+  });
+
+  it("saves one change at a time, so the last task's 'all done' is kept where saves can't overlap", async () => {
+    const store = exclusiveStore();
+    const { log, tutorial } = await setUp({ store });
+
+    tutorial.complete("double-shift");
+    // The last task: done, then celebrated, two changes in a row.
+    tutorial.complete("window-link");
+
+    await vi.waitFor(() => {
+      expect(store.saved()).toMatchObject({
+        celebrated: true,
+        done: ["double-shift", "window-link"],
+      });
+    });
+    expect(log.filter((line) => line.startsWith("warn"))).toStrictEqual([]);
+  });
+
+  it("lets a page release a bubble whose control isn't there, and offers a hint never drawn again", async () => {
+    const { act, bubbles, tutorial } = await setUp();
+
+    act("shelf", { id: "details", kind: "requestHint" });
+    // Its control went away before the bubble was drawn: the page lets it go.
+    act("shelf", { id: "details", kind: "dismissHint" });
+
+    expect({
+      bubbles: bubbles(),
+      offered: tutorial.view("shelf").hints.map((each) => each.id),
+    }).toStrictEqual({
+      bubbles: { drawing: "free", picker: "free", shelf: "free" },
+      offered: ["details"],
+    });
   });
 
   it("closes the checklist, and Getting Started brings it back", async () => {
@@ -233,6 +298,9 @@ describe(createTutorial, () => {
       offered: tutorial.view("picker").hints,
       shown: log.filter((line) => line.startsWith("shown")),
     }).toStrictEqual({ active: null, offered: [], shown: ["shown picker"] });
+
+    // A restart reads what is saved: every change so far.
+    await tutorial.settled();
 
     const again = await setUp({ store });
 
@@ -357,6 +425,9 @@ describe(createTutorial, () => {
       log: ["removed example-1a,example-1b"],
     });
 
+    // A restart reads what is saved: every change so far.
+    await tutorial.settled();
+
     const again = await setUp({ store });
 
     expect(again.items.size).toBe(0);
@@ -406,9 +477,12 @@ describe(createTutorial, () => {
 
   it("collapses the checklist and remembers it", async () => {
     const store = memoryStore();
-    const { act } = await setUp({ store });
+    const { act, tutorial } = await setUp({ store });
 
     act("shelf", { collapsed: true, kind: "collapse" });
+
+    // A restart reads what is saved: every change so far.
+    await tutorial.settled();
 
     const again = await setUp({ store });
 
