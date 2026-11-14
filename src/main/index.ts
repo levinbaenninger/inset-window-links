@@ -54,6 +54,7 @@ import {
 } from "./links-tutorial";
 import { wireMenuKeys } from "./menu-keys";
 import { OpenMenus } from "./menu-open";
+import { pageCommandTarget } from "./page-commands";
 import { appBundlePath, createAppTile } from "./permissions/bundle";
 import { createOnboarding } from "./permissions/onboarding";
 import { createPoller } from "./permissions/poller";
@@ -600,32 +601,21 @@ const start = async () => {
     app.quit();
   };
 
-  /**
-   * A menu key for a page goes to the Inset window in front. With none in front, the field keys
-   * open the panel, and the sheet opens in Recent Captures; the keys for an open capture or the
-   * sidebar need Recent Captures to be open already.
-   */
+  /** A menu key for a page, to the window pageCommandTarget picks; none during the walkthrough. */
   const toPage = (command: PageCommand) => {
-    if (popover.isFocused()) {
+    const target = pageCommandTarget(command, {
+      libraryFocused: library.isFocused(),
+      libraryOpen: library.window() !== null,
+      panelFocused: popover.isFocused(),
+      walking: tutorial.walking(),
+    });
+
+    if (target === "panel") {
       popover.command(command);
-
-      return;
-    }
-
-    if (library.isFocused() || command === "showShortcuts") {
-      library.command(command);
-
-      return;
-    }
-
-    if (
-      command === "focusDescription" ||
-      command === "setDue" ||
-      command === "focusSteps"
-    ) {
+    } else if (target === "draft") {
       showDraft();
       popover.command(command);
-    } else if (library.window() !== null) {
+    } else if (target === "library") {
       library.command(command);
     }
   };
@@ -721,7 +711,12 @@ const start = async () => {
         BrowserWindow.getFocusedWindow()?.close();
       }
     },
-    find: () => library.find(),
+    // Find opens Recent Captures from anywhere, but not behind the walkthrough.
+    find: () => {
+      if (!tutorial.walking()) {
+        library.find();
+      }
+    },
     newCapture: showDraft,
     gettingStarted: actions.gettingStarted,
     openPermissions: () => onboarding.open(),
